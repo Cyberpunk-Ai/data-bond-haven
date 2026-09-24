@@ -654,16 +654,16 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
             </button>
             {isCurrentUserHost && (
               <button
-                onClick={() => setActiveTab("requests")}
+                onClick={() => setActiveTab("manage")}
                 className={cn(
                   "flex items-center gap-1.5 pb-2 text-xs sm:text-sm font-bold border-b-2 transition-all min-h-[36px] cursor-pointer",
-                  activeTab === "requests"
+                  activeTab === "manage"
                     ? "border-brand text-brand"
                     : "border-transparent text-muted-foreground hover:text-foreground",
                 )}
               >
                 <Hand className="h-4 w-4" />
-                <span>Requests</span>
+                <span>Manage</span>
                 {listeners.filter((p) => p.handRaised).length > 0 && (
                   <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-white text-[10px] font-black animate-pulse">
                     {listeners.filter((p) => p.handRaised).length}
