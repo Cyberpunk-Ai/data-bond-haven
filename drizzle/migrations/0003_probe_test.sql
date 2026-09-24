@@ -1,1 +1,0 @@
-create table if not exists public._probe (id int primary key);
