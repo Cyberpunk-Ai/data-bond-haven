@@ -90,3 +90,27 @@ export function subscribeCallStatus(callId: string, onChange: (call: CallRow) =>
     supabase.removeChannel(channel);
   };
 }
+
+export async function markCallMissed(callId: string) {
+  await supabase
+    .from("calls")
+    .update({ status: "missed", ended_at: new Date().toISOString() })
+    .eq("id", callId);
+}
+
+/** A call that started ringing for us moments ago, recovered after a refresh. */
+export async function getPendingIncomingCall(): Promise<CallRow | null> {
+  const me = signedInProfileId();
+  if (!me) return null;
+  const cutoff = new Date(Date.now() - 45_000).toISOString();
+  const { data } = await supabase
+    .from("calls")
+    .select("*")
+    .eq("callee_id", me)
+    .eq("status", "ringing")
+    .gte("started_at", cutoff)
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as unknown as CallRow) || null;
+}
