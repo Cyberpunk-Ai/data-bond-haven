@@ -20,6 +20,21 @@ anything else is possible.
 Note: the secret key and database password were pasted in plain chat. They should
 be regenerated before launch.
 
+## Phase 0b — Clean up and push migrations to your existing backend
+
+1. Inventory every migration file from the repo, and compare it against what is
+   actually in your live database (tables, columns, functions, access rules,
+   storage rules).
+2. Clean up: remove duplicates and dead/contradicting migrations, fix ordering,
+   and consolidate into a clear, re-runnable baseline plus small follow-up files.
+   Nothing that holds live data is dropped without showing you first.
+3. Take a schema backup of the live database before any change.
+4. Push the cleaned migrations directly to your backend using the connection
+   string you supplied, so we can build against the real database immediately.
+5. Verify afterwards: every table has access rules enabled and correct grants,
+   no helper functions are exposed unsafely, and the app can read/write as expected.
+6. Run a security check on the result and fix what it finds before moving on.
+
 ## Phase 1 — Data, access rules and security baseline
 
 - Full review of tables, relationships, indexes and constraints; fix integrity gaps.
