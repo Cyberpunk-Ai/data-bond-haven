@@ -38,7 +38,13 @@ import {
   sendSpaceMessage,
   endSpace,
   summarizeSpaceAI,
+  setSpaceRecording,
+  reportSpaceRecordingBytes,
+  finalizeSpaceRecording,
+  recordSpaceReplayView,
+  uploadMedia,
 } from "@/lib/api-client";
+import { appConfig } from "@/lib/config";
 import { useRealtime } from "@/lib/realtime";
 import { cn } from "@/lib/utils";
 import { ClampText } from "@/components/social/ClampText";
@@ -83,7 +89,8 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     { id: string; emoji: string; left: number }[]
   >([]);
   const [activeTipAlert, setActiveTipAlert] = useState<LiveTipAlert | null>(null);
-  const [isRecordingSpace, setIsRecordingSpace] = useState(true);
+  const [isRecordingSpace, setIsRecordingSpace] = useState(false);
+  const [recordingBusy, setRecordingBusy] = useState(false);
   const [showEndConfirmation, setShowEndConfirmation] = useState(false);
   const [pinnedTopic, setPinnedTopic] = useState<string>(
     "Welcome to the Space! Feel free to ask questions in chat or raise your hand.",
@@ -273,6 +280,16 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
             ),
           );
         }
+      } else if (event.type === "space:recording") {
+        const data = event.data || event;
+        if (typeof data.recording === "boolean") {
+          setIsRecordingSpace(data.recording);
+          if (!data.recording) {
+            toast.info("Recording stopped");
+          } else {
+            toast.info("The host started recording this Space");
+          }
+        }
       } else if (event.type === "space:left" || event.type === "participant_left") {
         const data = event.data || event;
         if (data && data.userId) {
@@ -288,6 +305,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       "space:joined",
       "space:left",
       "space:tip",
+      "space:recording",
     ],
   );
 

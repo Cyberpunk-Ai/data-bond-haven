@@ -104,6 +104,7 @@ function Reveal({
 function CountUp({ to, suffix = "" }: { to: number; suffix?: string }) {
   const { ref, visible } = useReveal<HTMLSpanElement>();
   const [value, setValue] = useState(0);
+  const decimals = Number.isInteger(to) ? 0 : 1;
   useEffect(() => {
     if (!visible) return;
     const start = performance.now();
@@ -112,15 +113,15 @@ function CountUp({ to, suffix = "" }: { to: number; suffix?: string }) {
     const tick = (now: number) => {
       const p = Math.min((now - start) / duration, 1);
       const eased = 1 - Math.pow(1 - p, 3);
-      setValue(Math.round(to * eased));
+      setValue(Number((to * eased).toFixed(decimals)));
       if (p < 1) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [visible, to]);
+  }, [visible, to, decimals]);
   return (
     <span ref={ref}>
-      {value}
+      {value.toFixed(decimals)}
       {suffix}
     </span>
   );
@@ -518,10 +519,10 @@ function Hero() {
               {isLoggedIn ? "Open Your Feed" : "Get Started"}
             </Link>
             <a
-              href="#features"
+              href="#how-it-works"
               className="glass-panel flex items-center gap-2 rounded-full px-8 py-4 text-lg font-bold text-gray-800 transition-colors hover:bg-white active:scale-95"
             >
-              <Play className="h-4 w-4 fill-current" /> Watch demo
+              <Play className="h-4 w-4 fill-current" /> See How It Works
             </a>
           </div>
           <div className="flex items-center gap-4 pt-2">
@@ -531,7 +532,7 @@ function Hero() {
               ))}
             </div>
             <p className="text-sm text-gray-500">
-              Loved by <strong className="text-gray-900">2M+</strong> creators
+              Loved by <strong className="text-gray-900">5K+</strong> creators
             </p>
           </div>
         </Reveal>
@@ -570,6 +571,50 @@ function LogoCloud() {
 const iconBox =
   "flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br text-white";
 
+function HowItWorks() {
+  const steps = [
+    {
+      title: "Create your space",
+      body: "Sign up in seconds, pick a username, and set up your profile.",
+    },
+    {
+      title: "Share & connect",
+      body: "Post updates, stories and go live in audio Spaces with your community.",
+    },
+    {
+      title: "Grow & get paid",
+      body: "Turn followers into supporters with tips, subscriptions and analytics.",
+    },
+  ];
+  return (
+    <section id="how-it-works" className="relative scroll-mt-24 py-24">
+      <div className="container mx-auto px-6">
+        <Reveal className="mx-auto mb-16 max-w-2xl text-center">
+          <h2 className="mb-4 text-4xl font-bold sm:text-5xl">
+            See how it <span className="gradient-text">works</span>
+          </h2>
+          <p className="text-xl text-gray-600">
+            From sign-up to your first supporter, here's the whole journey.
+          </p>
+        </Reveal>
+        <div className="grid gap-6 md:grid-cols-3">
+          {steps.map((s, i) => (
+            <Reveal key={s.title} delay={i * 100}>
+              <div className="glass-panel h-full rounded-3xl p-8 shadow-soft transition-all duration-500 hover:shadow-lift">
+                <span className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-pink text-sm font-black text-white">
+                  {i + 1}
+                </span>
+                <h3 className="mb-2 text-xl font-bold">{s.title}</h3>
+                <p className="text-gray-600">{s.body}</p>
+              </div>
+            </Reveal>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Features() {
   return (
     <section id="features" className="relative scroll-mt-24 py-32">
@@ -606,7 +651,7 @@ function Features() {
               <div className={`${iconBox} mb-8 from-blue-500 to-cyan-500`}>
                 <Video className="h-6 w-6" />
               </div>
-              <h3 className="mb-4 text-2xl font-bold">Stories &amp; Reels</h3>
+              <h3 className="mb-4 text-2xl font-bold">Posts &amp; Stories</h3>
               <p className="text-gray-600">
                 Share fleeting moments or polished short-form video with cinematic editing tools
                 built right in.
@@ -879,10 +924,10 @@ function Testimonials() {
 
 function Stats() {
   const stats = [
-    { value: 25, suffix: "M+", label: "Active Users" },
-    { value: 180, suffix: "M", label: "Posts Shared Daily" },
-    { value: 140, suffix: "+", label: "Countries Covered" },
-    { value: 45, suffix: "M", label: "Creator Payouts", prefix: "$" },
+    { value: 4.5, suffix: "K+", label: "Creators" },
+    { value: 2.5, suffix: "K+", label: "Daily Active Users" },
+    { value: 10, suffix: "K", label: "Posts Shared" },
+    { value: 15, suffix: "K+", label: "Daily Creator Payouts", prefix: "$" },
   ];
   return (
     <section className="border-y border-gray-200 py-24">
@@ -1118,6 +1163,7 @@ function Index() {
       <Nav />
       <Hero />
       <LogoCloud />
+      <HowItWorks />
       <Features />
       <Community />
       <Creators />

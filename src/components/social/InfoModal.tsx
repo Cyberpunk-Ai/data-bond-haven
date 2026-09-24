@@ -67,7 +67,7 @@ const infoContent: Record<string, { title: string; subtitle: string; icon: any; 
         "✓ Supabase Database: Operational (Live)",
         "✓ Supabase Storage (5 Buckets): Operational",
         "✓ Realtime Replication Channel: Active",
-        "✓ Gemini Generative AI Services: Operational",
+        "✓ AI Sparks Generative Services: Operational",
       ],
     },
   };

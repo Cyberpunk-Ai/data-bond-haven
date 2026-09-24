@@ -679,24 +679,33 @@ export async function uploadMedia(
   file: File,
   folder: "avatars" | "posts" | "stories" | "media" | "messages" = "media",
 ) {
-  const ext = (file.name.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const path = `${folder}/${me()}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   try {
-    const { data, error } = await supabase.storage
-      .from("media")
-      .upload(path, file, { upsert: true, contentType: file.type || undefined });
-    if (!error && data) {
-      // Bucket is private; serve through the public media proxy so links never expire.
-      return { url: `/api/public/media/${path}`, path };
-    }
-    if (error) {
-      console.warn("Supabase storage upload notice:", error.message);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (token) {
+      const res = await fetch(`/api/uploads/?folder=${encodeURIComponent(folder)}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": file.type || "application/octet-stream",
+        },
+        body: file,
+      });
+      if (res.ok) {
+        const json = await res.json();
+        return { url: json.url as string, path: json.path as string };
+      }
+      const failure = await res.json().catch(() => null);
+      console.warn("Media upload notice:", failure?.error || res.statusText);
     }
   } catch (err: any) {
     console.warn("Storage upload notice:", err?.message);
   }
 
-  // Fallback to client-side Data URL so uploads and attachments are 100% resilient to RLS/storage restrictions
+  // Fallback to client-side Data URL so uploads and attachments are 100% resilient
+  // to transient storage/network issues (never used for authenticated success paths).
+  const ext = (file.name.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const path = `${folder}/${me()}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   return new Promise<{ url: string; path: string }>((resolve) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -725,6 +734,8 @@ function rowToSpace(row: any): Space {
     recorded: row.recorded ?? false,
     duration: row.duration ?? undefined,
     recording_url: row.recording_url ?? undefined,
+    is_recording: row.is_recording ?? false,
+    replay_count: row.replay_count ?? 0,
     participants: row.participants ?? [],
     messages: row.messages ?? [],
   };
@@ -906,6 +917,83 @@ export async function setSpaceParticipantRole(
   return { ok: true };
 }
 
+/** Host-only: force-mute (or unmute) another participant's mic state. RLS lets the
+ * host update any participant row in their room; non-hosts can only touch their own. */
+export async function setSpaceParticipantMute(spaceId: string, userId: string, muted: boolean) {
+  const { error } = await db
+    .from("space_participants")
+    .update({ is_muted: muted, is_speaking: muted ? false : undefined })
+    .eq("space_id", spaceId)
+    .eq("user_id", userId);
+  if (error) throw error;
+  emitRealtime("space:speaking", { spaceId, userId, speaking: !muted, muted });
+  return { ok: true };
+}
+
+/** Host-only: remove a participant from the room entirely. Enforced server-side by
+ * the "space participants self delete" RLS policy (self or host only). */
+export async function removeSpaceParticipant(spaceId: string, userId: string) {
+  const { error } = await db
+    .from("space_participants")
+    .delete()
+    .eq("space_id", spaceId)
+    .eq("user_id", userId);
+  if (error) throw error;
+  emitRealtime("space:removed", { spaceId, userId });
+  await syncSpaceListeners(spaceId);
+  return { ok: true };
+}
+
+/** Host-only: turn the room recording on/off. Recording defaults to OFF; only the
+ * host can start or stop it, and every listener sees the same state via realtime. */
+export async function setSpaceRecording(spaceId: string, recording: boolean) {
+  const { data, error } = await db
+    .from("spaces")
+    .update(
+      recording
+        ? { is_recording: true, recording_started_at: nowIso(), recording_bytes: 0 }
+        : { is_recording: false },
+    )
+    .eq("id", spaceId)
+    .eq("host_id", me())
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Only the host can control recording.");
+  emitRealtime("space:recording", { spaceId, recording });
+  return { ok: true };
+}
+
+/** Host-only: report the current recording size so we can enforce the size limit server-side too. */
+export async function reportSpaceRecordingBytes(spaceId: string, bytes: number) {
+  await db.from("spaces").update({ recording_bytes: Math.max(0, Math.floor(bytes)) }).eq("id", spaceId).eq("host_id", me());
+  return { ok: true };
+}
+
+/** Host-only: finish a recording, attaching the uploaded replay URL. */
+export async function finalizeSpaceRecording(spaceId: string, recordingUrl: string) {
+  const { error } = await db
+    .from("spaces")
+    .update({ is_recording: false, recorded: true, recording_url: recordingUrl })
+    .eq("id", spaceId)
+    .eq("host_id", me());
+  if (error) throw error;
+  emitRealtime("space:recording", { spaceId, recording: false, recordingUrl });
+  return { ok: true };
+}
+
+/** Records a real, de-duplicated replay view for the signed-in listener (no fake counts). */
+export async function recordSpaceReplayView(spaceId: string) {
+  const userId = me();
+  if (!isDbId(userId)) return { ok: false };
+  try {
+    await db.from("space_replay_views").upsert({ space_id: spaceId, user_id: userId }, { onConflict: "space_id,user_id", ignoreDuplicates: true });
+  } catch {
+    /* best effort */
+  }
+  return { ok: true };
+}
+
 export async function terminateSpaceAdmin(spaceId: string, _actorId?: string) {
   await terminateSpace({ data: { spaceId } });
   emitRealtime("space:terminated", { id: spaceId });
@@ -963,15 +1051,28 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true });
     if (data && data.length > 0) {
+      const myId = me();
+      // Opening the thread means the recipient's device has the messages —
+      // mark them delivered even before they are explicitly read.
+      const { data: deliveredNow } = await db
+        .from("messages")
+        .update({ delivered_at: nowIso() })
+        .eq("conversation_id", conversationId)
+        .neq("sender_id", myId)
+        .is("delivered_at", null)
+        .select("id");
+      if ((deliveredNow ?? []).length > 0) {
+        emitRealtime("message:delivered", { conversationId, at: nowIso() });
+      }
       const { data: marked } = await db
         .from("messages")
         .update({ read_at: nowIso() })
         .eq("conversation_id", conversationId)
-        .neq("sender_id", me())
+        .neq("sender_id", myId)
         .is("read_at", null)
         .select("id");
       if ((marked ?? []).length > 0) {
-        emitRealtime("message:read", { conversationId, readerId: me(), at: nowIso() });
+        emitRealtime("message:read", { conversationId, readerId: myId, at: nowIso() });
       }
       return data as Message[];
     }
@@ -1003,7 +1104,12 @@ export async function getOrCreateConversation(participantId: string): Promise<st
   return String(data.id);
 }
 
-export async function sendMessage(target: string, body: string, mediaUrl?: string | null) {
+export async function sendMessage(
+  target: string,
+  body: string,
+  mediaUrl?: string | null,
+  clientId?: string | null,
+) {
   const senderId = me();
   if (!isDbId(senderId)) throw new Error("Sign in to send messages");
 
@@ -1015,16 +1121,18 @@ export async function sendMessage(target: string, body: string, mediaUrl?: strin
     ? String(existingConversation.id)
     : await getOrCreateConversation(target);
 
-  const { data, error } = await db
-    .from("messages")
-    .insert({
-      conversation_id: conversationId,
-      sender_id: senderId,
-      body,
-      media_url: mediaUrl ?? null,
-    })
-    .select("*")
-    .single();
+  // Repeated identical messages must all send — there is no dedupe by
+  // content. A client-generated id lets the sender reconcile its optimistic
+  // bubble with the persisted row without guessing from message text.
+  const insertRow: Record<string, unknown> = {
+    conversation_id: conversationId,
+    sender_id: senderId,
+    body,
+    media_url: mediaUrl ?? null,
+  };
+  if (clientId) insertRow.id = clientId;
+
+  const { data, error } = await db.from("messages").insert(insertRow).select("*").single();
   if (error) throw new Error(error.message || "Your message couldn't be sent");
 
   await db
@@ -1744,6 +1852,12 @@ export async function markAllNotificationsRead() {
 }
 
 export const markAllNotificationsAsRead = markAllNotificationsRead;
+
+export async function deleteNotification(id: string) {
+  const { error } = await db.from("notifications").delete().eq("id", id);
+  if (error) throw new Error(error.message || "Could not delete that notification");
+  return { id };
+}
 
 /** Send to a conversation id or straight to a recipient profile id. */
 export async function sendDirectMessage(

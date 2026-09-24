@@ -180,6 +180,7 @@ export interface Post {
   repostedByMe?: boolean;
   poll?: Poll | null;
   comments?: PostComment[];
+  edited_at?: string | null;
 }
 
 export interface SpaceParticipant {
@@ -212,6 +213,8 @@ export interface Space {
   recorded?: boolean;
   duration?: string;
   recording_url?: string;
+  is_recording?: boolean;
+  replay_count?: number;
   participants?: SpaceParticipant[];
   messages?: SpaceChatMessage[];
 }
@@ -224,6 +227,7 @@ export interface Message {
   created_at: string;
   media_url?: string | null;
   read_at?: string | null;
+  delivered_at?: string | null;
   is_edited?: boolean;
 }
 
@@ -244,6 +248,7 @@ export interface Notification {
   id: string;
   actor_id: string;
   recipient_id?: string;
+  post_id?: string | null;
   type: NotificationType;
   body: string;
   created_at: string;

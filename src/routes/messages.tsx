@@ -850,10 +850,12 @@ function MessagesPage() {
           // If already in thread by ID, skip
           if (prev.some((m) => m.id === msg.id)) return prev;
 
-          // If it's sent by current user and we have a matching un-synced/optimistic message, reconcile ID
+          // Client-generated ids mean our own optimistic bubble already has the
+          // real message id — this is a metadata refresh (media url, delivered/read).
           if (msgSender === currentUserId) {
             const matchIndex = prev.findIndex((m) => {
               if (m.sender_id !== currentUserId || m.conversation_id !== msgConvId) return false;
+              if (m.id === msg.id) return true;
               if (m.body === msgBody) return true;
               if (m.body.includes("Voice Note") && msgBody.includes("Voice Note")) {
                 return m.body.split(" [")[0] === msgBody.split(" [")[0];
@@ -951,7 +953,17 @@ function MessagesPage() {
             m.conversation_id === event.conversationId &&
             m.sender_id === currentUserId &&
             !m.read_at
-              ? { ...m, read_at: event.at || new Date().toISOString() }
+              ? { ...m, read_at: event.at || new Date().toISOString(), delivered_at: m.delivered_at || event.at }
+              : m,
+          ),
+        );
+      }
+
+      if (event.type === "message:delivered" && event.conversationId) {
+        setAll((prev) =>
+          prev.map((m) =>
+            m.conversation_id === event.conversationId && m.sender_id === currentUserId && !m.delivered_at
+              ? { ...m, delivered_at: event.at || new Date().toISOString() }
               : m,
           ),
         );
@@ -968,6 +980,7 @@ function MessagesPage() {
       "message:edited",
       "message:deleted",
       "message:read",
+      "message:delivered",
       "message:typing",
     ],
   );
@@ -1003,10 +1016,10 @@ function MessagesPage() {
    * locally until the first message, so send to the person and adopt the real
    * thread id the backend hands back.
    */
-  async function persistMessage(body: string, tempId: string) {
+  async function persistMessage(body: string, tempId: string, mediaUrl?: string | null) {
     const conv = conversations.find((c) => c.id === activeId);
     const target = activeId.startsWith("c_") && conv ? conv.participant_id : activeId;
-    const res: any = await sendMessage(target, body);
+    const res: any = await sendMessage(target, body, mediaUrl ?? null, tempId);
     const serverMsg = res?.message ?? res;
     const realId: string = res?.conversationId ?? activeId;
     const stale = activeId;
@@ -1048,7 +1061,7 @@ function MessagesPage() {
     if (!body || sending) return;
 
     setSending(true);
-    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const tempId = crypto.randomUUID();
     const newMsg: Message = {
       id: tempId,
       conversation_id: activeId,
@@ -1685,10 +1698,12 @@ function MessagesPage() {
                                 {mine && (
                                   <span
                                     className="flex items-center gap-0.5 ml-1"
-                                    title={m.read_at ? "Seen" : "Sent"}
+                                    title={m.read_at ? "Seen" : m.delivered_at ? "Delivered" : "Sent"}
                                   >
                                     {m.read_at ? (
-                                      <CheckCheck className="h-3.5 w-3.5 text-white" />
+                                      <CheckCheck className="h-3.5 w-3.5 text-sky-300" />
+                                    ) : m.delivered_at ? (
+                                      <CheckCheck className="h-3.5 w-3.5 text-white/70" />
                                     ) : (
                                       <Check className="h-3.5 w-3.5 text-white/70" />
                                     )}

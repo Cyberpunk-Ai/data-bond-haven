@@ -49,12 +49,92 @@ export function useSpaceAudio(opts: {
   const [peers, setPeers] = useState<string[]>([]);
   const [speakingIds, setSpeakingIds] = useState<Set<string>>(new Set());
   const [overCapacity, setOverCapacity] = useState(false);
+  const [recordingBytes, setRecordingBytes] = useState(0);
+  const [isRecordingLocally, setIsRecordingLocally] = useState(false);
 
   const pcs = useRef(new Map<string, RTCPeerConnection>());
   const audios = useRef(new Map<string, HTMLAudioElement>());
+  const remoteStreams = useRef(new Map<string, MediaStream>());
   const localStream = useRef<MediaStream | null>(null);
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+
+  // --- Room recording: mixes local + remote audio into one file. Host-only,
+  // enforced by the caller; this just does the capture/upload-ready blob work.
+  const recorder = useRef<MediaRecorder | null>(null);
+  const recordCtx = useRef<AudioContext | null>(null);
+  const recordChunks = useRef<Blob[]>([]);
+  const recordBytesRef = useRef(0);
+  const recordMaxBytesRef = useRef(0);
+  const recordResolve = useRef<((blob: Blob) => void) | null>(null);
+  const onRecordOverLimit = useRef<(() => void) | null>(null);
+
+  function startRecording(maxBytes: number, overLimit?: () => void): boolean {
+    if (recorder.current) return false;
+    try {
+      const ctx = new AudioContext();
+      const dest = ctx.createMediaStreamDestination();
+      if (localStream.current) ctx.createMediaStreamSource(localStream.current).connect(dest);
+      for (const stream of remoteStreams.current.values()) {
+        try {
+          ctx.createMediaStreamSource(stream).connect(dest);
+        } catch {
+          /* stream may not be ready yet */
+        }
+      }
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const mr = new MediaRecorder(dest.stream, { mimeType, audioBitsPerSecond: 64000 });
+      recordChunks.current = [];
+      recordBytesRef.current = 0;
+      recordMaxBytesRef.current = maxBytes;
+      onRecordOverLimit.current = overLimit ?? null;
+      mr.ondataavailable = (e) => {
+        if (!e.data || e.data.size === 0) return;
+        recordChunks.current.push(e.data);
+        recordBytesRef.current += e.data.size;
+        setRecordingBytes(recordBytesRef.current);
+        if (recordMaxBytesRef.current > 0 && recordBytesRef.current >= recordMaxBytesRef.current) {
+          onRecordOverLimit.current?.();
+          stopRecording();
+        }
+      };
+      mr.start(1000);
+      recorder.current = mr;
+      recordCtx.current = ctx;
+      setIsRecordingLocally(true);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function stopRecording(): Promise<Blob> {
+    return new Promise((resolve) => {
+      const mr = recorder.current;
+      if (!mr) {
+        resolve(new Blob([], { type: "audio/webm" }));
+        return;
+      }
+      recordResolve.current = resolve;
+      mr.onstop = () => {
+        const blob = new Blob(recordChunks.current, { type: mr.mimeType || "audio/webm" });
+        recordChunks.current = [];
+        void recordCtx.current?.close();
+        recordCtx.current = null;
+        recorder.current = null;
+        setIsRecordingLocally(false);
+        recordResolve.current?.(blob);
+        recordResolve.current = null;
+      };
+      try {
+        mr.stop();
+      } catch {
+        setIsRecordingLocally(false);
+      }
+    });
+  }
 
   // Apply mute to the outgoing track without renegotiating.
   useEffect(() => {
@@ -115,6 +195,7 @@ export function useSpaceAudio(opts: {
       };
       pc.ontrack = (e) => {
         const stream = e.streams[0] ?? new MediaStream([e.track]);
+        remoteStreams.current.set(peerId, stream);
         let el = audios.current.get(peerId);
         if (!el) {
           el = new Audio();
@@ -125,16 +206,35 @@ export function useSpaceAudio(opts: {
         void el.play().catch(() => undefined);
         watchLevel(peerId, stream);
       };
+      let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
       pc.onconnectionstatechange = () => {
         if (pc!.connectionState === "connected") setStatus("live");
+        if (pc!.connectionState === "disconnected") {
+          // Give the network a moment to recover before tearing the peer down.
+          reconnectTimer = setTimeout(async () => {
+            if (pc!.connectionState !== "connected" && !cancelled) {
+              try {
+                const offer = await pc!.createOffer({ iceRestart: true });
+                await pc!.setLocalDescription(offer);
+                await send({ kind: "offer", from: userId, to: peerId, sdp: offer });
+              } catch {
+                closePeer(peerId);
+              }
+            }
+          }, 2500);
+        }
         if (pc!.connectionState === "failed") closePeer(peerId);
       };
+      (pc as any)._clearReconnect = () => reconnectTimer && clearTimeout(reconnectTimer);
       return pc;
     }
 
     function closePeer(peerId: string) {
-      pcs.current.get(peerId)?.close();
+      const pc = pcs.current.get(peerId);
+      (pc as any)?._clearReconnect?.();
+      pc?.close();
       pcs.current.delete(peerId);
+      remoteStreams.current.delete(peerId);
       const el = audios.current.get(peerId);
       if (el) {
         el.srcObject = null;
@@ -193,7 +293,13 @@ export function useSpaceAudio(opts: {
       if (speaker) {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              channelCount: 1,
+              sampleRate: 48000,
+            },
           });
           if (cancelled) {
             stream.getTracks().forEach((t) => t.stop());
@@ -228,5 +334,14 @@ export function useSpaceAudio(opts: {
     };
   }, [enabled, spaceId, userId, speaker]);
 
-  return { status, peers, speakingIds, overCapacity };
+  return {
+    status,
+    peers,
+    speakingIds,
+    overCapacity,
+    startRecording,
+    stopRecording,
+    isRecordingLocally,
+    recordingBytes,
+  };
 }

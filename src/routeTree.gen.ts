@@ -29,8 +29,10 @@ import { Route as TermsRouteImport } from './routes/terms'
 import { Route as BillingCallbackRouteImport } from './routes/billing.callback'
 import { Route as PostIdRouteImport } from './routes/post.$id'
 import { Route as UUsernameRouteImport } from './routes/u.$username'
+import { Route as ApiUploadsIndexRouteImport } from './routes/api/uploads/index'
 import { Route as ApiPublicMediaSplatRouteImport } from './routes/api/public/media/$'
 import { Route as ApiPublicPaystackWebhookRouteImport } from './routes/api/public/paystack/webhook'
+import { Route as ApiPublicV1FollowersRouteImport } from './routes/api/public/v1/followers'
 import { Route as ApiPublicV1MeRouteImport } from './routes/api/public/v1/me'
 import { Route as ApiPublicV1PostsRouteImport } from './routes/api/public/v1/posts'
 import { Route as ApiPublicWebhooksDispatchRouteImport } from './routes/api/public/webhooks/dispatch'
@@ -135,6 +137,11 @@ const UUsernameRoute = UUsernameRouteImport.update({
   path: '/u/$username',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiUploadsIndexRoute = ApiUploadsIndexRouteImport.update({
+  id: '/api/uploads/',
+  path: '/api/uploads/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicMediaSplatRoute = ApiPublicMediaSplatRouteImport.update({
   id: '/api/public/media/$',
   path: '/api/public/media/$',
@@ -146,6 +153,11 @@ const ApiPublicPaystackWebhookRoute =
     path: '/api/public/paystack/webhook',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicV1FollowersRoute = ApiPublicV1FollowersRouteImport.update({
+  id: '/api/public/v1/followers',
+  path: '/api/public/v1/followers',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicV1MeRoute = ApiPublicV1MeRouteImport.update({
   id: '/api/public/v1/me',
   path: '/api/public/v1/me',
@@ -184,8 +196,10 @@ export interface FileRoutesByFullPath {
   '/billing/callback': typeof BillingCallbackRoute
   '/post/$id': typeof PostIdRoute
   '/u/$username': typeof UUsernameRoute
+  '/api/uploads/': typeof ApiUploadsIndexRoute
   '/api/public/media/$': typeof ApiPublicMediaSplatRoute
   '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
+  '/api/public/v1/followers': typeof ApiPublicV1FollowersRoute
   '/api/public/v1/me': typeof ApiPublicV1MeRoute
   '/api/public/v1/posts': typeof ApiPublicV1PostsRoute
   '/api/public/webhooks/dispatch': typeof ApiPublicWebhooksDispatchRoute
@@ -211,8 +225,10 @@ export interface FileRoutesByTo {
   '/billing/callback': typeof BillingCallbackRoute
   '/post/$id': typeof PostIdRoute
   '/u/$username': typeof UUsernameRoute
+  '/api/uploads': typeof ApiUploadsIndexRoute
   '/api/public/media/$': typeof ApiPublicMediaSplatRoute
   '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
+  '/api/public/v1/followers': typeof ApiPublicV1FollowersRoute
   '/api/public/v1/me': typeof ApiPublicV1MeRoute
   '/api/public/v1/posts': typeof ApiPublicV1PostsRoute
   '/api/public/webhooks/dispatch': typeof ApiPublicWebhooksDispatchRoute
@@ -239,8 +255,10 @@ export interface FileRoutesById {
   '/billing/callback': typeof BillingCallbackRoute
   '/post/$id': typeof PostIdRoute
   '/u/$username': typeof UUsernameRoute
+  '/api/uploads/': typeof ApiUploadsIndexRoute
   '/api/public/media/$': typeof ApiPublicMediaSplatRoute
   '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
+  '/api/public/v1/followers': typeof ApiPublicV1FollowersRoute
   '/api/public/v1/me': typeof ApiPublicV1MeRoute
   '/api/public/v1/posts': typeof ApiPublicV1PostsRoute
   '/api/public/webhooks/dispatch': typeof ApiPublicWebhooksDispatchRoute
@@ -268,8 +286,10 @@ export interface FileRouteTypes {
     | '/billing/callback'
     | '/post/$id'
     | '/u/$username'
+    | '/api/uploads/'
     | '/api/public/media/$'
     | '/api/public/paystack/webhook'
+    | '/api/public/v1/followers'
     | '/api/public/v1/me'
     | '/api/public/v1/posts'
     | '/api/public/webhooks/dispatch'
@@ -295,8 +315,10 @@ export interface FileRouteTypes {
     | '/billing/callback'
     | '/post/$id'
     | '/u/$username'
+    | '/api/uploads'
     | '/api/public/media/$'
     | '/api/public/paystack/webhook'
+    | '/api/public/v1/followers'
     | '/api/public/v1/me'
     | '/api/public/v1/posts'
     | '/api/public/webhooks/dispatch'
@@ -322,8 +344,10 @@ export interface FileRouteTypes {
     | '/billing/callback'
     | '/post/$id'
     | '/u/$username'
+    | '/api/uploads/'
     | '/api/public/media/$'
     | '/api/public/paystack/webhook'
+    | '/api/public/v1/followers'
     | '/api/public/v1/me'
     | '/api/public/v1/posts'
     | '/api/public/webhooks/dispatch'
@@ -350,8 +374,10 @@ export interface RootRouteChildren {
   BillingCallbackRoute: typeof BillingCallbackRoute
   PostIdRoute: typeof PostIdRoute
   UUsernameRoute: typeof UUsernameRoute
+  ApiUploadsIndexRoute: typeof ApiUploadsIndexRoute
   ApiPublicMediaSplatRoute: typeof ApiPublicMediaSplatRoute
   ApiPublicPaystackWebhookRoute: typeof ApiPublicPaystackWebhookRoute
+  ApiPublicV1FollowersRoute: typeof ApiPublicV1FollowersRoute
   ApiPublicV1MeRoute: typeof ApiPublicV1MeRoute
   ApiPublicV1PostsRoute: typeof ApiPublicV1PostsRoute
   ApiPublicWebhooksDispatchRoute: typeof ApiPublicWebhooksDispatchRoute
@@ -499,6 +525,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UUsernameRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/uploads/': {
+      id: '/api/uploads/'
+      path: '/api/uploads'
+      fullPath: '/api/uploads/'
+      preLoaderRoute: typeof ApiUploadsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/media/$': {
       id: '/api/public/media/$'
       path: '/api/public/media/$'
@@ -511,6 +544,13 @@ declare module '@tanstack/react-router' {
       path: '/api/public/paystack/webhook'
       fullPath: '/api/public/paystack/webhook'
       preLoaderRoute: typeof ApiPublicPaystackWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/v1/followers': {
+      id: '/api/public/v1/followers'
+      path: '/api/public/v1/followers'
+      fullPath: '/api/public/v1/followers'
+      preLoaderRoute: typeof ApiPublicV1FollowersRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/v1/me': {
@@ -558,8 +598,10 @@ const rootRouteChildren: RootRouteChildren = {
   BillingCallbackRoute: BillingCallbackRoute,
   PostIdRoute: PostIdRoute,
   UUsernameRoute: UUsernameRoute,
+  ApiUploadsIndexRoute: ApiUploadsIndexRoute,
   ApiPublicMediaSplatRoute: ApiPublicMediaSplatRoute,
   ApiPublicPaystackWebhookRoute: ApiPublicPaystackWebhookRoute,
+  ApiPublicV1FollowersRoute: ApiPublicV1FollowersRoute,
   ApiPublicV1MeRoute: ApiPublicV1MeRoute,
   ApiPublicV1PostsRoute: ApiPublicV1PostsRoute,
   ApiPublicWebhooksDispatchRoute: ApiPublicWebhooksDispatchRoute,

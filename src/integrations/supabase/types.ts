@@ -439,6 +439,7 @@ export type Database = {
           body: string;
           conversation_id: string;
           created_at: string;
+          delivered_at: string | null;
           id: string;
           media_url: string | null;
           read_at: string | null;
@@ -448,6 +449,7 @@ export type Database = {
           body: string;
           conversation_id: string;
           created_at?: string;
+          delivered_at?: string | null;
           id?: string;
           media_url?: string | null;
           read_at?: string | null;
@@ -457,6 +459,7 @@ export type Database = {
           body?: string;
           conversation_id?: string;
           created_at?: string;
+          delivered_at?: string | null;
           id?: string;
           media_url?: string | null;
           read_at?: string | null;
@@ -535,6 +538,7 @@ export type Database = {
           body: string;
           created_at: string;
           id: string;
+          post_id: string | null;
           read: boolean;
           recipient_id: string;
           type: string;
@@ -544,6 +548,7 @@ export type Database = {
           body: string;
           created_at?: string;
           id?: string;
+          post_id?: string | null;
           read?: boolean;
           recipient_id: string;
           type: string;
@@ -553,6 +558,7 @@ export type Database = {
           body?: string;
           created_at?: string;
           id?: string;
+          post_id?: string | null;
           read?: boolean;
           recipient_id?: string;
           type?: string;
@@ -563,6 +569,13 @@ export type Database = {
             columns: ["actor_id"];
             isOneToOne: false;
             referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "notifications_post_id_fkey";
+            columns: ["post_id"];
+            isOneToOne: false;
+            referencedRelation: "posts";
             referencedColumns: ["id"];
           },
           {
@@ -1069,6 +1082,39 @@ export type Database = {
           },
         ];
       };
+      space_replay_views: {
+        Row: {
+          space_id: string;
+          user_id: string;
+          viewed_at: string;
+        };
+        Insert: {
+          space_id: string;
+          user_id: string;
+          viewed_at?: string;
+        };
+        Update: {
+          space_id?: string;
+          user_id?: string;
+          viewed_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "space_replay_views_space_id_fkey";
+            columns: ["space_id"];
+            isOneToOne: false;
+            referencedRelation: "spaces";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "space_replay_views_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       spaces: {
         Row: {
           created_at: string;
@@ -1076,10 +1122,14 @@ export type Database = {
           gradient: string;
           host_id: string;
           id: string;
+          is_recording: boolean;
           listeners: number;
           live: boolean;
           recorded: boolean;
+          recording_bytes: number;
+          recording_started_at: string | null;
           recording_url: string | null;
+          replay_count: number;
           starts_at: string | null;
           title: string;
           topic: string;
@@ -1090,10 +1140,14 @@ export type Database = {
           gradient?: string;
           host_id: string;
           id?: string;
+          is_recording?: boolean;
           listeners?: number;
           live?: boolean;
           recorded?: boolean;
+          recording_bytes?: number;
+          recording_started_at?: string | null;
           recording_url?: string | null;
+          replay_count?: number;
           starts_at?: string | null;
           title: string;
           topic?: string;
@@ -1104,10 +1158,14 @@ export type Database = {
           gradient?: string;
           host_id?: string;
           id?: string;
+          is_recording?: boolean;
           listeners?: number;
           live?: boolean;
           recorded?: boolean;
+          recording_bytes?: number;
+          recording_started_at?: string | null;
           recording_url?: string | null;
+          replay_count?: number;
           starts_at?: string | null;
           title?: string;
           topic?: string;

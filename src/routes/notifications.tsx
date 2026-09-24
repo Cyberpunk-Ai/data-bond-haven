@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Heart,
   UserPlus,
@@ -11,6 +11,7 @@ import {
   CheckCheck,
   BellOff,
   Loader2,
+  X,
 } from "lucide-react";
 import { AppShell, PageHeader, Panel } from "@/components/social/AppShell";
 import { Avatar } from "@/components/social/Avatar";
@@ -38,7 +39,12 @@ function NotificationsSkeleton() {
   );
 }
 import { getProfile } from "@/lib/profile-service";
-import { getNotifications, markNotificationRead, markAllNotificationsRead } from "@/lib/api-client";
+import {
+  getNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+  deleteNotification,
+} from "@/lib/api-client";
 import { clearAllUnreadNotifications, decrementUnreadNotifications } from "@/lib/unread-state";
 import { useRealtime } from "@/lib/realtime";
 import { cn } from "@/lib/utils";
@@ -149,8 +155,28 @@ function NotificationsPage() {
       void navigate({ to: "/settings", search: { section: "monetization" } });
       return;
     }
+    // Likes/comments/reposts/mentions point at the post itself when we know it.
+    if (n.post_id && ["like", "comment", "reply", "repost", "mention"].includes(n.type)) {
+      void navigate({ to: "/post/$id", params: { id: n.post_id } });
+      return;
+    }
     if (n.actor_id) {
       void navigate({ to: "/profile", search: { user: n.actor_id } });
+    }
+  }
+
+  async function handleDelete(e: ReactMouseEvent, id: string) {
+    e.stopPropagation();
+    const item = items.find((x) => x.id === id);
+    const removed = item;
+    setItems((p) => p.filter((x) => x.id !== id));
+    if (item && !item.read) decrementUnreadNotifications(1);
+    try {
+      await deleteNotification(id);
+    } catch {
+      // Restore on failure so the user doesn't lose the notification silently.
+      if (removed) setItems((p) => [removed, ...p].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)));
+      toast.error("Couldn't delete that notification. Please try again.");
     }
   }
 
@@ -217,7 +243,7 @@ function NotificationsPage() {
                   }}
                   style={{ animationDelay: `${i * 45}ms` }}
                   className={cn(
-                    "glass-panel flex w-full animate-in items-start gap-3 rounded-3xl p-4 text-left shadow-soft transition-all duration-300 fade-in slide-in-from-bottom-3 hover:-translate-y-0.5 hover:shadow-lift cursor-pointer",
+                    "glass-panel group flex w-full animate-in items-start gap-3 rounded-3xl p-4 text-left shadow-soft transition-all duration-300 fade-in slide-in-from-bottom-3 hover:-translate-y-0.5 hover:shadow-lift cursor-pointer",
                     !n.read && "ring-1 ring-brand/25 bg-brand/[0.03]",
                   )}
                 >
@@ -247,7 +273,17 @@ function NotificationsPage() {
                       <InviteActions notification={n as any} />
                     )}
                   </span>
-                  {!n.read && <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-brand" />}
+                  <span className="flex shrink-0 items-center gap-2 pl-1">
+                    {!n.read && <span className="h-2 w-2 shrink-0 rounded-full bg-brand" />}
+                    <button
+                      type="button"
+                      onClick={(e) => handleDelete(e, n.id)}
+                      aria-label="Delete notification"
+                      className="rounded-full p-1.5 text-muted-foreground/70 opacity-0 transition-all duration-200 hover:bg-foreground/10 hover:text-foreground group-hover:opacity-100 cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
                 </div>
               );
             })}

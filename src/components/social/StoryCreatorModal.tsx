@@ -411,10 +411,10 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
                   <div className="rounded-2xl bg-gradient-to-br from-brand/10 via-brand-pink/10 to-transparent p-4 border border-brand/20">
                     <div className="flex items-center gap-2 mb-2">
                       <Wand2 className="h-4 w-4 text-brand" />
-                      <h4 className="text-xs font-bold text-foreground">Gemini Story Sparks</h4>
+                      <h4 className="text-xs font-bold text-foreground">AI Sparks for Stories</h4>
                     </div>
                     <p className="text-xs text-muted-foreground mb-3">
-                      Generate crisp, poetic, aesthetic story moments with Google Gemini.
+                      Generate crisp, poetic, aesthetic story moments with AI Sparks.
                     </p>
 
                     <div className="flex gap-2 mb-3">

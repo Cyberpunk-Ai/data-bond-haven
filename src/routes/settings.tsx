@@ -792,7 +792,7 @@ function SettingsPage() {
                     <div className="rounded-2xl bg-foreground/[0.03] p-3.5 border border-border/50">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-muted-foreground font-semibold">
-                          Gemini AI Drafts
+                          AI Sparks Drafts
                         </span>
                         <span className="font-bold">
                           {usage.aiDraftsToday || 0} /{" "}
