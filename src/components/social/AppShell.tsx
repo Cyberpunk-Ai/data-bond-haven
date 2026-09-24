@@ -22,6 +22,7 @@ import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
 import { AnnouncementBanner } from "@/components/social/AnnouncementBanner";
 import { currentUser } from "@/lib/profile-service";
+import { useWorkspace } from "@/lib/workspace-state";
 import { useAuth } from "@/lib/auth-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { PLAN_DETAILS } from "@/lib/plans";
@@ -226,6 +227,7 @@ function Sidebar({
         </div>
       )}
 
+      <WorkspaceSwitcher />
       <div className="mt-auto pt-4">
         <Link
           to="/profile"
@@ -272,6 +274,30 @@ function Sidebar({
           </Link>
         )}
       </div>
+    </div>
+  );
+}
+
+function WorkspaceSwitcher() {
+  const { workspaces, activeWsId, isPersonal, setActiveWsId } = useWorkspace();
+  if (!workspaces.length) return null;
+  return (
+    <div className="mt-3 px-1">
+      <label className="mb-1 block text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
+        Posting as
+      </label>
+      <select
+        value={activeWsId}
+        onChange={(e) => setActiveWsId(e.target.value)}
+        className="w-full rounded-2xl border border-border/70 bg-foreground/[0.03] px-3 py-2 text-xs font-bold outline-none focus:border-brand"
+      >
+        <option value="personal">👤 {currentUser.display_name || "Personal"}</option>
+        {workspaces.map((ws) => (
+          <option key={ws.id} value={ws.id}>
+            {ws.logoEmoji} {ws.name}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

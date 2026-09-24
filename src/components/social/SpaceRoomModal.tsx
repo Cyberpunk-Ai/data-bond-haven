@@ -1042,14 +1042,34 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
 
             <div className="flex items-center gap-2 ml-auto">
               {isCurrentUserHost ? (
-                <button
-                  type="button"
-                  onClick={() => setShowEndConfirmation(true)}
-                  className="rounded-full bg-rose-600 hover:bg-rose-700 text-white font-bold px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] flex items-center gap-1.5 shadow-soft cursor-pointer"
-                >
-                  <Radio className="h-3.5 w-3.5" />
-                  <span>End Space</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={handleToggleRecording}
+                    disabled={recordingBusy}
+                    className={cn(
+                      "rounded-full font-bold px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] flex items-center gap-1.5 shadow-soft cursor-pointer disabled:opacity-60",
+                      isRecordingSpace
+                        ? "bg-red-600 text-white hover:bg-red-700"
+                        : "bg-foreground/10 text-foreground hover:bg-foreground/15",
+                    )}
+                  >
+                    {recordingBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Disc3 className="h-3.5 w-3.5" />
+                    )}
+                    <span className="hidden xs:inline">{isRecordingSpace ? "Stop Recording" : "Record"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowEndConfirmation(true)}
+                    className="rounded-full bg-rose-600 hover:bg-rose-700 text-white font-bold px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] flex items-center gap-1.5 shadow-soft cursor-pointer"
+                  >
+                    <Radio className="h-3.5 w-3.5" />
+                    <span>End Space</span>
+                  </button>
+                </>
               ) : (
                 <button
                   onClick={async () => {
