@@ -1,19 +1,14 @@
-# Roadmap
+# Roadmap (launch readiness)
 
-- [x] Port next branch into project
-- [x] Apply migrations to user's Supabase (0000–0008)
-- [x] First admin email rule
-- [x] Remove Lovable dependencies (Google sign-in, AI endpoint/key via env); .env.example
-- [x] Spaces live audio (WebRTC mesh <=8; SFU adapter hook behind env)
-- [x] Developer API: hashed keys, /api/public/v1/me + /posts, rate limit, signed webhook queue + dispatcher
-- [x] Composer poll question field, validation, typed location suggestions
-- [x] About, Terms, Privacy, Contact, Guidelines, polished 404; footer links
-- [x] Explore: remove follower counts
-- [ ] Team workspace roles (DB-enforced) + invites
-- [ ] Settings panels completion
-- [ ] Messaging typing/read receipts
-- [ ] Feed/admin polish, mobile, speed
-- [ ] Payments: Stripe checkout + webhook (blocked: needs STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, PAYSTACK_SECRET_KEY)
-- [ ] Schedule webhook dispatcher (blocked: needs published URL + CRON_SECRET)
-- [ ] Google sign-in: enable Google provider in Supabase dashboard (user action)
-- [ ] Security re-check, full browser test pass
+- [x] Phase 0: port repo, connect remote backend, store credentials securely
+- [x] Phase 0b: consolidate migrations into db/migrations, apply to live DB, revoke signed-out write access, create private media storage
+- [ ] Phase 1: data integrity, access rules, auth/roles, payment security review
+- [ ] Phase 2: feed core (comments realtime, likes, reposts, stable feed, impressions, recommendations)
+- [ ] Phase 3: explore, search, share links, profiles, editing, bookmarks, notifications
+- [ ] Phase 4: messaging + WebRTC calls
+- [ ] Phase 5: Spaces (host controls, recording off by default, real replay counts)
+- [ ] Phase 6: R2 media storage (needs R2 credentials)
+- [ ] Phase 7: team workspaces, Pro feature preview, developer API, settings
+- [ ] Phase 8: copy changes (AI Sparks, landing figures, button labels), remove fake data, responsive analytics
+- [ ] Phase 9: multi-user testing, friendly errors, second security audit
+- [ ] User: rotate the secret key and DB password (pasted in chat)
