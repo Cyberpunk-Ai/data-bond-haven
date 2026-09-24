@@ -97,6 +97,10 @@ export function AnalyticsDashboard() {
   }, [data]);
 
   const bestPost = useMemo(() => data?.topPosts?.[0] ?? null, [data]);
+  const [showAllPosts, setShowAllPosts] = useState(false);
+  const [showAllTips, setShowAllTips] = useState(false);
+  const POSTS_PREVIEW_COUNT = 4;
+  const TIPS_PREVIEW_COUNT = 4;
 
   const handleExportData = () => {
     if (!isPlus) {
@@ -422,31 +426,43 @@ export function AnalyticsDashboard() {
                 </div>
 
                 {data && data.topPosts.length > 0 ? (
-                  <div className="space-y-3 pt-1">
-                    {data.topPosts.map((post, idx) => (
-                      <div
-                        key={post.id}
-                        className="rounded-2xl border border-border/60 bg-muted/20 p-3.5 space-y-2 hover:bg-muted/40 transition-colors"
+                  <>
+                    <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2 xl:grid-cols-3">
+                      {(showAllPosts ? data.topPosts : data.topPosts.slice(0, POSTS_PREVIEW_COUNT)).map(
+                        (post, idx) => (
+                          <div
+                            key={post.id}
+                            className="rounded-2xl border border-border/60 bg-muted/20 p-3.5 space-y-2 hover:bg-muted/40 transition-colors"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-xs sm:text-sm font-bold text-foreground line-clamp-1">
+                                {post.title}
+                              </p>
+                              <span className="text-[0.65rem] font-extrabold px-2 py-0.5 rounded bg-brand/10 text-brand whitespace-nowrap">
+                                Rank #{idx + 1}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                              <span>{post.views.toLocaleString()} views</span>
+                              <span>{post.likes} likes</span>
+                              <span>{post.reposts} reposts</span>
+                              <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                                {post.ctr} engagement
+                              </span>
+                            </div>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                    {data.topPosts.length > POSTS_PREVIEW_COUNT && (
+                      <button
+                        onClick={() => setShowAllPosts((v) => !v)}
+                        className="mx-auto mt-1 flex items-center justify-center rounded-full border border-border px-4 py-1.5 text-xs font-bold text-foreground hover:bg-muted transition-colors cursor-pointer"
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs sm:text-sm font-bold text-foreground line-clamp-1">
-                            {post.title}
-                          </p>
-                          <span className="text-[0.65rem] font-extrabold px-2 py-0.5 rounded bg-brand/10 text-brand">
-                            Rank #{idx + 1}
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                          <span>{post.views.toLocaleString()} views</span>
-                          <span>{post.likes} likes</span>
-                          <span>{post.reposts} reposts</span>
-                          <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                            {post.ctr} engagement
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                        {showAllPosts ? "Show less" : `Show all ${data.topPosts.length} posts`}
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <p className="py-6 text-center text-xs text-muted-foreground">
                     Publish your first post to see performance here.
@@ -594,26 +610,39 @@ export function AnalyticsDashboard() {
               <div className="rounded-3xl border border-border/80 bg-card p-5 md:p-6 space-y-4 shadow-soft">
                 <h3 className="text-base font-bold">Recent Tips</h3>
                 {data.revenue.recent.length > 0 ? (
-                  <div className="space-y-3">
-                    {data.revenue.recent.map((tip) => (
-                      <div
-                        key={tip.id}
-                        className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-muted/20"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold truncate">
-                            {tip.message || "No message"}
-                          </p>
-                          <p className="text-[11px] text-muted-foreground">
-                            {new Date(tip.created_at).toLocaleDateString()}
-                          </p>
+                  <>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {(showAllTips
+                        ? data.revenue.recent
+                        : data.revenue.recent.slice(0, TIPS_PREVIEW_COUNT)
+                      ).map((tip) => (
+                        <div
+                          key={tip.id}
+                          className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-muted/20"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold truncate">
+                              {tip.message || "No message"}
+                            </p>
+                            <p className="text-[11px] text-muted-foreground">
+                              {new Date(tip.created_at).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <span className="text-xs font-extrabold text-amber-600 dark:text-amber-400 whitespace-nowrap">
+                            {money(tip.amount, tip.currency)}
+                          </span>
                         </div>
-                        <span className="text-xs font-extrabold text-amber-600 dark:text-amber-400 whitespace-nowrap">
-                          {money(tip.amount, tip.currency)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                    {data.revenue.recent.length > TIPS_PREVIEW_COUNT && (
+                      <button
+                        onClick={() => setShowAllTips((v) => !v)}
+                        className="mx-auto mt-1 flex items-center justify-center rounded-full border border-border px-4 py-1.5 text-xs font-bold text-foreground hover:bg-muted transition-colors cursor-pointer"
+                      >
+                        {showAllTips ? "Show less" : `Show all ${data.revenue.recent.length} tips`}
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <p className="py-6 text-center text-xs text-muted-foreground">
                     No tips received yet. Turn on tips in Monetization so supporters can send them.

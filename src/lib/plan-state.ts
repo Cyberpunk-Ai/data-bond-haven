@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 
 import { PLAN_DETAILS, type BillingCycle, type PlanTier } from "@/lib/plans";
 import { currentUser, setCurrentUser, subscribeProfiles } from "@/lib/profile-service";
-import { supabase } from "@/integrations/supabase/client";
-import { attachRemoteRecord, signedInProfileId } from "@/lib/remote-store";
+import { attachRemoteRecord } from "@/lib/remote-store";
 
 interface PlanUsage {
   aiDraftsToday: number;
@@ -81,24 +80,19 @@ export function usePlan() {
   const currentPlan: PlanTier = (currentUser.plan as PlanTier) || "free";
   const planDetails = PLAN_DETAILS[currentPlan] ?? PLAN_DETAILS.free;
 
-  async function upgradePlan(
+  /**
+   * Plans are only ever activated by the server after a verified payment
+   * (see `confirmPaystackPayment`). This just refreshes local UI state from
+   * whatever the server already confirmed — it never writes the plan itself,
+   * since `profiles.plan` and `subscriptions` reject client-side writes.
+   */
+  function syncPlanFromServer(
     plan: PlanTier,
     cycle: BillingCycle = "monthly",
     paymentMethod?: { brand: string; last4: string; exp: string },
   ) {
     commit(paymentMethod ? { cycle, paymentMethod } : { cycle });
     setCurrentUser({ ...currentUser, plan });
-    const userId = signedInProfileId();
-    if (userId) {
-      await supabase.from("profiles").update({ plan }).eq("id", userId);
-      await (supabase as any).from("subscriptions").upsert({
-        user_id: userId,
-        plan,
-        billing_cycle: cycle,
-        status: "active",
-        renews_at: new Date(Date.now() + (cycle === "annual" ? 365 : 30) * 86400000).toISOString(),
-      });
-    }
   }
 
   function recordAiDraftUsage() {
@@ -106,25 +100,16 @@ export function usePlan() {
     commit({ usage: { day: usage.day, aiDraftsToday: usage.aiDraftsToday + 1 } });
   }
 
-  async function updateBillingCycle(cycle: BillingCycle) {
+  function updateBillingCycle(cycle: BillingCycle) {
+    // Billing cycle takes effect on the next checkout/renewal, which the
+    // server computes; this only updates local UI preference.
     commit({ cycle });
-    const userId = signedInProfileId();
-    if (userId) {
-      await (supabase as any)
-        .from("subscriptions")
-        .upsert({ user_id: userId, plan: currentPlan, billing_cycle: cycle, status: "active" });
-    }
   }
 
   async function cancelSubscription() {
+    const { cancelMySubscription } = await import("@/lib/plans");
+    await cancelMySubscription();
     setCurrentUser({ ...currentUser, plan: "free" });
-    const userId = signedInProfileId();
-    if (userId) {
-      await supabase.from("profiles").update({ plan: "free" }).eq("id", userId);
-      await (supabase as any)
-        .from("subscriptions")
-        .upsert({ user_id: userId, plan: "free", billing_cycle: state.cycle, status: "canceled" });
-    }
   }
 
   return {
@@ -139,7 +124,7 @@ export function usePlan() {
     paymentMethod: state.paymentMethod ?? null,
     isPlus: currentPlan === "plus" || currentPlan === "pro",
     isPro: currentPlan === "pro",
-    upgradePlan,
+    upgradePlan: syncPlanFromServer,
     recordAiDraftUsage,
     openUpgradeModal,
   };

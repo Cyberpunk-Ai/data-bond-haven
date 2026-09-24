@@ -27,6 +27,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
+import { editPost } from "@/lib/post-edit.functions";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
 import { TimeAgo } from "@/components/social/TimeAgo";
@@ -281,6 +282,12 @@ function PostCardBase({
     };
   }, [post.id]);
 
+  useEffect(() => {
+    setLiveContent(post.content);
+    setEditDraft(post.content);
+    setEditedAt(post.edited_at);
+  }, [post.id, post.content, post.edited_at]);
+
   // Listen to realtime updates for this specific post
   useRealtime(
     (event) => {
@@ -318,6 +325,9 @@ function PostCardBase({
             totalVotes: typeof event.totalVotes === "number" ? event.totalVotes : prev.totalVotes,
           };
         });
+      } else if (event.type === "post_updated" && event.postId === post.id) {
+        if (typeof event.content === "string") setLiveContent(event.content);
+        if (event.editedAt) setEditedAt(event.editedAt);
       } else if (event.event === "new_comment" && event.data?.post_id === post.id) {
         setCommentsList((prev) => {
           if (prev.some((c) => c.id === event.data.id)) return prev;
@@ -325,7 +335,7 @@ function PostCardBase({
         });
       }
     },
-    ["post_like_updated", "post_repost_updated", "post_view_updated", "poll_updated"],
+    ["post_like_updated", "post_repost_updated", "post_view_updated", "poll_updated", "post_updated"],
   );
 
   // Comments state
@@ -341,6 +351,11 @@ function PostCardBase({
   const [isTipModalOpen, setIsTipModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState(post.content);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [liveContent, setLiveContent] = useState(post.content);
+  const [editedAt, setEditedAt] = useState<string | null | undefined>(post.edited_at);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Autoplay/Pause video when scrolling in/out of viewport
@@ -503,6 +518,40 @@ function PostCardBase({
 
   const isMine = post.user_id === currentUser.id;
 
+  async function handleSaveEdit() {
+    const trimmed = editDraft.trim();
+    if (!trimmed) {
+      toast.error("Post can't be empty");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res: any = await editPost({ data: { postId: post.id, content: trimmed } });
+      const updated = res?.post;
+      setLiveContent(updated?.content ?? trimmed);
+      setEditedAt(updated?.edited_at ?? new Date().toISOString());
+      setIsEditing(false);
+      toast.success("Post updated");
+      emitRealtimeUpdate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update post");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  function emitRealtimeUpdate() {
+    try {
+      window.dispatchEvent(
+        new CustomEvent("rt:post_updated", {
+          detail: { type: "post_updated", postId: post.id, content: editDraft.trim(), editedAt: new Date().toISOString() },
+        }),
+      );
+    } catch {
+      /* non-browser */
+    }
+  }
+
   async function handleSendFeedback(
     action: "interested" | "not_interested" | "mute_author",
     tag?: string,
@@ -561,37 +610,72 @@ function PostCardBase({
             </Link>
             <span className="text-muted-foreground">·</span>
             <TimeAgo iso={post.created_at} className="shrink-0 text-sm text-muted-foreground" />
+            {editedAt && (
+              <span className="text-xs text-muted-foreground italic">· Edited</span>
+            )}
           </div>
           {/* Content with Expand/Collapse & Link Parsers */}
-          {(() => {
-            const isLongContent = post.content.length > 240 || post.content.split("\n").length > 3;
-            if (!isLongContent) {
-              return (
-                <p className="mt-2 max-h-[380px] overflow-y-auto custom-scrollbar pr-1 whitespace-pre-wrap text-[0.975rem] leading-relaxed [overflow-wrap:anywhere]">
-                  {renderContentWithLinks(post.content)}
-                </p>
-              );
-            }
-            return (
-              <div className="mt-2 text-[0.975rem] leading-relaxed [overflow-wrap:anywhere]">
-                <p
-                  className={cn(
-                    "whitespace-pre-wrap transition-all duration-300 pr-1",
-                    !isExpanded && "line-clamp-3 overflow-hidden",
-                  )}
-                >
-                  {renderContentWithLinks(post.content)}
-                </p>
+          {isEditing ? (
+            <div className="mt-2 space-y-2">
+              <textarea
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                rows={4}
+                autoFocus
+                className="w-full rounded-2xl border border-border bg-background/60 p-3 text-[0.95rem] leading-relaxed outline-none focus:ring-2 focus:ring-brand/30 resize-y"
+              />
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsExpanded(!isExpanded)}
-                  className="mt-1 text-xs font-bold text-brand hover:text-brand-pink transition-colors focus:outline-none"
+                  disabled={savingEdit}
+                  onClick={handleSaveEdit}
+                  className="rounded-full bg-gradient-to-r from-brand to-brand-pink px-4 py-1.5 text-xs font-bold text-white shadow-soft disabled:opacity-60 cursor-pointer"
                 >
-                  {isExpanded ? "Show less" : "... Read more"}
+                  {savingEdit ? "Saving..." : "Save"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditing(false);
+                    setEditDraft(liveContent);
+                  }}
+                  className="rounded-full px-4 py-1.5 text-xs font-bold text-muted-foreground hover:bg-foreground/5 cursor-pointer"
+                >
+                  Cancel
                 </button>
               </div>
-            );
-          })()}
+            </div>
+          ) : (
+            (() => {
+              const isLongContent = liveContent.length > 240 || liveContent.split("\n").length > 3;
+              if (!isLongContent) {
+                return (
+                  <p className="mt-2 max-h-[380px] overflow-y-auto custom-scrollbar pr-1 whitespace-pre-wrap text-[0.975rem] leading-relaxed [overflow-wrap:anywhere]">
+                    {renderContentWithLinks(liveContent)}
+                  </p>
+                );
+              }
+              return (
+                <div className="mt-2 text-[0.975rem] leading-relaxed [overflow-wrap:anywhere]">
+                  <p
+                    className={cn(
+                      "whitespace-pre-wrap transition-all duration-300 pr-1",
+                      !isExpanded && "line-clamp-3 overflow-hidden",
+                    )}
+                  >
+                    {renderContentWithLinks(liveContent)}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    className="mt-1 text-xs font-bold text-brand hover:text-brand-pink transition-colors focus:outline-none"
+                  >
+                    {isExpanded ? "Show less" : "... Read more"}
+                  </button>
+                </div>
+              );
+            })()
+          )}
         </div>
 
         {/* More Menu */}
@@ -658,12 +742,24 @@ function PostCardBase({
 
               <div className="pt-1">
                 {isMine ? (
-                  <button
-                    onClick={handleDelete}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 transition-colors"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" /> Delete post
-                  </button>
+                  <>
+                    <button
+                      onClick={() => {
+                        setShowMenu(false);
+                        setEditDraft(liveContent);
+                        setIsEditing(true);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold hover:bg-foreground/5 transition-colors"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" /> Edit post
+                    </button>
+                    <button
+                      onClick={handleDelete}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 transition-colors"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Delete post
+                    </button>
+                  </>
                 ) : (
                   <button
                     onClick={() => {

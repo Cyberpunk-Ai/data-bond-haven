@@ -59,6 +59,7 @@ export const appConfig = {
     maxMeshSpeakers: num("VITE_SPACES_MESH_MAX", 8),
     sfuProvider: str("VITE_SPACES_SFU_PROVIDER", ""),
     sfuUrl: str("VITE_SPACES_SFU_URL", ""),
+    recordingMaxMb: num("VITE_SPACES_RECORDING_MAX_MB", 100),
   },
   features: {
     stories: bool("VITE_FEATURE_STORIES", true),

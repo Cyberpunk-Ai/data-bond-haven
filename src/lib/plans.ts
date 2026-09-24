@@ -139,7 +139,7 @@ export const PLAN_DETAILS: Record<PlanTier, PlanDetails> = {
       "Team workspaces & multi-member collaboration",
       "Priority 24/7 support & fast ticket response",
       "Full API access & developer webhooks",
-      "Unlimited Gemini AI drafts, threads & story synthesis",
+      "Unlimited AI Sparks drafts, threads & story synthesis",
       "Host Spaces for 1,000+ live listeners & co-hosts",
       "1GB RAW media uploads & 320kbps spatial audio recording",
     ],
@@ -176,7 +176,7 @@ export const COMPARISON_PERKS: ComparisonPerk[] = [
     pro: "Unlimited",
   },
   {
-    name: "Gemini AI Drafts",
+    name: "AI Sparks Drafts",
     description: "AI-assisted content generation, viral hooks, and rewrites",
     category: "Core Features",
     free: "5 / day",
@@ -315,3 +315,31 @@ export interface InvoiceItem {
 }
 
 export const SAMPLE_INVOICES: InvoiceItem[] = [];
+
+// --- server functions (plan lifecycle) ---
+import { createServerFn } from "@tanstack/react-start";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+
+/** Downgrades the caller to the free plan. Safe to call repeatedly. */
+export const cancelMySubscription = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { supabase, userId } = context as any;
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("auth_user_id", userId)
+      .maybeSingle();
+    if (!profile?.id) throw new Error("Sign in to manage your subscription.");
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const admin = supabaseAdmin as any;
+    await admin.from("profiles").update({ plan: "free" }).eq("id", profile.id);
+    await admin
+      .from("subscriptions")
+      .upsert(
+        { user_id: profile.id, plan: "free", billing_cycle: "monthly", status: "canceled" },
+        { onConflict: "user_id" },
+      );
+    return { plan: "free" as PlanTier };
+  });

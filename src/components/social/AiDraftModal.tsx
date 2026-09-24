@@ -126,7 +126,7 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
             </span>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-lg font-bold">Spaces Gemini Spark</h2>
+                <h2 className="text-lg font-bold">Spaces AI Sparks</h2>
                 <span
                   className={cn(
                     "text-[0.65rem] font-bold px-1.5 py-0.5 rounded",
@@ -162,7 +162,7 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
           </div>
           {currentPlan !== "pro" && (
             <button
-              onClick={() => openUpgradeModal("Unlimited Gemini AI Drafting")}
+              onClick={() => openUpgradeModal("Unlimited AI Sparks Drafting")}
               className="font-bold text-brand hover:underline flex items-center gap-1 text-[0.72rem]"
             >
               {currentPlan === "free" ? "Upgrade for 100/day" : "Get Unlimited Pro"}
@@ -274,7 +274,7 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
           <div className="mt-5 space-y-3 rounded-2xl border border-brand/20 bg-brand/5 p-4 animate-in fade-in duration-300">
             <div className="flex items-center justify-between text-xs text-brand font-bold">
               <span className="flex items-center gap-1">
-                <Sparkles className="h-3 w-3" /> Generated with Gemini
+                <Sparkles className="h-3 w-3" /> Generated with AI Sparks
               </span>
               <button
                 onClick={handleCopy}
