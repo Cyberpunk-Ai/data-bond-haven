@@ -1126,6 +1126,9 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                 onClick={async () => {
                   setShowEndConfirmation(false);
                   try {
+                    if (isRecordingSpace) {
+                      await handleToggleRecording();
+                    }
                     await endSpace(space.id);
                     toast.success("Space ended for everyone");
                   } catch {

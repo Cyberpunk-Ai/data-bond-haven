@@ -201,7 +201,7 @@ function SpaceCard({
             {space.live
               ? `${compact(space.listeners || 1)} listening`
               : isRecorded
-                ? `${compact(space.listeners || 42)} replays`
+                ? `${compact(space.replay_count ?? 0)} replays`
                 : "Reminder available"}
           </p>
           <button
