@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789486426347,
+      "tag": "0000_starpace_core_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789486472548,
+      "tag": "0001_starpace_grants_and_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789486633503,
+      "tag": "0002_media_bucket_policies",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789933856803,
+      "tag": "0003_probe_test",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789954579492,
+      "tag": "0004_counters_notifications_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790127437945,
+      "tag": "0005_story_graph_and_fees",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790213837945,
+      "tag": "0006_security_hardening",
+      "breakpoints": true
+    }
+  ]
+}

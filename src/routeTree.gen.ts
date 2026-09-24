@@ -10,33 +10,351 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AboutRouteImport } from './routes/about'
+import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AuthRouteImport } from './routes/auth'
+import { Route as BookmarksRouteImport } from './routes/bookmarks'
+import { Route as ContactRouteImport } from './routes/contact'
+import { Route as ExploreRouteImport } from './routes/explore'
+import { Route as FeedRouteImport } from './routes/feed'
+import { Route as GuidelinesRouteImport } from './routes/guidelines'
+import { Route as MessagesRouteImport } from './routes/messages'
+import { Route as NotificationsRouteImport } from './routes/notifications'
+import { Route as PricingRouteImport } from './routes/pricing'
+import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as ProfileRouteImport } from './routes/profile'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SpacesRouteImport } from './routes/spaces'
+import { Route as TermsRouteImport } from './routes/terms'
+import { Route as BillingCallbackRouteImport } from './routes/billing.callback'
+import { Route as PostIdRouteImport } from './routes/post.$id'
+import { Route as UUsernameRouteImport } from './routes/u.$username'
+import { Route as ApiPublicMediaSplatRouteImport } from './routes/api/public/media/$'
+import { Route as ApiPublicPaystackWebhookRouteImport } from './routes/api/public/paystack/webhook'
+import { Route as ApiPublicV1MeRouteImport } from './routes/api/public/v1/me'
+import { Route as ApiPublicV1PostsRouteImport } from './routes/api/public/v1/posts'
+import { Route as ApiPublicWebhooksDispatchRouteImport } from './routes/api/public/webhooks/dispatch'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AboutRoute = AboutRouteImport.update({
+  id: '/about',
+  path: '/about',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthRoute = AuthRouteImport.update({
+  id: '/auth',
+  path: '/auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BookmarksRoute = BookmarksRouteImport.update({
+  id: '/bookmarks',
+  path: '/bookmarks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContactRoute = ContactRouteImport.update({
+  id: '/contact',
+  path: '/contact',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExploreRoute = ExploreRouteImport.update({
+  id: '/explore',
+  path: '/explore',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FeedRoute = FeedRouteImport.update({
+  id: '/feed',
+  path: '/feed',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GuidelinesRoute = GuidelinesRouteImport.update({
+  id: '/guidelines',
+  path: '/guidelines',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MessagesRoute = MessagesRouteImport.update({
+  id: '/messages',
+  path: '/messages',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PricingRoute = PricingRouteImport.update({
+  id: '/pricing',
+  path: '/pricing',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileRoute = ProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SpacesRoute = SpacesRouteImport.update({
+  id: '/spaces',
+  path: '/spaces',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BillingCallbackRoute = BillingCallbackRouteImport.update({
+  id: '/billing/callback',
+  path: '/billing/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PostIdRoute = PostIdRouteImport.update({
+  id: '/post/$id',
+  path: '/post/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UUsernameRoute = UUsernameRouteImport.update({
+  id: '/u/$username',
+  path: '/u/$username',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicMediaSplatRoute = ApiPublicMediaSplatRouteImport.update({
+  id: '/api/public/media/$',
+  path: '/api/public/media/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicPaystackWebhookRoute =
+  ApiPublicPaystackWebhookRouteImport.update({
+    id: '/api/public/paystack/webhook',
+    path: '/api/public/paystack/webhook',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPublicV1MeRoute = ApiPublicV1MeRouteImport.update({
+  id: '/api/public/v1/me',
+  path: '/api/public/v1/me',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicV1PostsRoute = ApiPublicV1PostsRouteImport.update({
+  id: '/api/public/v1/posts',
+  path: '/api/public/v1/posts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicWebhooksDispatchRoute =
+  ApiPublicWebhooksDispatchRouteImport.update({
+    id: '/api/public/webhooks/dispatch',
+    path: '/api/public/webhooks/dispatch',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
+  '/admin': typeof AdminRoute
+  '/auth': typeof AuthRoute
+  '/bookmarks': typeof BookmarksRoute
+  '/contact': typeof ContactRoute
+  '/explore': typeof ExploreRoute
+  '/feed': typeof FeedRoute
+  '/guidelines': typeof GuidelinesRoute
+  '/messages': typeof MessagesRoute
+  '/notifications': typeof NotificationsRoute
+  '/pricing': typeof PricingRoute
+  '/privacy': typeof PrivacyRoute
+  '/profile': typeof ProfileRoute
+  '/settings': typeof SettingsRoute
+  '/spaces': typeof SpacesRoute
+  '/terms': typeof TermsRoute
+  '/billing/callback': typeof BillingCallbackRoute
+  '/post/$id': typeof PostIdRoute
+  '/u/$username': typeof UUsernameRoute
+  '/api/public/media/$': typeof ApiPublicMediaSplatRoute
+  '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
+  '/api/public/v1/me': typeof ApiPublicV1MeRoute
+  '/api/public/v1/posts': typeof ApiPublicV1PostsRoute
+  '/api/public/webhooks/dispatch': typeof ApiPublicWebhooksDispatchRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
+  '/admin': typeof AdminRoute
+  '/auth': typeof AuthRoute
+  '/bookmarks': typeof BookmarksRoute
+  '/contact': typeof ContactRoute
+  '/explore': typeof ExploreRoute
+  '/feed': typeof FeedRoute
+  '/guidelines': typeof GuidelinesRoute
+  '/messages': typeof MessagesRoute
+  '/notifications': typeof NotificationsRoute
+  '/pricing': typeof PricingRoute
+  '/privacy': typeof PrivacyRoute
+  '/profile': typeof ProfileRoute
+  '/settings': typeof SettingsRoute
+  '/spaces': typeof SpacesRoute
+  '/terms': typeof TermsRoute
+  '/billing/callback': typeof BillingCallbackRoute
+  '/post/$id': typeof PostIdRoute
+  '/u/$username': typeof UUsernameRoute
+  '/api/public/media/$': typeof ApiPublicMediaSplatRoute
+  '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
+  '/api/public/v1/me': typeof ApiPublicV1MeRoute
+  '/api/public/v1/posts': typeof ApiPublicV1PostsRoute
+  '/api/public/webhooks/dispatch': typeof ApiPublicWebhooksDispatchRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
+  '/admin': typeof AdminRoute
+  '/auth': typeof AuthRoute
+  '/bookmarks': typeof BookmarksRoute
+  '/contact': typeof ContactRoute
+  '/explore': typeof ExploreRoute
+  '/feed': typeof FeedRoute
+  '/guidelines': typeof GuidelinesRoute
+  '/messages': typeof MessagesRoute
+  '/notifications': typeof NotificationsRoute
+  '/pricing': typeof PricingRoute
+  '/privacy': typeof PrivacyRoute
+  '/profile': typeof ProfileRoute
+  '/settings': typeof SettingsRoute
+  '/spaces': typeof SpacesRoute
+  '/terms': typeof TermsRoute
+  '/billing/callback': typeof BillingCallbackRoute
+  '/post/$id': typeof PostIdRoute
+  '/u/$username': typeof UUsernameRoute
+  '/api/public/media/$': typeof ApiPublicMediaSplatRoute
+  '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
+  '/api/public/v1/me': typeof ApiPublicV1MeRoute
+  '/api/public/v1/posts': typeof ApiPublicV1PostsRoute
+  '/api/public/webhooks/dispatch': typeof ApiPublicWebhooksDispatchRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/about'
+    | '/admin'
+    | '/auth'
+    | '/bookmarks'
+    | '/contact'
+    | '/explore'
+    | '/feed'
+    | '/guidelines'
+    | '/messages'
+    | '/notifications'
+    | '/pricing'
+    | '/privacy'
+    | '/profile'
+    | '/settings'
+    | '/spaces'
+    | '/terms'
+    | '/billing/callback'
+    | '/post/$id'
+    | '/u/$username'
+    | '/api/public/media/$'
+    | '/api/public/paystack/webhook'
+    | '/api/public/v1/me'
+    | '/api/public/v1/posts'
+    | '/api/public/webhooks/dispatch'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/about'
+    | '/admin'
+    | '/auth'
+    | '/bookmarks'
+    | '/contact'
+    | '/explore'
+    | '/feed'
+    | '/guidelines'
+    | '/messages'
+    | '/notifications'
+    | '/pricing'
+    | '/privacy'
+    | '/profile'
+    | '/settings'
+    | '/spaces'
+    | '/terms'
+    | '/billing/callback'
+    | '/post/$id'
+    | '/u/$username'
+    | '/api/public/media/$'
+    | '/api/public/paystack/webhook'
+    | '/api/public/v1/me'
+    | '/api/public/v1/posts'
+    | '/api/public/webhooks/dispatch'
+  id:
+    | '__root__'
+    | '/'
+    | '/about'
+    | '/admin'
+    | '/auth'
+    | '/bookmarks'
+    | '/contact'
+    | '/explore'
+    | '/feed'
+    | '/guidelines'
+    | '/messages'
+    | '/notifications'
+    | '/pricing'
+    | '/privacy'
+    | '/profile'
+    | '/settings'
+    | '/spaces'
+    | '/terms'
+    | '/billing/callback'
+    | '/post/$id'
+    | '/u/$username'
+    | '/api/public/media/$'
+    | '/api/public/paystack/webhook'
+    | '/api/public/v1/me'
+    | '/api/public/v1/posts'
+    | '/api/public/webhooks/dispatch'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AboutRoute: typeof AboutRoute
+  AdminRoute: typeof AdminRoute
+  AuthRoute: typeof AuthRoute
+  BookmarksRoute: typeof BookmarksRoute
+  ContactRoute: typeof ContactRoute
+  ExploreRoute: typeof ExploreRoute
+  FeedRoute: typeof FeedRoute
+  GuidelinesRoute: typeof GuidelinesRoute
+  MessagesRoute: typeof MessagesRoute
+  NotificationsRoute: typeof NotificationsRoute
+  PricingRoute: typeof PricingRoute
+  PrivacyRoute: typeof PrivacyRoute
+  ProfileRoute: typeof ProfileRoute
+  SettingsRoute: typeof SettingsRoute
+  SpacesRoute: typeof SpacesRoute
+  TermsRoute: typeof TermsRoute
+  BillingCallbackRoute: typeof BillingCallbackRoute
+  PostIdRoute: typeof PostIdRoute
+  UUsernameRoute: typeof UUsernameRoute
+  ApiPublicMediaSplatRoute: typeof ApiPublicMediaSplatRoute
+  ApiPublicPaystackWebhookRoute: typeof ApiPublicPaystackWebhookRoute
+  ApiPublicV1MeRoute: typeof ApiPublicV1MeRoute
+  ApiPublicV1PostsRoute: typeof ApiPublicV1PostsRoute
+  ApiPublicWebhooksDispatchRoute: typeof ApiPublicWebhooksDispatchRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +366,203 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/about': {
+      id: '/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof AboutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bookmarks': {
+      id: '/bookmarks'
+      path: '/bookmarks'
+      fullPath: '/bookmarks'
+      preLoaderRoute: typeof BookmarksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/contact': {
+      id: '/contact'
+      path: '/contact'
+      fullPath: '/contact'
+      preLoaderRoute: typeof ContactRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/explore': {
+      id: '/explore'
+      path: '/explore'
+      fullPath: '/explore'
+      preLoaderRoute: typeof ExploreRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/feed': {
+      id: '/feed'
+      path: '/feed'
+      fullPath: '/feed'
+      preLoaderRoute: typeof FeedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/guidelines': {
+      id: '/guidelines'
+      path: '/guidelines'
+      fullPath: '/guidelines'
+      preLoaderRoute: typeof GuidelinesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/messages': {
+      id: '/messages'
+      path: '/messages'
+      fullPath: '/messages'
+      preLoaderRoute: typeof MessagesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notifications': {
+      id: '/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof NotificationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pricing': {
+      id: '/pricing'
+      path: '/pricing'
+      fullPath: '/pricing'
+      preLoaderRoute: typeof PricingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile': {
+      id: '/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof ProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/spaces': {
+      id: '/spaces'
+      path: '/spaces'
+      fullPath: '/spaces'
+      preLoaderRoute: typeof SpacesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/billing/callback': {
+      id: '/billing/callback'
+      path: '/billing/callback'
+      fullPath: '/billing/callback'
+      preLoaderRoute: typeof BillingCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/post/$id': {
+      id: '/post/$id'
+      path: '/post/$id'
+      fullPath: '/post/$id'
+      preLoaderRoute: typeof PostIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/u/$username': {
+      id: '/u/$username'
+      path: '/u/$username'
+      fullPath: '/u/$username'
+      preLoaderRoute: typeof UUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/media/$': {
+      id: '/api/public/media/$'
+      path: '/api/public/media/$'
+      fullPath: '/api/public/media/$'
+      preLoaderRoute: typeof ApiPublicMediaSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/paystack/webhook': {
+      id: '/api/public/paystack/webhook'
+      path: '/api/public/paystack/webhook'
+      fullPath: '/api/public/paystack/webhook'
+      preLoaderRoute: typeof ApiPublicPaystackWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/v1/me': {
+      id: '/api/public/v1/me'
+      path: '/api/public/v1/me'
+      fullPath: '/api/public/v1/me'
+      preLoaderRoute: typeof ApiPublicV1MeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/v1/posts': {
+      id: '/api/public/v1/posts'
+      path: '/api/public/v1/posts'
+      fullPath: '/api/public/v1/posts'
+      preLoaderRoute: typeof ApiPublicV1PostsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/webhooks/dispatch': {
+      id: '/api/public/webhooks/dispatch'
+      path: '/api/public/webhooks/dispatch'
+      fullPath: '/api/public/webhooks/dispatch'
+      preLoaderRoute: typeof ApiPublicWebhooksDispatchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AboutRoute: AboutRoute,
+  AdminRoute: AdminRoute,
+  AuthRoute: AuthRoute,
+  BookmarksRoute: BookmarksRoute,
+  ContactRoute: ContactRoute,
+  ExploreRoute: ExploreRoute,
+  FeedRoute: FeedRoute,
+  GuidelinesRoute: GuidelinesRoute,
+  MessagesRoute: MessagesRoute,
+  NotificationsRoute: NotificationsRoute,
+  PricingRoute: PricingRoute,
+  PrivacyRoute: PrivacyRoute,
+  ProfileRoute: ProfileRoute,
+  SettingsRoute: SettingsRoute,
+  SpacesRoute: SpacesRoute,
+  TermsRoute: TermsRoute,
+  BillingCallbackRoute: BillingCallbackRoute,
+  PostIdRoute: PostIdRoute,
+  UUsernameRoute: UUsernameRoute,
+  ApiPublicMediaSplatRoute: ApiPublicMediaSplatRoute,
+  ApiPublicPaystackWebhookRoute: ApiPublicPaystackWebhookRoute,
+  ApiPublicV1MeRoute: ApiPublicV1MeRoute,
+  ApiPublicV1PostsRoute: ApiPublicV1PostsRoute,
+  ApiPublicWebhooksDispatchRoute: ApiPublicWebhooksDispatchRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
