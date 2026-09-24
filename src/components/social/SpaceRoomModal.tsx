@@ -22,6 +22,9 @@ import {
   Disc3,
   Pin,
   AlertTriangle,
+  ShieldOff,
+  LogOut,
+  Circle,
 } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { TipModal } from "@/components/social/TipModal";
@@ -42,6 +45,8 @@ import {
   reportSpaceRecordingBytes,
   finalizeSpaceRecording,
   recordSpaceReplayView,
+  setSpaceParticipantMute,
+  removeSpaceParticipant,
   uploadMedia,
 } from "@/lib/api-client";
 import { appConfig } from "@/lib/config";
@@ -78,7 +83,7 @@ export function SpaceRoomModal({ space, isOpen, onClose }: SpaceRoomModalProps) 
 }
 
 function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () => void }) {
-  const [activeTab, setActiveTab] = useState<"stage" | "chat" | "requests">("stage");
+  const [activeTab, setActiveTab] = useState<"stage" | "chat" | "manage">("stage");
   const [chatDraft, setChatDraft] = useState("");
   const [isMuted, setIsMuted] = useState(true);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -143,6 +148,9 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       try {
         await joinSpace(space.id);
         loaded = await getSpaceRoom(space.id);
+        if (!space.live && (space.recorded || space.recording_url)) {
+          await recordSpaceReplayView(space.id).catch(() => {});
+        }
       } catch {
         /* offline: fall back to just me */
       }
@@ -295,6 +303,16 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
         if (data && data.userId) {
           setParticipants((prev) => prev.filter((p) => p.id !== data.userId));
         }
+      } else if (event.type === "space:removed") {
+        const data = event.data || event;
+        if (data && data.spaceId === space.id) {
+          if (data.userId === currentUser.id) {
+            toast.error("The host removed you from this Space");
+            onClose();
+            return;
+          }
+          setParticipants((prev) => prev.filter((p) => p.id !== data.userId));
+        }
       }
     },
     [
@@ -306,6 +324,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       "space:left",
       "space:tip",
       "space:recording",
+      "space:removed",
     ],
   );
 
@@ -404,6 +423,68 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     }
   }
 
+  async function toggleAttendeeMute(userId: string, currentlyMuted: boolean) {
+    const nextMuted = !currentlyMuted;
+    setParticipants((prev) =>
+      prev.map((p) => (p.id === userId ? { ...p, isMuted: nextMuted, isSpeaking: nextMuted ? false : p.isSpeaking } : p)),
+    );
+    try {
+      await setSpaceParticipantMute(space.id, userId, nextMuted);
+    } catch {
+      toast.error("Couldn't update their mic — try again.");
+    }
+  }
+
+  async function removeAttendee(userId: string) {
+    const target = getProfile(userId);
+    setParticipants((prev) => prev.filter((p) => p.id !== userId));
+    try {
+      await removeSpaceParticipant(space.id, userId);
+      toast.info(`Removed ${target.display_name} from the Space`);
+    } catch {
+      toast.error("Couldn't remove that person — try again.");
+    }
+  }
+
+  async function handleToggleRecording() {
+    if (recordingBusy) return;
+    setRecordingBusy(true);
+    try {
+      if (!isRecordingSpace) {
+        const maxBytes = appConfig.realtime.recordingMaxMb * 1024 * 1024;
+        const started = audio.startRecording(maxBytes, () => {
+          toast.warning("Recording reached the size limit and was stopped automatically.");
+        });
+        if (!started) {
+          toast.error("Couldn't start recording in this browser.");
+          return;
+        }
+        await setSpaceRecording(space.id, true);
+        setIsRecordingSpace(true);
+        toast.success("Recording started — everyone in the room can see it's live.");
+      } else {
+        const blob = await audio.stopRecording();
+        setIsRecordingSpace(false);
+        if (blob.size > 0) {
+          const file = new File([blob], `space-${space.id}-${Date.now()}.webm`, {
+            type: blob.type || "audio/webm",
+          });
+          await reportSpaceRecordingBytes(space.id, blob.size).catch(() => {});
+          const uploaded = await uploadMedia(file, "space-recordings");
+          await finalizeSpaceRecording(space.id, uploaded.url);
+          toast.success("Recording saved! It will be available as a replay once the Space ends.");
+        } else {
+          await setSpaceRecording(space.id, false);
+          toast.info("Recording stopped");
+        }
+      }
+    } catch (err: any) {
+      toast.error(String(err?.message ?? "Couldn't update the recording — try again."));
+    } finally {
+      setRecordingBusy(false);
+    }
+  }
+
   async function handleSummarize() {
     setSummarizing(true);
     try {
@@ -457,6 +538,12 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
               <span className="truncate rounded-full bg-brand/10 px-2.5 sm:px-3 py-1 text-[11px] sm:text-xs font-bold text-brand">
                 {space.topic}
               </span>
+              {isRecordingSpace && (
+                <span className="flex items-center gap-1.5 rounded-full bg-red-600/15 px-2.5 sm:px-3 py-1 text-[11px] sm:text-xs font-bold text-red-600 shrink-0 animate-pulse">
+                  <Circle className="h-2 w-2 fill-current" />
+                  Recording
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-1 sm:gap-2 shrink-0">

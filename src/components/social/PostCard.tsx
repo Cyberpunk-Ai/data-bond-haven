@@ -27,6 +27,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
+import { editPost } from "@/lib/post-edit.functions";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
 import { TimeAgo } from "@/components/social/TimeAgo";
@@ -281,6 +282,12 @@ function PostCardBase({
     };
   }, [post.id]);
 
+  useEffect(() => {
+    setLiveContent(post.content);
+    setEditDraft(post.content);
+    setEditedAt(post.edited_at);
+  }, [post.id, post.content, post.edited_at]);
+
   // Listen to realtime updates for this specific post
   useRealtime(
     (event) => {
@@ -318,6 +325,9 @@ function PostCardBase({
             totalVotes: typeof event.totalVotes === "number" ? event.totalVotes : prev.totalVotes,
           };
         });
+      } else if (event.type === "post_updated" && event.postId === post.id) {
+        if (typeof event.content === "string") setLiveContent(event.content);
+        if (event.editedAt) setEditedAt(event.editedAt);
       } else if (event.event === "new_comment" && event.data?.post_id === post.id) {
         setCommentsList((prev) => {
           if (prev.some((c) => c.id === event.data.id)) return prev;
@@ -325,7 +335,7 @@ function PostCardBase({
         });
       }
     },
-    ["post_like_updated", "post_repost_updated", "post_view_updated", "poll_updated"],
+    ["post_like_updated", "post_repost_updated", "post_view_updated", "poll_updated", "post_updated"],
   );
 
   // Comments state
@@ -341,6 +351,11 @@ function PostCardBase({
   const [isTipModalOpen, setIsTipModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState(post.content);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [liveContent, setLiveContent] = useState(post.content);
+  const [editedAt, setEditedAt] = useState<string | null | undefined>(post.edited_at);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Autoplay/Pause video when scrolling in/out of viewport
@@ -502,6 +517,40 @@ function PostCardBase({
   }
 
   const isMine = post.user_id === currentUser.id;
+
+  async function handleSaveEdit() {
+    const trimmed = editDraft.trim();
+    if (!trimmed) {
+      toast.error("Post can't be empty");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res: any = await editPost({ data: { postId: post.id, content: trimmed } });
+      const updated = res?.post;
+      setLiveContent(updated?.content ?? trimmed);
+      setEditedAt(updated?.edited_at ?? new Date().toISOString());
+      setIsEditing(false);
+      toast.success("Post updated");
+      emitRealtimeUpdate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update post");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  function emitRealtimeUpdate() {
+    try {
+      window.dispatchEvent(
+        new CustomEvent("rt:post_updated", {
+          detail: { type: "post_updated", postId: post.id, content: editDraft.trim(), editedAt: new Date().toISOString() },
+        }),
+      );
+    } catch {
+      /* non-browser */
+    }
+  }
 
   async function handleSendFeedback(
     action: "interested" | "not_interested" | "mute_author",
