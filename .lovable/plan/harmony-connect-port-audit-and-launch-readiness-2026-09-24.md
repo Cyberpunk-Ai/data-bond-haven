@@ -7,32 +7,28 @@ anything else is possible.
 ## Phase 0 — Get the code and the backend in place (blocking)
 
 1. Bring in the existing project from GitHub (`harmony-connect-core`) and adapt it
-   to run here. The current project is an empty starter, so this is a full port:
+  to run here. The current project is an empty starter, so this is a full port:
    pages, components, data access and styling all move across and are re-wired to
    this project's routing setup.
 2. Connect your existing backend. The keys you pasted let the app talk to your
-   Supabase project, but linking it as the project's backend has to be done by you
-   in Project Settings → Connectors → Supabase. Until that is done I cannot read
-   your tables, access rules or stored files, which most of the audit depends on.
+  Supabase project, connect tp remote backend with the provided secrets and database connection string
 3. Store the secret key, database connection string and (later) the R2 credentials
-   in the secure secret store rather than in the code.
+  in the secure secret store rather than in the code.
 
-Note: the secret key and database password were pasted in plain chat. They should
-be regenerated before launch.
-
-## Phase 0b — Clean up and push migrations to your existing backend
+  
+Phase 0b — Clean up and push migrations to your existing backend
 
 1. Inventory every migration file from the repo, and compare it against what is
-   actually in your live database (tables, columns, functions, access rules,
+  actually in your live database (tables, columns, functions, access rules,
    storage rules).
 2. Clean up: remove duplicates and dead/contradicting migrations, fix ordering,
-   and consolidate into a clear, re-runnable baseline plus small follow-up files.
+  and consolidate into a clear, re-runnable baseline plus small follow-up files.
    Nothing that holds live data is dropped without showing you first.
 3. Take a schema backup of the live database before any change.
 4. Push the cleaned migrations directly to your backend using the connection
-   string you supplied, so we can build against the real database immediately.
+  string you supplied, so we can build against the real database immediately.
 5. Verify afterwards: every table has access rules enabled and correct grants,
-   no helper functions are exposed unsafely, and the app can read/write as expected.
+  no helper functions are exposed unsafely, and the app can read/write as expected.
 6. Run a security check on the result and fix what it finds before moving on.
 
 ## Phase 1 — Data, access rules and security baseline
@@ -64,10 +60,10 @@ be regenerated before launch.
 
 - Messages persist, arrive live, and repeated identical messages are supported.
 - Sent / delivered / seen indicators, presence, and sidebar preview with latest
-  text or action icon.
+text or action icon.
 - Voice notes, images and media persist.
 - Voice and video calling end to end, with live incoming-call alerts, camera,
-  screen sharing and smooth transitions between them.
+screen sharing and smooth transitions between them.
 
 ## Phase 5 — Spaces
 
@@ -83,8 +79,8 @@ be regenerated before launch.
 ## Phase 7 — Workspaces, Developer API, Settings
 
 - Pro Team Workspaces: invites, roles, permissions, workspace profiles, and smooth
-  switching between personal and workspace context.
-- Pro features clearly marked.
+switching between personal and workspace context.
+- Pro features clearly marked and a clean interface like that for deveoper api previewing the teamworspace features.
 - Developer API completed and secured.
 - Every Settings option made functional.
 
@@ -92,26 +88,26 @@ be regenerated before launch.
 
 - Rename Gemini to AI Sparks.
 - Landing figures: 4.5K+ creators, 2.5K+ daily active users, 10K shared posts,
-  15K+ daily creator payouts, 5K+ loved by.
-- "Watch Demo" becomes "See How It Works"; "Stories/Reels" becomes "Posts/Stories".
-- Remove all fake and demo data, including fake replay and analytics numbers.
+15K+ daily creator payouts, 5K+ loved by.
+- "Watch Demo" becomes "See How It Works"; "Stories&Reels" becomes "Posts&Stories".
+- Remove all fake and demo data, including fake replay and analytics numbers. also the fake peak time also add responsiveness in the analytics posts so they dont form long lists it should be reponsive
 
 ## Phase 9 — Testing and second audit
 
 - Multi-user testing of each area, plus refresh, logout/login, reconnect,
-  simultaneous actions and failure cases.
+simultaneous actions and failure cases.
 - Performance, mobile and installable-app behaviour.
-- A second full review of security and regressions at the end. Launch-ready is only
-  declared after that passes.
+- A second full review of security and regressions at the end. Launch-ready is only  
+declared after that passes. also error messages should be user friendly not expose things they should be gracefull
 
 ## Technical notes
 
 - Stack here is TanStack Start (React 19, Vite, Tailwind v4). If the source repo is
-  a plain Vite React SPA with React Router, routing and any server-side pieces must
-  be rewritten to file-based routes and server functions; Supabase Edge Functions
-  are replaced with server functions or API routes.
+a plain Vite React SPA with React Router, routing and any server-side pieces must
+be rewritten to file-based routes and server functions; Supabase Edge Functions
+are replaced with server functions or API routes.
 - Live updates use Supabase Realtime; calls use WebRTC with a signalling path over
-  Realtime, and TURN configuration will be needed for reliability.
+Realtime, and TURN configuration will be needed for reliability.
 - Recording size limits, R2 keys, payment keys and AI keys all come from stored
-  secrets, never from code.
+secrets, never from code.
 - Each phase ends with a build and a browser-driven check of the affected flows.
