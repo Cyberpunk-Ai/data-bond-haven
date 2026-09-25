@@ -1,16 +1,65 @@
-import { createHash, createHmac, randomBytes } from "crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { assertSafeUrl, UnsafeUrlError } from "@/lib/ssrf-guard.server";
+
+/**
+ * The pepper turns an API-key hash from a plain unsalted SHA-256 (which is
+ * trivially reversed on a DB dump) into a keyed digest. It is mandatory: we
+ * fail loudly the first time keying is attempted rather than silently hashing
+ * without it. Keys already stored under an empty pepper must be re-issued
+ * after the pepper is set — the Developer Portal makes rotation a one-click
+ * action.
+ */
+function requireApiKeyPepper(): string {
+  const pepper = process.env["API_KEY_PEPPER"] ?? "";
+  if (pepper.length < 32) {
+    throw new Error(
+      "API_KEY_PEPPER is missing or shorter than 32 characters. Generate one with `openssl rand -hex 32` and set it before issuing or verifying API keys.",
+    );
+  }
+  return pepper;
+}
 
 export function hashApiKey(token: string): string {
-  const pepper = process.env["API_KEY_PEPPER"] || "";
-  return createHash("sha256").update(pepper + token).digest("hex");
+  return createHmac("sha256", requireApiKeyPepper()).update(token).digest("hex");
 }
 
 export function newApiToken(): string {
-  return `sk_live_${randomBytes(24).toString("hex")}`;
+  return `sp1_live_${randomBytes(24).toString("hex")}`;
 }
 
 export function signPayload(secret: string, body: string, timestamp: string): string {
   return createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
+}
+
+/**
+ * Cross-origin policy for the public Developer API.
+ *
+ * The token-based Developer API is intentionally callable from third-party
+ * browser apps, but the set of origins that may do so is an explicit operator
+ * allowlist (`ALLOWED_API_ORIGINS`, comma-separated) — never `*`. A request
+ * from an origin that is not on the list simply receives no CORS headers, so
+ * the browser blocks the response. Same-origin and non-browser (server-to-
+ * server) callers never send an `Origin` header and are unaffected.
+ */
+function allowedApiOrigins(): Set<string> {
+  const raw = process.env["ALLOWED_API_ORIGINS"] ?? "";
+  return new Set(
+    raw
+      .split(",")
+      .map((o) => o.trim().replace(/\/+$/, ""))
+      .filter(Boolean),
+  );
+}
+
+/** Returns CORS headers echoing `origin` only when it is on the allowlist. */
+export function apiCorsHeaders(origin: string | null): Record<string, string> {
+  if (!origin) return {};
+  if (!allowedApiOrigins().has(origin.replace(/\/+$/, ""))) return {};
+  return {
+    "access-control-allow-origin": origin,
+    vary: "Origin",
+    "access-control-max-age": "600",
+  };
 }
 
 export function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
@@ -19,32 +68,60 @@ export function json(body: unknown, status = 200, extra: Record<string, string> 
     headers: {
       "content-type": "application/json",
       "cache-control": "no-store",
-      "access-control-allow-origin": "*",
       ...extra,
     },
   });
 }
 
+/**
+ * Constant-time verification of the scheduled-task shared secret.
+ *
+ * Cron/webhook dispatch routes are all invoked out-of-band (pg_cron / an
+ * external scheduler) with `Authorization: Bearer $CRON_SECRET`. This was
+ * hand-copied per route before; centralising it guarantees the fail-closed rule
+ * — an unset secret must never compare equal to an empty header — holds
+ * everywhere a scheduler endpoint is added.
+ */
+export function requireCronSecret(request: Request): boolean {
+  const secret = process.env["CRON_SECRET"] ?? "";
+  const given = (request.headers.get("authorization") ?? "").replace(/^Bearer /, "");
+  if (!secret || !given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(secret);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export type ApiCaller = { keyId: string; profileId: string; scopes: string[] };
 
-/** Validates `Authorization: Bearer sk_live_...`, enforces per-key rate limit, logs the call. */
+/** Validates `Authorization: Bearer sp1_live_...`, enforces per-key rate limit, logs the call. */
 export async function authenticateApiRequest(
   request: Request,
 ): Promise<{ caller: ApiCaller } | { error: Response }> {
+  const cors = apiCorsHeaders(request.headers.get("origin"));
   const header = request.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  if (!/^sk_live_[a-f0-9]{48}$/.test(token)) {
-    return { error: json({ error: "invalid_api_key" }, 401) };
+  if (!/^sp1_live_[a-f0-9]{48}$/.test(token)) {
+    return { error: json({ error: "invalid_api_key" }, 401, cors) };
   }
+  let key: any;
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const db = supabaseAdmin as any;
+    const { data } = await db
+      .from("api_keys")
+      .select("id,user_id,scopes,revoked,rate_limit_per_minute,call_count")
+      .eq("key_hash", hashApiKey(token))
+      .maybeSingle();
+    key = data;
+  } catch {
+    // hashApiKey throws when the pepper is unset — surface it as a service
+    // misconfiguration (503) rather than a generic 401 that hides the cause.
+    return { error: json({ error: "api_not_configured" }, 503, cors) };
+  }
+  if (!key || key.revoked) return { error: json({ error: "invalid_api_key" }, 401, cors) };
+
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const db = supabaseAdmin as any;
-  const { data: key } = await db
-    .from("api_keys")
-    .select("id,user_id,scopes,revoked,rate_limit_per_minute,call_count")
-    .eq("key_hash", hashApiKey(token))
-    .maybeSingle();
-  if (!key || key.revoked) return { error: json({ error: "invalid_api_key" }, 401) };
-
   const since = new Date(Date.now() - 60_000).toISOString();
   const { count } = await db
     .from("api_requests")
@@ -55,13 +132,21 @@ export async function authenticateApiRequest(
   const path = new URL(request.url).pathname;
   if ((count ?? 0) >= limit) {
     await db.from("api_requests").insert({ key_id: key.id, path, status: 429 });
-    return { error: json({ error: "rate_limited", limit_per_minute: limit }, 429, { "retry-after": "60" }) };
+    return {
+      error: json({ error: "rate_limited", limit_per_minute: limit }, 429, {
+        "retry-after": "60",
+        ...cors,
+      }),
+    };
   }
   await Promise.all([
     db.from("api_requests").insert({ key_id: key.id, path, status: 200 }),
     db
       .from("api_keys")
-      .update({ call_count: Number(key.call_count ?? 0) + 1, last_used_at: new Date().toISOString() })
+      .update({
+        call_count: Number(key.call_count ?? 0) + 1,
+        last_used_at: new Date().toISOString(),
+      })
       .eq("id", key.id),
   ]);
   return {
@@ -97,6 +182,23 @@ export async function dispatchDueWebhooks(limit = 50) {
     const ts = Math.floor(Date.now() / 1000).toString();
     let status = 0;
     try {
+      // SSRF guard: refuse to dial internal/metadata/link-local endpoints.
+      await assertSafeUrl(hook.url);
+    } catch (err) {
+      const reason = err instanceof UnsafeUrlError ? err.message : "unsafe endpoint";
+      await db
+        .from("webhook_deliveries")
+        .update({
+          status: "failed",
+          attempts: d.attempts + 1,
+          response_status: null,
+          last_error: reason,
+        })
+        .eq("id", d.id);
+      failed++;
+      continue;
+    }
+    try {
       const res = await fetch(hook.url, {
         method: "POST",
         headers: {
@@ -118,7 +220,12 @@ export async function dispatchDueWebhooks(limit = 50) {
       delivered++;
       await db
         .from("webhook_deliveries")
-        .update({ status: "delivered", attempts, response_status: status, delivered_at: new Date().toISOString() })
+        .update({
+          status: "delivered",
+          attempts,
+          response_status: status,
+          delivered_at: new Date().toISOString(),
+        })
         .eq("id", d.id);
     } else {
       failed++;

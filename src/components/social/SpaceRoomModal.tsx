@@ -50,6 +50,7 @@ import {
   uploadMedia,
 } from "@/lib/api-client";
 import { appConfig } from "@/lib/config";
+import { friendlyError } from "@/lib/error-messages";
 import { useRealtime } from "@/lib/realtime";
 import { cn } from "@/lib/utils";
 import { ClampText } from "@/components/social/ClampText";
@@ -256,6 +257,13 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       } else if (event.type === "space:speaking" || event.type === "speaking_state") {
         const data = event.data || event;
         if (data && data.userId) {
+          // The host muted (or unmuted) me: force my own mic so the mute is real,
+          // not just a UI state on other people's screens.
+          if (data.userId === currentUser.id) {
+            const forcedMuted = !!(data.isMuted ?? data.muted);
+            setIsMuted(forcedMuted);
+            if (forcedMuted) setIsSpeaking(false);
+          }
           setParticipants((prev) =>
             prev.map((p) =>
               p.id === data.userId
@@ -426,7 +434,11 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   async function toggleAttendeeMute(userId: string, currentlyMuted: boolean) {
     const nextMuted = !currentlyMuted;
     setParticipants((prev) =>
-      prev.map((p) => (p.id === userId ? { ...p, isMuted: nextMuted, isSpeaking: nextMuted ? false : p.isSpeaking } : p)),
+      prev.map((p) =>
+        p.id === userId
+          ? { ...p, isMuted: nextMuted, isSpeaking: nextMuted ? false : p.isSpeaking }
+          : p,
+      ),
     );
     try {
       await setSpaceParticipantMute(space.id, userId, nextMuted);
@@ -469,8 +481,18 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           const file = new File([blob], `space-${space.id}-${Date.now()}.webm`, {
             type: blob.type || "audio/webm",
           });
-          await reportSpaceRecordingBytes(space.id, blob.size).catch(() => {});
-          const uploaded = await uploadMedia(file, "space-recordings");
+          await reportSpaceRecordingBytes(space.id, blob.size).catch((err: any) => {
+            // A failed byte-count update is non-fatal (the size cap is advisory);
+            // surface it for debugging instead of swallowing it silently.
+            console.warn("Recording size report failed:", err?.message ?? err);
+          });
+          const uploaded = await uploadMedia(file, "recordings");
+          if (!uploaded?.url || uploaded.url.startsWith("data:")) {
+            // uploadMedia falls back to a client-side data URL when the server
+            // upload fails. Storing that in recording_url would "succeed" with
+            // an unplayable, DB-bloating value — treat it as a real failure.
+            throw new Error("The recording could not be uploaded to storage. Please try again.");
+          }
           await finalizeSpaceRecording(space.id, uploaded.url);
           toast.success("Recording saved! It will be available as a replay once the Space ends.");
         } else {
@@ -479,7 +501,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
         }
       }
     } catch (err: any) {
-      toast.error(String(err?.message ?? "Couldn't update the recording — try again."));
+      toast.error(friendlyError(err, "Couldn't update the recording — try again."));
     } finally {
       setRecordingBusy(false);
     }
@@ -495,7 +517,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       );
       setSummary(res);
     } catch (err: any) {
-      toast.error(String(err?.message ?? "Couldn't summarize this room right now."));
+      toast.error(friendlyError(err, "Couldn't summarize this room right now."));
     } finally {
       setSummarizing(false);
     }
@@ -503,7 +525,9 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
 
   const speakers = participants.filter((p) => p.role === "host" || p.role === "speaker");
   const listeners = participants.filter((p) => p.role === "listener");
-  const myRole = participants.find((p) => p.id === currentUser.id)?.role ?? (isCurrentUserHost ? "host" : "listener");
+  const myRole =
+    participants.find((p) => p.id === currentUser.id)?.role ??
+    (isCurrentUserHost ? "host" : "listener");
   const audio = useSpaceAudio({
     spaceId: space.id,
     userId: currentUser.id,
@@ -512,10 +536,14 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     enabled: true,
   });
   useEffect(() => {
-    if (audio.status === "mic-blocked") toast.error("Microphone access was blocked. Allow it in your browser to speak.");
+    if (audio.status === "mic-blocked")
+      toast.error("Microphone access was blocked. Allow it in your browser to speak.");
   }, [audio.status]);
   useEffect(() => {
-    if (audio.overCapacity) toast.warning("This room is above the live-audio speaker limit; some speakers may not be heard.");
+    if (audio.overCapacity)
+      toast.warning(
+        "This room is above the live-audio speaker limit; some speakers may not be heard.",
+      );
   }, [audio.overCapacity]);
 
   return (
@@ -735,7 +763,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                             <div
                               className={cn(
                                 "rounded-full p-1 transition-all duration-500",
-                                (audio.speakingIds.has(speaker.id) || speaker.isSpeaking)
+                                audio.speakingIds.has(speaker.id) || speaker.isSpeaking
                                   ? "ring-4 ring-brand shadow-glow animate-pulse"
                                   : "ring-1 ring-border",
                               )}
@@ -804,14 +832,36 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                               </button>
                             )}
                             {isCurrentUserHost && speaker.id !== currentUser.id && (
-                              <button
-                                type="button"
-                                onClick={() => demoteToListener(speaker.id)}
-                                title="Demote to listener"
-                                className="p-1 rounded-full text-muted-foreground hover:bg-foreground/10 hover:text-rose-500 transition-colors"
-                              >
-                                <UserMinus className="h-3 w-3" />
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleAttendeeMute(speaker.id, !!speaker.isMuted)}
+                                  title={speaker.isMuted ? "Unmute speaker" : "Mute speaker"}
+                                  className="p-1 rounded-full text-muted-foreground hover:bg-foreground/10 hover:text-foreground transition-colors"
+                                >
+                                  {speaker.isMuted ? (
+                                    <MicOff className="h-3 w-3" />
+                                  ) : (
+                                    <Mic className="h-3 w-3" />
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => demoteToListener(speaker.id)}
+                                  title="Demote to listener"
+                                  className="p-1 rounded-full text-muted-foreground hover:bg-foreground/10 hover:text-rose-500 transition-colors"
+                                >
+                                  <UserMinus className="h-3 w-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeAttendee(speaker.id)}
+                                  title="Remove from Space"
+                                  className="p-1 rounded-full text-muted-foreground hover:bg-rose-500/15 hover:text-rose-500 transition-colors"
+                                >
+                                  <LogOut className="h-3 w-3" />
+                                </button>
+                              </>
                             )}
                           </div>
                         </div>
@@ -848,13 +898,23 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                         </span>
 
                         {isCurrentUserHost && listener.id !== currentUser.id && (
-                          <button
-                            type="button"
-                            onClick={() => promoteToSpeaker(listener.id)}
-                            className="mt-1 px-2 py-0.5 rounded-full bg-brand/10 hover:bg-brand/20 text-[9px] font-bold text-brand flex items-center gap-0.5 transition-colors"
-                          >
-                            <UserPlus className="h-2.5 w-2.5" /> Invite
-                          </button>
+                          <div className="mt-1 flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => promoteToSpeaker(listener.id)}
+                              className="px-2 py-0.5 rounded-full bg-brand/10 hover:bg-brand/20 text-[9px] font-bold text-brand flex items-center gap-0.5 transition-colors"
+                            >
+                              <UserPlus className="h-2.5 w-2.5" /> Invite
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeAttendee(listener.id)}
+                              title="Remove from Space"
+                              className="p-1 rounded-full text-muted-foreground hover:bg-rose-500/15 hover:text-rose-500 transition-colors"
+                            >
+                              <LogOut className="h-2.5 w-2.5" />
+                            </button>
+                          </div>
                         )}
                       </div>
                     ))}
@@ -1059,7 +1119,9 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                     ) : (
                       <Disc3 className="h-3.5 w-3.5" />
                     )}
-                    <span className="hidden xs:inline">{isRecordingSpace ? "Stop Recording" : "Record"}</span>
+                    <span className="hidden xs:inline">
+                      {isRecordingSpace ? "Stop Recording" : "Record"}
+                    </span>
                   </button>
                   <button
                     type="button"

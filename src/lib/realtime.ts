@@ -18,7 +18,11 @@ const pending: Array<{ event: string; payload: any }> = [];
 function getChannel() {
   if (typeof window === "undefined") return null;
   if (!sharedChannel) {
-    sharedChannel = supabase.channel(CHANNEL_NAME, { config: { broadcast: { self: false } } });
+    // private:true → realtime.messages RLS (20260925000009) limits this bus to
+    // authenticated users instead of any visitor on the internet.
+    sharedChannel = supabase.channel(CHANNEL_NAME, {
+      config: { broadcast: { self: false }, private: true },
+    });
     // Bridge every remote broadcast into local window events so all hooks
     // (including wildcard listeners) receive it exactly once.
     sharedChannel.on("broadcast", { event: "*" }, (msg: any) => {

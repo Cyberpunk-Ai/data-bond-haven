@@ -168,6 +168,22 @@ function AdminPage() {
           />
         </Suspense>
       )}
+      {tab === "overview" && !overview && (
+        <div className="rounded-2xl border border-border bg-card p-8 text-center">
+          <p className="text-sm font-bold">We couldn't load the dashboard stats.</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {refreshing ? "Fetching the latest numbers…" : "Check your connection and try again."}
+          </p>
+          {!refreshing && (
+            <button
+              onClick={() => void load()}
+              className="mt-4 rounded-full bg-brand px-4 py-2 text-xs font-bold text-white hover:opacity-90 transition-opacity cursor-pointer"
+            >
+              Try again
+            </button>
+          )}
+        </div>
+      )}
       {tab === "users" && <AdminUsersTab activeRole={activeRole} currentUserId={profile.id} />}
       {tab === "content" && <AdminContentTab activeRole={activeRole} currentUserId={profile.id} />}
       {tab === "moderation" && (

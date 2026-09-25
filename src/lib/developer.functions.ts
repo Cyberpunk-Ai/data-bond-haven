@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { requirePlanCapability, UpgradeRequiredError } from "@/lib/plan-guard.server";
 
 async function myProfileId(supabase: any, userId: string): Promise<string> {
   const { data } = await supabase.from("profiles").select("id").eq("auth_user_id", userId).maybeSingle();
@@ -15,6 +16,17 @@ export const createApiKey = createServerFn({ method: "POST" })
   .inputValidator((d) => z.object({ name: z.string().trim().min(1).max(60) }).parse(d))
   .handler(async ({ data, context }) => {
     const profileId = await myProfileId(context.supabase, context.userId);
+    // The Developer API is a paid capability. Enforce it on the server (plan §5)
+    // — previously a free account could mint API keys because the paywall was
+    // only a client-side render decision.
+    try {
+      await requirePlanCapability(profileId, "api_access");
+    } catch (err) {
+      if (err instanceof UpgradeRequiredError) {
+        throw new Error("API access is available on the Pro plan. Please upgrade to create keys.");
+      }
+      throw err;
+    }
     const { hashApiKey, newApiToken } = await import("./api-auth.server");
     const token = newApiToken();
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -28,7 +40,7 @@ export const createApiKey = createServerFn({ method: "POST" })
       .insert({
         user_id: profileId,
         name: data.name,
-        prefix: "sk_live_",
+        prefix: "sp1_live_",
         key_hash: hashApiKey(token),
         last4: token.slice(-4),
         scopes: ["read", "write"],

@@ -5,6 +5,7 @@ import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { Avatar } from "@/components/social/Avatar";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 export function TeamWorkspaceManager() {
   const { isPro } = usePlan();
@@ -47,11 +48,13 @@ export function TeamWorkspaceManager() {
       setInviteEmail("");
       setIsInviteModalOpen(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not send that invitation.");
+      toast.error(friendlyError(err, "Could not send that invitation."));
     } finally {
       setInviting(false);
     }
   };
+
+  if (!isPro) return <WorkspacePreview />;
 
   if (!activeWorkspace) {
     return (
@@ -330,6 +333,154 @@ export function TeamWorkspaceManager() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Locked preview shown to everyone below the Pro plan. It intentionally renders
+ * no real workspace data (no roster, seats, or member emails) — just a sample
+ * showcase and an upgrade path — so the Settings tab behaves like the gated
+ * Developer API preview rather than exposing the live manager to non-Pro users.
+ */
+function WorkspacePreview() {
+  const roles = ["Admin", "Editor", "Analyst", "Contributor"];
+  const features = [
+    {
+      icon: UserPlus,
+      title: "Invite up to 10 teammates",
+      desc: "Bring writers, designers, and analysts into one shared brand account.",
+    },
+    {
+      icon: Shield,
+      title: "Granular editorial roles",
+      desc: "Control who can publish, review analytics, or manage billing and seats.",
+    },
+    {
+      icon: Users,
+      title: "Multi-author team spaces",
+      desc: "Host live audio spaces together and co-manage your growing community.",
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-black">Team Workspaces</h2>
+            <span className="flex items-center gap-1 text-[0.65rem] font-extrabold uppercase px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+              <Crown className="h-3 w-3" /> Pro Feature
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Collaborate on shared brand accounts, assign editorial roles, and host team spaces.
+          </p>
+        </div>
+        <button
+          onClick={() => openUpgradeModal("Team Workspaces & Roles")}
+          className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all cursor-pointer"
+        >
+          <Crown className="h-3.5 w-3.5" />
+          <span>Upgrade to Pro ($29/mo)</span>
+        </button>
+      </div>
+
+      {/* Locked banner */}
+      <div className="rounded-3xl border border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-transparent p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="space-y-1 text-center sm:text-left">
+          <div className="flex items-center justify-center sm:justify-start gap-2">
+            <Lock className="h-4 w-4 text-amber-500" />
+            <h4 className="text-sm font-black">Team Workspaces Require Pro</h4>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This is a preview. Upgrade to invite your team and unlock roles, seats, and shared
+            publishing.
+          </p>
+        </div>
+        <button
+          onClick={() => openUpgradeModal("Team Workspaces & Roles")}
+          className="rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-5 py-2.5 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all cursor-pointer whitespace-nowrap"
+        >
+          Unlock Pro ($29/mo)
+        </button>
+      </div>
+
+      {/* Feature highlights */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        {features.map((f) => (
+          <div
+            key={f.title}
+            className="rounded-3xl border border-border/80 bg-card p-5 space-y-2 shadow-soft"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-500 border border-amber-500/20">
+              <f.icon className="h-5 w-5" />
+            </div>
+            <h3 className="text-sm font-extrabold">{f.title}</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">{f.desc}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Blurred sample roster — clearly a preview, no real data */}
+      <div className="relative rounded-3xl border border-border/80 bg-card p-5 md:p-6 space-y-4 shadow-soft overflow-hidden">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-bold flex items-center gap-2">
+            <Users className="h-4 w-4 text-amber-500" />
+            <span>Workspace Members</span>
+          </h3>
+          <span className="rounded-full bg-amber-500/10 px-3 py-1 text-xs font-extrabold text-amber-600 dark:text-amber-400">
+            0 / 10 seats
+          </span>
+        </div>
+
+        <div className="space-y-1 blur-[3px] select-none pointer-events-none" aria-hidden="true">
+          {[
+            { n: "You (Owner)", r: "Owner" },
+            { n: "Alex Rivera", r: "Editor" },
+            { n: "Priya Nair", r: "Analyst" },
+          ].map((m) => (
+            <div
+              key={m.n}
+              className="flex items-center justify-between gap-3 py-2.5 border-b border-border/40 last:border-0"
+            >
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-full bg-muted" />
+                <div>
+                  <p className="text-sm font-bold">{m.n}</p>
+                  <p className="text-xs text-muted-foreground">team@company.com</p>
+                </div>
+              </div>
+              <div className="flex gap-1.5">
+                {roles.map((r) => (
+                  <span
+                    key={r}
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[0.6rem] font-bold",
+                      r === m.r
+                        ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {r}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-t from-card via-card/50 to-transparent">
+          <button
+            onClick={() => openUpgradeModal("Team Workspaces & Roles")}
+            className="flex items-center gap-2 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-5 py-2.5 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all cursor-pointer"
+          >
+            <Lock className="h-3.5 w-3.5" />
+            <span>Upgrade to manage your team</span>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,23 +1,24 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
-import { authenticateApiRequest, json } from "@/lib/api-auth.server";
+import { authenticateApiRequest, apiCorsHeaders, json } from "@/lib/api-auth.server";
 
 const createSchema = z.object({ content: z.string().trim().min(1).max(500) });
 
 export const Route = createFileRoute("/api/public/v1/posts")({
   server: {
     handlers: {
-      OPTIONS: async () =>
+      OPTIONS: async ({ request }) =>
         new Response(null, {
           status: 204,
           headers: {
-            "access-control-allow-origin": "*",
+            ...apiCorsHeaders(request.headers.get("origin")),
             "access-control-allow-headers": "authorization, content-type",
             "access-control-allow-methods": "GET, POST, OPTIONS",
           },
         }),
       GET: async ({ request }) => {
+        const cors = apiCorsHeaders(request.headers.get("origin"));
         const auth = await authenticateApiRequest(request);
         if ("error" in auth) return auth.error;
         const url = new URL(request.url);
@@ -30,22 +31,23 @@ export const Route = createFileRoute("/api/public/v1/posts")({
           .eq("hidden", false)
           .order("created_at", { ascending: false })
           .limit(limit);
-        return json({ data: data ?? [] });
+        return json({ data: data ?? [] }, 200, cors);
       },
       POST: async ({ request }) => {
+        const cors = apiCorsHeaders(request.headers.get("origin"));
         const auth = await authenticateApiRequest(request);
         if ("error" in auth) return auth.error;
-        if (!auth.caller.scopes.includes("write")) return json({ error: "insufficient_scope" }, 403);
+        if (!auth.caller.scopes.includes("write")) return json({ error: "insufficient_scope" }, 403, cors);
         const parsed = createSchema.safeParse(await request.json().catch(() => null));
-        if (!parsed.success) return json({ error: "invalid_body", issues: parsed.error.issues }, 400);
+        if (!parsed.success) return json({ error: "invalid_body", issues: parsed.error.issues }, 400, cors);
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
         const { data, error } = await (supabaseAdmin as any)
           .from("posts")
           .insert({ user_id: auth.caller.profileId, content: parsed.data.content })
           .select("id,content,created_at")
           .single();
-        if (error) return json({ error: "create_failed" }, 500);
-        return json({ data }, 201);
+        if (error) return json({ error: "create_failed" }, 500, cors);
+        return json({ data }, 201, cors);
       },
     },
   },

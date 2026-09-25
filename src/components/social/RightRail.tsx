@@ -18,6 +18,7 @@ import {
 } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 export function SearchBox({ placeholder = "Search Spaces" }: { placeholder?: string }) {
   const [val, setVal] = useState("");
@@ -76,7 +77,7 @@ export function FollowButton({
       setFollowing(res.following);
     } catch (err: any) {
       setFollowing(prev);
-      toast.error(err?.message || "Couldn't update follow. Please try again.");
+      toast.error(friendlyError(err, "Couldn't update follow. Please try again."));
     } finally {
       setLoading(false);
     }

@@ -27,6 +27,7 @@ import { useRealtime } from "@/lib/realtime";
 import type { Post, Space, Story, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 interface AdminContentTabProps {
   activeRole: UserRole;
@@ -89,7 +90,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
       setPosts((prev) => prev.filter((p) => p.id !== postId));
       showToast("Post removed by administrator");
     } catch (err: any) {
-      toast.error(err.message || "Failed to delete post");
+      toast.error(friendlyError(err, "Couldn't delete that post. Try again."));
     }
   };
 
@@ -99,7 +100,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
       setSpaces((prev) => prev.map((s) => (s.id === spaceId ? { ...s, is_live: false } : s)));
       showToast("Audio space session terminated");
     } catch (err: any) {
-      toast.error(err.message || "Failed to terminate space");
+      toast.error(friendlyError(err, "Couldn't end that Space. Try again."));
     }
   };
 
@@ -109,7 +110,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
       setStories((prev) => prev.filter((s) => s.id !== storyId));
       showToast("Story deleted");
     } catch (err: any) {
-      toast.error(err.message || "Failed to delete story");
+      toast.error(friendlyError(err, "Couldn't delete that story. Try again."));
     }
   };
 

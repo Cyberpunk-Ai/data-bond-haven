@@ -26,6 +26,7 @@ import { useRealtime } from "@/lib/realtime";
 import type { ModerationReport, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 interface AdminModerationTabProps {
   activeRole: UserRole;
@@ -83,7 +84,7 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
       setReports((prev) => prev.map((r) => (r.id === reportId ? updated : r)));
       showToast(`Report updated: ${actionTaken}`);
     } catch (err: any) {
-      toast.error(err.message || "Failed to update report");
+      toast.error(friendlyError(err, "Couldn't update that report. Try again."));
     }
   };
 
@@ -107,7 +108,7 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
       );
       showToast(`Content purged and report marked resolved.`);
     } catch (err: any) {
-      toast.error(err.message || "Action failed");
+      toast.error(friendlyError(err, "That action didn't work. Try again."));
     }
   };
 
@@ -126,7 +127,7 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
       );
       showToast(`Warning issued to author and report resolved.`);
     } catch (err: any) {
-      toast.error(err.message || "Action failed");
+      toast.error(friendlyError(err, "That action didn't work. Try again."));
     }
   };
 

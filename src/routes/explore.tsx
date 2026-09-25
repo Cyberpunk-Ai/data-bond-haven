@@ -127,45 +127,50 @@ function ExplorePage() {
 
   useEffect(() => {
     const term = debouncedQuery.trim();
-    if (!term) {
-      // Query cleared: restore the full feed and people list rather than
-      // leaving the previous search's results on screen.
-      setLoading(true);
-      getPosts()
-        .then((data) => {
-          if (Array.isArray(data)) setAllPosts(data);
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false));
-      getUsers()
-        .then((res) => {
-          if (res?.profiles && res.profiles.length > 0) {
-            setMatchedPeople(res.profiles.filter((p) => p.id && p.id !== currentUser.id));
-          }
-        })
-        .catch(() => {});
-      return;
-    }
-
     let active = true;
     setLoading(true);
-    globalSearch(term)
-      .then((results) => {
-        if (!active) return;
-        if (results.posts) setAllPosts(results.posts);
-        if (results.profiles) {
-          setMatchedPeople(results.profiles.filter((p) => p.id && p.id !== currentUser.id));
-        }
+
+    // Free-text search wins: pull matching posts/people from the server.
+    if (term) {
+      globalSearch(term)
+        .then((results) => {
+          if (!active) return;
+          if (results.posts) setAllPosts(results.posts);
+          if (results.profiles) {
+            setMatchedPeople(results.profiles.filter((p) => p.id && p.id !== currentUser.id));
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+      return () => {
+        active = false;
+      };
+    }
+
+    // No query: load the selected tag's posts from the server (so clicking a
+    // trend/topic opens the relevant results, not just the cached feed), or the
+    // full feed when nothing is selected.
+    getPosts(selectedTag ? { tag: selectedTag, limit: 50 } : {})
+      .then((data) => {
+        if (active && Array.isArray(data)) setAllPosts(data);
       })
       .catch(() => {})
       .finally(() => {
         if (active) setLoading(false);
       });
-
+    getUsers()
+      .then((res) => {
+        if (active && res?.profiles && res.profiles.length > 0) {
+          setMatchedPeople(res.profiles.filter((p) => p.id && p.id !== currentUser.id));
+        }
+      })
+      .catch(() => {});
     return () => {
       active = false;
     };
-  }, [debouncedQuery]);
+  }, [debouncedQuery, selectedTag]);
 
   // Client-side quick filter for creators when query changes
   const filteredCreators = useMemo(() => {
@@ -523,27 +528,34 @@ function ExplorePage() {
                       style={{ animationDelay: `${i * 60}ms` }}
                       className="glass-panel overflow-hidden rounded-3xl shadow-soft hover:shadow-lift transition-all hover:-translate-y-1 flex flex-col justify-between"
                     >
-                      {/* Media Header / Visual */}
-                      {p.image_url || p.media_url ? (
-                        <div className="relative aspect-video w-full overflow-hidden bg-black/10">
-                          <img
-                            src={p.image_url || p.media_url || ""}
-                            alt={p.content}
-                            loading="lazy"
-                            decoding="async"
-                            className="h-full w-full object-cover transition-transform duration-500 hover:scale-105"
-                          />
-                        </div>
-                      ) : p.image_gradient ? (
-                        <div
-                          className={cn(
-                            "relative aspect-video w-full flex items-center justify-center p-6 bg-gradient-to-br text-white text-center font-bold text-base shadow-inner",
-                            p.image_gradient,
-                          )}
-                        >
-                          <span className="line-clamp-3">{p.content}</span>
-                        </div>
-                      ) : null}
+                      {/* Media Header / Visual — clickable, opens the actual post */}
+                      <Link
+                        to="/post/$id"
+                        params={{ id: p.id }}
+                        aria-label="Open post"
+                        className="group/media relative block"
+                      >
+                        {p.image_url || p.media_url ? (
+                          <div className="relative aspect-video w-full overflow-hidden bg-black/10">
+                            <img
+                              src={p.image_url || p.media_url || ""}
+                              alt={p.content}
+                              loading="lazy"
+                              decoding="async"
+                              className="h-full w-full object-cover transition-transform duration-500 group-hover/media:scale-105"
+                            />
+                          </div>
+                        ) : p.image_gradient ? (
+                          <div
+                            className={cn(
+                              "relative aspect-video w-full flex items-center justify-center p-6 bg-gradient-to-br text-white text-center font-bold text-base shadow-inner transition-transform duration-500 group-hover/media:scale-[1.02]",
+                              p.image_gradient,
+                            )}
+                          >
+                            <span className="line-clamp-3">{p.content}</span>
+                          </div>
+                        ) : null}
+                      </Link>
 
                       {/* Card Body */}
                       <div className="p-4 space-y-3 flex-1 flex flex-col justify-between">
@@ -564,7 +576,13 @@ function ExplorePage() {
                               {author.display_name}
                             </Link>
                           </div>
-                          <p className="text-xs text-foreground/90 line-clamp-2">{p.content}</p>
+                          <Link
+                            to="/post/$id"
+                            params={{ id: p.id }}
+                            className="text-xs text-foreground/90 line-clamp-2 hover:text-brand transition-colors"
+                          >
+                            {p.content}
+                          </Link>
                         </div>
 
                         {/* Stats footer */}

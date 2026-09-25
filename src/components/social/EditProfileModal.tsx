@@ -1,11 +1,18 @@
-import { useState } from "react";
-import { X, Camera, Loader2, Check } from "lucide-react";
+import { useEffect, useState } from "react";
+import { X, Camera, Loader2, Check, AlertCircle } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import type { Profile } from "@/lib/types";
 import { currentUser } from "@/lib/profile-service";
-import { updateUserProfile, uploadMedia } from "@/lib/api-client";
+import {
+  updateUserProfile,
+  uploadMedia,
+  isUsernameAvailable,
+  normalizeUsername,
+  USERNAME_REGEX,
+} from "@/lib/api-client";
 import { updateUserSession } from "@/lib/auth-state";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 interface EditProfileModalProps {
   isOpen: boolean;
@@ -23,6 +30,7 @@ export function EditProfileModal({
   const base = initialProfile || currentUser;
   const [form, setForm] = useState({
     display_name: base.display_name,
+    username: base.username,
     bio: base.bio,
     location: base.location,
     website: base.website,
@@ -30,6 +38,43 @@ export function EditProfileModal({
   });
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  // Live availability check for the handle (only meaningful when it changed).
+  const normalizedUsername = normalizeUsername(form.username);
+  const usernameChanged = normalizedUsername !== normalizeUsername(base.username);
+  const usernameFormatOk = USERNAME_REGEX.test(normalizedUsername);
+  const [usernameState, setUsernameState] = useState<"idle" | "checking" | "available" | "taken">(
+    "idle",
+  );
+
+  useEffect(() => {
+    if (!usernameChanged) {
+      setUsernameState("idle");
+      return;
+    }
+    if (!usernameFormatOk) {
+      setUsernameState("idle");
+      return;
+    }
+    let active = true;
+    setUsernameState("checking");
+    const timer = setTimeout(() => {
+      isUsernameAvailable(normalizedUsername, base.id)
+        .then((ok) => {
+          if (active) setUsernameState(ok ? "available" : "taken");
+        })
+        .catch(() => {
+          if (active) setUsernameState("idle");
+        });
+    }, 350);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [normalizedUsername, usernameChanged, usernameFormatOk, base.id]);
+
+  const usernameBlocked =
+    usernameChanged && (!usernameFormatOk || usernameState === "taken" || usernameState === "checking");
 
   async function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -43,7 +88,7 @@ export function EditProfileModal({
       toast.success("Avatar image uploaded");
     } catch (err: any) {
       console.error("Avatar upload failed:", err);
-      toast.error(err?.message || "Could not upload image. Please try again.");
+      toast.error(friendlyError(err, "Could not upload image. Please try again."));
     } finally {
       setUploadingAvatar(false);
       e.target.value = "";
@@ -52,9 +97,17 @@ export function EditProfileModal({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (usernameBlocked) {
+      toast.error(
+        !usernameFormatOk
+          ? "Usernames can be 3–18 characters using only letters, numbers and underscores."
+          : "That username isn't available yet — please pick another.",
+      );
+      return;
+    }
     setSaving(true);
     try {
-      const res = await updateUserProfile(form);
+      const res = await updateUserProfile({ ...form, username: normalizedUsername });
       const updatedUser = res.user || { ...currentUser, ...form };
       updateUserSession(updatedUser);
       onProfileUpdated?.(updatedUser as Profile);
@@ -62,7 +115,7 @@ export function EditProfileModal({
       onClose();
     } catch (err: any) {
       console.error("Saving profile failed:", err);
-      toast.error(err?.message || "Could not save your profile. Please try again.");
+      toast.error(friendlyError(err, "Could not save your profile. Please try again."));
     } finally {
       setSaving(false);
     }
@@ -132,6 +185,43 @@ export function EditProfileModal({
 
           <div>
             <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground block mb-1">
+              Username
+            </label>
+            <div className="flex items-center rounded-2xl bg-foreground/5 border border-transparent focus-within:border-brand/40">
+              <span className="pl-4 text-sm text-muted-foreground select-none">@</span>
+              <input
+                type="text"
+                required
+                value={form.username}
+                onChange={(e) => setForm({ ...form, username: e.target.value })}
+                placeholder="yourhandle"
+                className="w-full rounded-2xl bg-transparent px-2 py-2.5 text-sm outline-none"
+              />
+              {usernameChanged && usernameState === "checking" && (
+                <Loader2 className="h-4 w-4 mr-3 animate-spin text-muted-foreground" />
+              )}
+              {usernameChanged && usernameState === "available" && (
+                <Check className="h-4 w-4 mr-3 text-emerald-500" />
+              )}
+              {usernameChanged && usernameState === "taken" && (
+                <AlertCircle className="h-4 w-4 mr-3 text-rose-500" />
+              )}
+            </div>
+            <p className="mt-1 text-[11px] text-muted-foreground min-h-[14px]">
+              {!usernameChanged
+                ? "Your handle. Letters, numbers and underscores only."
+                : !usernameFormatOk
+                  ? "3–18 characters: letters, numbers and underscores."
+                  : usernameState === "taken"
+                    ? "That username is already taken."
+                    : usernameState === "available"
+                      ? `@${normalizedUsername} is available.`
+                      : "Checking availability…"}
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground block mb-1">
               Bio
             </label>
             <textarea
@@ -182,7 +272,7 @@ export function EditProfileModal({
             </button>
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || usernameBlocked}
               className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-brand to-brand-pink px-6 py-2.5 text-xs font-bold text-white shadow-soft hover:shadow-glow transition-all active:scale-95 disabled:opacity-50"
             >
               {saving ? (

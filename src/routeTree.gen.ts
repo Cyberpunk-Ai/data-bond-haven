@@ -30,6 +30,7 @@ import { Route as BillingCallbackRouteImport } from './routes/billing.callback'
 import { Route as PostIdRouteImport } from './routes/post.$id'
 import { Route as UUsernameRouteImport } from './routes/u.$username'
 import { Route as ApiUploadsIndexRouteImport } from './routes/api/uploads/index'
+import { Route as ApiPublicCronMediaGcRouteImport } from './routes/api/public/cron/media-gc'
 import { Route as ApiPublicMediaSplatRouteImport } from './routes/api/public/media/$'
 import { Route as ApiPublicPaystackWebhookRouteImport } from './routes/api/public/paystack/webhook'
 import { Route as ApiPublicV1FollowersRouteImport } from './routes/api/public/v1/followers'
@@ -142,6 +143,11 @@ const ApiUploadsIndexRoute = ApiUploadsIndexRouteImport.update({
   path: '/api/uploads/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicCronMediaGcRoute = ApiPublicCronMediaGcRouteImport.update({
+  id: '/api/public/cron/media-gc',
+  path: '/api/public/cron/media-gc',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicMediaSplatRoute = ApiPublicMediaSplatRouteImport.update({
   id: '/api/public/media/$',
   path: '/api/public/media/$',
@@ -197,6 +203,7 @@ export interface FileRoutesByFullPath {
   '/post/$id': typeof PostIdRoute
   '/u/$username': typeof UUsernameRoute
   '/api/uploads/': typeof ApiUploadsIndexRoute
+  '/api/public/cron/media-gc': typeof ApiPublicCronMediaGcRoute
   '/api/public/media/$': typeof ApiPublicMediaSplatRoute
   '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
   '/api/public/v1/followers': typeof ApiPublicV1FollowersRoute
@@ -226,6 +233,7 @@ export interface FileRoutesByTo {
   '/post/$id': typeof PostIdRoute
   '/u/$username': typeof UUsernameRoute
   '/api/uploads': typeof ApiUploadsIndexRoute
+  '/api/public/cron/media-gc': typeof ApiPublicCronMediaGcRoute
   '/api/public/media/$': typeof ApiPublicMediaSplatRoute
   '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
   '/api/public/v1/followers': typeof ApiPublicV1FollowersRoute
@@ -256,6 +264,7 @@ export interface FileRoutesById {
   '/post/$id': typeof PostIdRoute
   '/u/$username': typeof UUsernameRoute
   '/api/uploads/': typeof ApiUploadsIndexRoute
+  '/api/public/cron/media-gc': typeof ApiPublicCronMediaGcRoute
   '/api/public/media/$': typeof ApiPublicMediaSplatRoute
   '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
   '/api/public/v1/followers': typeof ApiPublicV1FollowersRoute
@@ -287,6 +296,7 @@ export interface FileRouteTypes {
     | '/post/$id'
     | '/u/$username'
     | '/api/uploads/'
+    | '/api/public/cron/media-gc'
     | '/api/public/media/$'
     | '/api/public/paystack/webhook'
     | '/api/public/v1/followers'
@@ -316,6 +326,7 @@ export interface FileRouteTypes {
     | '/post/$id'
     | '/u/$username'
     | '/api/uploads'
+    | '/api/public/cron/media-gc'
     | '/api/public/media/$'
     | '/api/public/paystack/webhook'
     | '/api/public/v1/followers'
@@ -345,6 +356,7 @@ export interface FileRouteTypes {
     | '/post/$id'
     | '/u/$username'
     | '/api/uploads/'
+    | '/api/public/cron/media-gc'
     | '/api/public/media/$'
     | '/api/public/paystack/webhook'
     | '/api/public/v1/followers'
@@ -375,6 +387,7 @@ export interface RootRouteChildren {
   PostIdRoute: typeof PostIdRoute
   UUsernameRoute: typeof UUsernameRoute
   ApiUploadsIndexRoute: typeof ApiUploadsIndexRoute
+  ApiPublicCronMediaGcRoute: typeof ApiPublicCronMediaGcRoute
   ApiPublicMediaSplatRoute: typeof ApiPublicMediaSplatRoute
   ApiPublicPaystackWebhookRoute: typeof ApiPublicPaystackWebhookRoute
   ApiPublicV1FollowersRoute: typeof ApiPublicV1FollowersRoute
@@ -532,6 +545,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiUploadsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/cron/media-gc': {
+      id: '/api/public/cron/media-gc'
+      path: '/api/public/cron/media-gc'
+      fullPath: '/api/public/cron/media-gc'
+      preLoaderRoute: typeof ApiPublicCronMediaGcRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/media/$': {
       id: '/api/public/media/$'
       path: '/api/public/media/$'
@@ -599,6 +619,7 @@ const rootRouteChildren: RootRouteChildren = {
   PostIdRoute: PostIdRoute,
   UUsernameRoute: UUsernameRoute,
   ApiUploadsIndexRoute: ApiUploadsIndexRoute,
+  ApiPublicCronMediaGcRoute: ApiPublicCronMediaGcRoute,
   ApiPublicMediaSplatRoute: ApiPublicMediaSplatRoute,
   ApiPublicPaystackWebhookRoute: ApiPublicPaystackWebhookRoute,
   ApiPublicV1FollowersRoute: ApiPublicV1FollowersRoute,

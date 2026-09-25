@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Sparkles, X, Loader2, Wand2, Copy, Check, Lock, Zap } from "lucide-react";
 import { generateAIDraft } from "@/lib/api-client";
+import { friendlyError } from "@/lib/error-messages";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { cn } from "@/lib/utils";
 
@@ -91,9 +92,15 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
       setResult(data);
       recordAiDraftUsage();
     } catch (err: any) {
-      const message = String(err?.message ?? "Couldn't generate a draft. Please try again.");
-      setError(message);
-      if (/upgrade|limit/i.test(message)) openUpgradeModal("Daily AI Draft Limit Reached");
+      const raw = String(err?.message ?? "");
+      // Plan-limit responses are written for users; everything else gets sanitized
+      // so raw provider/technical text never renders in this panel.
+      if (/upgrade|limit/i.test(raw)) {
+        setError(friendlyError(err, "You've reached today's AI draft limit."));
+        openUpgradeModal("Daily AI Draft Limit Reached");
+      } else {
+        setError(friendlyError(err, "Couldn't generate a draft. Please try again."));
+      }
     } finally {
       setLoading(false);
     }

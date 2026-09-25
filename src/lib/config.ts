@@ -53,9 +53,9 @@ export const appConfig = {
     url: str("VITE_GEOCODER_URL", "https://nominatim.openstreetmap.org/search"),
   },
   realtime: {
-    turnUrl: str("VITE_TURN_URL", ""),
-    turnUsername: str("VITE_TURN_USERNAME", ""),
-    turnCredential: str("VITE_TURN_CREDENTIAL", ""),
+    // TURN relay is intentionally absent: the browser never learns a relay URL,
+    // username or credential. Ephemeral ICE servers are fetched from the server
+    // at call time (see lib/webrtc/ice.ts + turn.functions.ts) — plan §S4.
     maxMeshSpeakers: num("VITE_SPACES_MESH_MAX", 8),
     sfuProvider: str("VITE_SPACES_SFU_PROVIDER", ""),
     sfuUrl: str("VITE_SPACES_SFU_URL", ""),

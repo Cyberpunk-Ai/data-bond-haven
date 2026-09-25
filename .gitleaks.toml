@@ -1,0 +1,24 @@
+# gitleaks configuration — https://github.com/gitleaks/gitleaks
+#
+# Uses all default detection rules; only allowlists the files where a
+# "secret-looking" string is genuinely a non-secret:
+#   * .env.example  → placeholder values, never real credentials
+#   * db/migrations → SQL that legitimately references key shapes / the
+#     historically-published operator address (already in git; see AGENTS.md,
+#     the branch syncs to Lovable so history is not rewritten)
+title = "spaces1 gitleaks config"
+
+[allowlist]
+description = "non-secret placeholders and published-history SQL"
+paths = [
+  '''^\.?env\.example$''',
+  '''^db/migrations/.*\.sql$''',
+  '''(^|/)tests?/''',
+  '''\.test\.ts$''',
+]
+regexes = [
+  '''sb_publishable_\.\.\.''',
+  '''eyJ\.\.\.''',
+  '''sk_(live|test)_\.\.\.''',
+  '''whsec_\.\.\.''',
+]

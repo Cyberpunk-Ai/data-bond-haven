@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ShieldAlert, X, Check, Loader2, Flag } from "lucide-react";
 import { submitReport } from "@/lib/api-client";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 import { cn } from "@/lib/utils";
 
 interface ReportModalProps {
@@ -98,7 +99,7 @@ export function ReportModal({
         onClose();
       }, 1600);
     } catch (err: any) {
-      toast.error(err.message || "Failed to submit report. Please try again.");
+      toast.error(friendlyError(err, "Couldn't submit your report. Please try again."));
     } finally {
       setSubmitting(false);
     }

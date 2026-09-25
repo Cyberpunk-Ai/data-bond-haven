@@ -12,6 +12,7 @@ import {
   terminateSpace,
 } from "@/lib/moderation.functions";
 import { cacheProfiles, currentUser, currentUserId, rowToProfile } from "@/lib/profile-service";
+import { deleteMyMedia } from "@/lib/media.functions";
 import { emitRealtime } from "@/lib/realtime";
 import { appConfig } from "@/lib/config";
 import type {
@@ -278,11 +279,20 @@ export async function getPostById(id: string): Promise<Post | null> {
 }
 
 export async function deletePost(id: string) {
+  // Capture the media URL before the row goes away, so the bytes can be
+  // reclaimed too (plan §4.5) — otherwise a deleted post's image is retrievable
+  // forever.
+  const { data: existing } = await db.from("posts").select("media_url").eq("id", id).maybeSingle();
   const { error } = await db.from("posts").delete().eq("id", id);
   if (error) {
     // Surface the failure (e.g. RLS denial for a non-owner) instead of
     // reporting a delete that never happened.
     throw new Error(error.message || "Could not delete that post");
+  }
+  // Best-effort storage cleanup; a failure here is reclaimed later by the
+  // nightly media GC, so it must not roll back the user's delete.
+  if (existing?.media_url) {
+    void deleteMyMedia({ data: { urls: [existing.media_url] } }).catch(() => {});
   }
   emitRealtime("post:deleted", { id });
   return { ok: true };
@@ -354,14 +364,24 @@ export async function getMyEngagement(postIds: string[]) {
   return { liked: pick(likes), reposted: pick(reposts), bookmarked: pick(bookmarks) };
 }
 
-export async function addPostComment(postId: string, content: string) {
+export async function addPostComment(
+  postId: string,
+  content: string,
+  parentId?: string | null,
+) {
   const userId = me();
   if (!isDbId(userId)) throw new Error("Sign in to comment");
   if (!isDbId(postId)) throw new Error("This is sample content and can't be commented on.");
+  if (parentId && !isDbId(parentId)) throw new Error("That reply target isn't real yet.");
 
   const { data: dataRow, error } = await db
     .from("comments")
-    .insert({ post_id: postId, user_id: userId, content })
+    .insert({
+      post_id: postId,
+      user_id: userId,
+      content,
+      ...(parentId ? { parent_id: parentId } : {}),
+    })
     .select("*")
     .single();
   if (error) throw new Error(error.message || "Could not post your comment");
@@ -372,6 +392,7 @@ export async function addPostComment(postId: string, content: string) {
     user_id: userId,
     content,
     created_at: dataRow.created_at ?? nowIso(),
+    parent_id: dataRow.parent_id ?? parentId ?? null,
   };
 
   const { count: exactCount } = await db
@@ -551,8 +572,16 @@ export async function createStory(input: {
 }
 
 export async function deleteStory(id: string) {
+  const { data: existing } = await db
+    .from("stories")
+    .select("media_url")
+    .eq("id", id)
+    .maybeSingle();
   const { error } = await db.from("stories").delete().eq("id", id);
   if (error) throw error;
+  if (existing?.media_url) {
+    void deleteMyMedia({ data: { urls: [existing.media_url] } }).catch(() => {});
+  }
   emitRealtime("story:deleted", { id });
   return { ok: true };
 }
@@ -599,20 +628,60 @@ export async function getUsers(): Promise<{ profiles: Profile[] }> {
   return { profiles: uniqueProfiles };
 }
 
+export const USERNAME_REGEX = /^[a-z0-9_]{3,18}$/;
+
+/** Strip a leading @, trim and lowercase — the canonical handle form. */
+export function normalizeUsername(raw: string): string {
+  return raw.trim().replace(/^@+/, "").toLowerCase();
+}
+
+/** Is this handle free (optionally ignoring the current owner's own row)? */
+export async function isUsernameAvailable(username: string, exceptId?: string): Promise<boolean> {
+  const u = normalizeUsername(username);
+  if (!USERNAME_REGEX.test(u)) return false;
+  let query = db.from("profiles").select("id").eq("username", u);
+  if (exceptId) query = query.neq("id", exceptId);
+  const { data } = await query.maybeSingle();
+  return !data;
+}
+
 export async function updateUserProfile(patch: Partial<Profile>) {
+  const meId = me();
+  const update: Record<string, unknown> = {
+    display_name: patch.display_name,
+    bio: patch.bio,
+    location: patch.location,
+    website: patch.website,
+    avatar_url: patch.avatar_url,
+  };
+
+  // Username is optional here so existing callers are unaffected; when present
+  // it is validated and checked for uniqueness before writing (the DB unique
+  // constraint is the final guard).
+  if (patch.username !== undefined) {
+    const username = normalizeUsername(patch.username);
+    if (!USERNAME_REGEX.test(username)) {
+      throw new Error(
+        "Usernames can be 3–18 characters and use only letters, numbers and underscores.",
+      );
+    }
+    const available = await isUsernameAvailable(username, meId);
+    if (!available) throw new Error("That username is already taken. Please choose another one.");
+    update.username = username;
+  }
+
   const { data, error } = await db
     .from("profiles")
-    .update({
-      display_name: patch.display_name,
-      bio: patch.bio,
-      location: patch.location,
-      website: patch.website,
-      avatar_url: patch.avatar_url,
-    })
-    .eq("id", me())
+    .update(update)
+    .eq("id", meId)
     .select("*")
     .maybeSingle();
-  if (error) throw error;
+  if (error) {
+    if (/username/i.test(error.message) && /(duplicate|unique)/i.test(error.message)) {
+      throw new Error("That username is already taken. Please choose another one.");
+    }
+    throw error;
+  }
   const user = data ? rowToProfile(data) : ({ ...currentUser, ...patch } as Profile);
   emitRealtime("profile:updated", user);
   return { user };
@@ -677,7 +746,7 @@ export async function getFollowingIds(): Promise<string[]> {
 
 export async function uploadMedia(
   file: File,
-  folder: "avatars" | "posts" | "stories" | "media" | "messages" = "media",
+  folder: "avatars" | "posts" | "stories" | "media" | "messages" | "recordings" = "media",
 ) {
   try {
     const { data: sessionData } = await supabase.auth.getSession();
@@ -966,7 +1035,11 @@ export async function setSpaceRecording(spaceId: string, recording: boolean) {
 
 /** Host-only: report the current recording size so we can enforce the size limit server-side too. */
 export async function reportSpaceRecordingBytes(spaceId: string, bytes: number) {
-  await db.from("spaces").update({ recording_bytes: Math.max(0, Math.floor(bytes)) }).eq("id", spaceId).eq("host_id", me());
+  await db
+    .from("spaces")
+    .update({ recording_bytes: Math.max(0, Math.floor(bytes)) })
+    .eq("id", spaceId)
+    .eq("host_id", me());
   return { ok: true };
 }
 
@@ -987,7 +1060,12 @@ export async function recordSpaceReplayView(spaceId: string) {
   const userId = me();
   if (!isDbId(userId)) return { ok: false };
   try {
-    await db.from("space_replay_views").upsert({ space_id: spaceId, user_id: userId }, { onConflict: "space_id,user_id", ignoreDuplicates: true });
+    await db
+      .from("space_replay_views")
+      .upsert(
+        { space_id: spaceId, user_id: userId },
+        { onConflict: "space_id,user_id", ignoreDuplicates: true },
+      );
   } catch {
     /* best effort */
   }
@@ -1087,20 +1165,38 @@ export async function getOrCreateConversation(participantId: string): Promise<st
   if (!isDbId(userId) || !isDbId(participantId)) {
     throw new Error("Messaging isn't available for sample accounts.");
   }
-  const { data: existing } = await db
-    .from("conversations")
-    .select("id")
-    .or(
-      `and(user_a.eq.${userId},user_b.eq.${participantId}),and(user_a.eq.${participantId},user_b.eq.${userId})`,
-    )
-    .maybeSingle();
-  if (existing?.id) return String(existing.id);
+  const findExisting = async () => {
+    const { data } = await db
+      .from("conversations")
+      .select("id")
+      .or(
+        `and(user_a.eq.${userId},user_b.eq.${participantId}),and(user_a.eq.${participantId},user_b.eq.${userId})`,
+      )
+      .limit(1);
+    return data?.[0]?.id ? String(data[0].id) : null;
+  };
+  const existing = await findExisting();
+  if (existing) return existing;
   const { data, error } = await db
     .from("conversations")
     .insert({ user_a: userId, user_b: participantId, preview: "" })
     .select("id")
-    .single();
-  if (error) throw error;
+    .maybeSingle();
+  if (error) {
+    // Both people hitting "message" at the same instant races unique(user_a,user_b).
+    // The other transaction's row is just as good — find and reuse it instead of
+    // failing the message send.
+    if (error.code === "23505") {
+      const raced = await findExisting();
+      if (raced) return raced;
+    }
+    throw error;
+  }
+  if (!data?.id) {
+    const fallback = await findExisting();
+    if (fallback) return fallback;
+    throw new Error("We couldn't open that conversation. Please try again.");
+  }
   return String(data.id);
 }
 
@@ -1133,7 +1229,18 @@ export async function sendMessage(
   if (clientId) insertRow.id = clientId;
 
   const { data, error } = await db.from("messages").insert(insertRow).select("*").single();
-  if (error) throw new Error(error.message || "Your message couldn't be sent");
+  if (error) {
+    // Retrying a message that actually landed (network dropped the response)
+    // hits the client id's primary key — treat it as sent, not failed.
+    if (clientId && error.code === "23505") {
+      const { data: row } = await db.from("messages").select("*").eq("id", clientId).maybeSingle();
+      if (row) {
+        emitRealtime("message:created", row);
+        return { message: row as Message, conversationId };
+      }
+    }
+    throw new Error(error.message || "Your message couldn't be sent");
+  }
 
   await db
     .from("conversations")
@@ -1205,8 +1312,17 @@ export async function editMessage(messageId: string, body: string) {
 }
 
 export async function deleteMessage(messageId: string) {
+  const { data: existing } = await db
+    .from("messages")
+    .select("media_url")
+    .eq("id", messageId)
+    .eq("sender_id", me())
+    .maybeSingle();
   const { error } = await db.from("messages").delete().eq("id", messageId).eq("sender_id", me());
   if (error) throw error;
+  if (existing?.media_url) {
+    void deleteMyMedia({ data: { urls: [existing.media_url] } }).catch(() => {});
+  }
   emitRealtime("message:deleted", { id: messageId });
   return { id: messageId };
 }

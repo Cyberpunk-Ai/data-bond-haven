@@ -14,6 +14,7 @@ import { usePlan } from "@/lib/plan-state";
 import { Avatar } from "@/components/social/Avatar";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 function statusTone(status: string) {
   if (status === "paid") return "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400";
@@ -74,7 +75,7 @@ export function MonetizationHub() {
         `Withdrawal request for ${currency} ${record.amount.toFixed(2)} sent for review.`,
       );
     } catch (err: any) {
-      toast.error(err?.message || "We couldn't send that withdrawal request.");
+      toast.error(friendlyError(err, "We couldn't send that withdrawal request."));
     } finally {
       setPayoutProcessing(false);
     }
@@ -86,7 +87,7 @@ export function MonetizationHub() {
       await saveTipSettings({ minimumTip: minTipDraft, tipsEnabled: tipsEnabledDraft });
       toast.success("Tip settings saved.");
     } catch (err: any) {
-      toast.error(err?.message || "We couldn't save those settings.");
+      toast.error(friendlyError(err, "We couldn't save those settings."));
     } finally {
       setSavingSettings(false);
     }

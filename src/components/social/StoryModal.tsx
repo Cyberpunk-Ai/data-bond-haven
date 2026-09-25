@@ -18,6 +18,7 @@ import { getProfile, currentUserId } from "@/lib/profile-service";
 import { toggleLikeStory, deleteStory, sendMessage } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 interface StoryModalProps {
   stories: Story[];
@@ -142,7 +143,7 @@ export function StoryModal({
         handleNext();
       }
     } catch (err: any) {
-      toast.error(err.message || "Failed to delete story");
+      toast.error(friendlyError(err, "Couldn't delete that story. Please try again."));
     } finally {
       setDeleting(false);
     }

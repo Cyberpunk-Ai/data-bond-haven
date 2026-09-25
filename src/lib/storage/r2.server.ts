@@ -50,6 +50,27 @@ export function createR2Provider(): StorageProvider {
       const body = new Uint8Array(await res.arrayBuffer());
       return { body, contentType };
     },
+    async delete(keys) {
+      const removed: string[] = [];
+      // S3 DELETE is idempotent; a 404 counts as "already gone" and is a
+      // success for our purposes. Sequential keeps this dependency-free (no
+      // XML DeleteObjects body / Content-MD5 signing) and uploads are small-N.
+      for (const key of keys) {
+        if (!key) continue;
+        const res = await client.fetch(objectUrl(key), { method: "DELETE" });
+        if (res.ok || res.status === 404 || res.status === 204) removed.push(key);
+        else if (!res.ok) console.error(`R2 delete failed (${res.status}) for ${key}`);
+      }
+      return removed;
+    },
+    async stat(key) {
+      const res = await client.fetch(objectUrl(key), { method: "HEAD" });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`R2 stat failed (${res.status})`);
+      const size = Number(res.headers.get("content-length") ?? 0);
+      const contentType = res.headers.get("content-type") || "application/octet-stream";
+      return { size, contentType };
+    },
   };
 }
 

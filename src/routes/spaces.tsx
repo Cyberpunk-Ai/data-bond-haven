@@ -59,6 +59,7 @@ import { useRealtime } from "@/lib/realtime";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 export const Route = createFileRoute("/spaces")({
   validateSearch: (search: Record<string, unknown>): { spaceId?: string } => ({
@@ -356,7 +357,7 @@ function SpacesPage() {
         setActiveSpace(newSpace);
       }
     } catch (err: any) {
-      toast.error("Failed to create Space: " + (err.message || "Error"));
+      toast.error(friendlyError(err, "Couldn't start the Space. Please try again."));
     } finally {
       setCreating(false);
     }

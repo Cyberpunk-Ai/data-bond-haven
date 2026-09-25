@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { supabase } from "@/integrations/supabase/client";
 import { appConfig } from "@/lib/config";
+import { buildIceServers } from "@/lib/webrtc/ice";
 
 /**
  * Live audio for Spaces.
@@ -24,12 +25,10 @@ export function registerSfuAdapter(adapter: SfuAdapter) {
   sfuAdapter = adapter;
 }
 
-function iceServers(): RTCIceServer[] {
-  const list: RTCIceServer[] = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
-  const { turnUrl, turnUsername, turnCredential } = appConfig.realtime;
-  if (turnUrl) list.push({ urls: turnUrl.split(","), username: turnUsername, credential: turnCredential });
-  return list;
-}
+// Public STUN default until the (cached) ephemeral TURN fetch resolves.
+const STUN_ONLY: RTCIceServer[] = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+];
 
 type Signal =
   | { kind: "offer" | "answer"; from: string; to: string; sdp: RTCSessionDescriptionInit }
@@ -58,6 +57,9 @@ export function useSpaceAudio(opts: {
   const localStream = useRef<MediaStream | null>(null);
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  // Short-lived TURN is fetched per session (see the connect effect); STUN is
+  // the immediate default so a peer built before the fetch resolves still works.
+  const iceServersRef = useRef<RTCIceServer[]>(STUN_ONLY);
 
   // --- Room recording: mixes local + remote audio into one file. Host-only,
   // enforced by the caller; this just does the capture/upload-ready blob work.
@@ -146,8 +148,18 @@ export function useSpaceAudio(opts: {
     if (!enabled || !spaceId || !userId || userId === "guest") return;
     let cancelled = false;
     setStatus("connecting");
+    // Fetch short-lived TURN once per session (globally cached in ice.ts); a
+    // ready connection before it resolves falls back to STUN-only.
+    void buildIceServers()
+      .then((servers) => {
+        if (!cancelled) iceServersRef.current = servers;
+      })
+      .catch(() => undefined);
     const channel = supabase.channel(`space-audio:${spaceId}`, {
-      config: { presence: { key: userId }, broadcast: { self: false } },
+      // private:true makes Supabase enforce the realtime.messages RLS policies
+      // (20260925000009) so only the host/participants/staff can join the
+      // signalling channel — otherwise SDP offers are world-readable.
+      config: { presence: { key: userId }, broadcast: { self: false }, private: true },
     });
     const roster = new Map<string, { speaker: boolean }>();
     const analysers: Array<() => void> = [];
@@ -186,12 +198,13 @@ export function useSpaceAudio(opts: {
     function getPc(peerId: string) {
       let pc = pcs.current.get(peerId);
       if (pc) return pc;
-      pc = new RTCPeerConnection({ iceServers: iceServers() });
+      pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
       pcs.current.set(peerId, pc);
       localStream.current?.getTracks().forEach((t) => pc!.addTrack(t, localStream.current!));
       if (!localStream.current) pc.addTransceiver("audio", { direction: "recvonly" });
       pc.onicecandidate = (e) => {
-        if (e.candidate) void send({ kind: "ice", from: userId, to: peerId, candidate: e.candidate.toJSON() });
+        if (e.candidate)
+          void send({ kind: "ice", from: userId, to: peerId, candidate: e.candidate.toJSON() });
       };
       pc.ontrack = (e) => {
         const stream = e.streams[0] ?? new MediaStream([e.track]);
@@ -252,7 +265,9 @@ export function useSpaceAudio(opts: {
     function sync() {
       const state = channel.presenceState<{ speaker: boolean }>();
       roster.clear();
-      Object.entries(state).forEach(([id, metas]) => roster.set(id, { speaker: !!metas[0]?.speaker }));
+      Object.entries(state).forEach(([id, metas]) =>
+        roster.set(id, { speaker: !!metas[0]?.speaker }),
+      );
       const others = [...roster.keys()].filter((id) => id !== userId);
       setPeers(others);
       const speakers = [...roster.values()].filter((r) => r.speaker).length;

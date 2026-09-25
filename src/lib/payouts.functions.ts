@@ -10,11 +10,20 @@ import { createServerFn } from "@tanstack/react-start";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
-/** Smallest withdrawal we accept, in the payout currency. */
+// Server-only modules are imported lazily inside handlers: this file is
+// reachable from the client bundle, so top-level `.server.ts` imports are not
+// allowed. `@/lib/money`-style pure modules may be imported statically.
+async function admin() {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  return supabaseAdmin as any;
+}
+
+/** Smallest withdrawal we accept, in the settlement (payout) currency. */
 export const MINIMUM_PAYOUT = 10;
 
-function payoutCurrency() {
-  return process.env["PAYSTACK_CURRENCY"] || "KES";
+async function payoutCurrency() {
+  const { env } = await import("@/lib/env.server");
+  return env().paystack.currency;
 }
 
 async function myProfileId(supabase: any, userId: string) {
@@ -27,36 +36,25 @@ async function myProfileId(supabase: any, userId: string) {
   return String(data.id);
 }
 
-/** Tips received minus everything already withdrawn (excluding failed requests). */
-async function computeLedger(supabase: any, profileId: string) {
-  const [{ data: tips }, { data: payouts }] = await Promise.all([
-    supabase
-      .from("tips")
-      .select("id, from_user_id, amount, message, created_at, post_id")
-      .eq("to_user_id", profileId)
-      .order("created_at", { ascending: false })
-      .limit(100),
-    supabase
-      .from("payouts")
-      .select("*")
-      .eq("user_id", profileId)
-      .order("created_at", { ascending: false })
-      .limit(50),
-  ]);
-
-  const tipRows = (tips ?? []) as any[];
-  const payoutRows = (payouts ?? []) as any[];
-
-  const totalEarnings = tipRows.reduce((sum, t) => sum + Number(t.amount ?? 0), 0);
-  const withdrawn = payoutRows
-    .filter((p) => p.status !== "failed" && p.status !== "reversed" && p.status !== "declined")
-    .reduce((sum, p) => sum + Number(p.amount ?? 0), 0);
-
+/**
+ * The authoritative balance, summed in the database with no row limit — this
+ * replaces the old `computeLedger` that `.limit(100)`-ed tips and could show an
+ * inflated available balance (permitting withdrawal of money never earned).
+ */
+async function earningsSnapshot(supabase: any, profileId: string) {
+  const { data, error } = await supabase.rpc("earnings_snapshot", { _profile: profileId });
+  if (error) {
+    console.error("earnings_snapshot failed:", error);
+    throw new Error("We couldn't load your earnings right now. Please try again.");
+  }
+  const row = (Array.isArray(data) ? data[0] : data) ?? {};
   return {
-    totalEarnings: Math.round(totalEarnings * 100) / 100,
-    pendingBalance: Math.round(Math.max(0, totalEarnings - withdrawn) * 100) / 100,
-    tips: tipRows,
-    payouts: payoutRows,
+    totalEarnings: Number(row.gross_amount ?? 0),
+    fees: Number(row.fees_amount ?? 0),
+    net: Number(row.net_amount ?? 0),
+    withdrawn: Number(row.withdrawn_amount ?? 0),
+    pendingBalance: Number(row.available_amount ?? 0),
+    currency: String(row.currency ?? (await payoutCurrency())),
   };
 }
 
@@ -66,9 +64,33 @@ export const getEarnings = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const { supabase, userId } = context as any;
     const profileId = await myProfileId(supabase, userId);
-    const ledger = await computeLedger(supabase, profileId);
+    // Balance is an untruncated database aggregate; the lists below are only
+    // the recent activity for display (a bounded scan is fine there).
+    const [snapshot, tipsRes, payoutsRes, settingsRes] = await Promise.all([
+      earningsSnapshot(supabase, profileId),
+      supabase
+        .from("tips")
+        .select("id, from_user_id, amount, message, created_at, post_id")
+        .eq("to_user_id", profileId)
+        .order("created_at", { ascending: false })
+        .limit(50),
+      supabase
+        .from("payouts")
+        .select("id, amount, status, reference, failure_reason, created_at")
+        .eq("user_id", profileId)
+        .order("created_at", { ascending: false })
+        .limit(50),
+      supabase
+        .from("monetization_settings")
+        .select("min_tip, tips_enabled, subscriptions_enabled")
+        .eq("user_id", profileId)
+        .maybeSingle(),
+    ]);
 
-    const senderIds = Array.from(new Set(ledger.tips.map((t) => String(t.from_user_id))));
+    const tipRows = (tipsRes.data ?? []) as any[];
+    const payoutRows = (payoutsRes.data ?? []) as any[];
+
+    const senderIds = Array.from(new Set(tipRows.map((t) => String(t.from_user_id))));
     let senders: Record<string, any> = {};
     if (senderIds.length) {
       const { data } = await supabase
@@ -78,18 +100,14 @@ export const getEarnings = createServerFn({ method: "GET" })
       senders = Object.fromEntries(((data ?? []) as any[]).map((p) => [String(p.id), p]));
     }
 
-    const { data: settingsRow } = await supabase
-      .from("monetization_settings")
-      .select("min_tip, tips_enabled, subscriptions_enabled")
-      .eq("user_id", profileId)
-      .maybeSingle();
+    const settingsRow = settingsRes.data;
 
     return {
-      totalEarnings: ledger.totalEarnings,
-      pendingBalance: ledger.pendingBalance,
-      currency: payoutCurrency(),
+      totalEarnings: snapshot.totalEarnings,
+      pendingBalance: snapshot.pendingBalance,
+      currency: snapshot.currency,
       minimumPayout: MINIMUM_PAYOUT,
-      tips: ledger.tips.map((t) => {
+      tips: tipRows.map((t) => {
         const sender = senders[String(t.from_user_id)];
         return {
           id: String(t.id),
@@ -101,7 +119,7 @@ export const getEarnings = createServerFn({ method: "GET" })
           senderAvatar: sender?.avatar_url ?? undefined,
         };
       }),
-      payouts: ledger.payouts.map((p) => ({
+      payouts: payoutRows.map((p) => ({
         id: String(p.id),
         amount: Number(p.amount ?? 0),
         status: String(p.status ?? "pending"),
@@ -159,30 +177,46 @@ export const requestPayout = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context as any;
     const profileId = await myProfileId(supabase, userId);
-    const ledger = await computeLedger(supabase, profileId);
 
-    const amount = Math.round((data.amount ?? ledger.pendingBalance) * 100) / 100;
-    if (!(amount > 0)) throw new Error("You don't have anything to withdraw yet.");
-    if (amount > ledger.pendingBalance) throw new Error("That's more than your available balance.");
-    if (amount < MINIMUM_PAYOUT) {
-      throw new Error(`The smallest withdrawal is ${payoutCurrency()} ${MINIMUM_PAYOUT}.`);
+    // Withdrawals are a monetization feature — enforce it server-side, not in
+    // the UI (plan §5).
+    const { requirePlanCapability, UpgradeRequiredError } = await import("@/lib/plan-guard.server");
+    try {
+      await requirePlanCapability(profileId, "monetization");
+    } catch (err) {
+      if (err instanceof UpgradeRequiredError) {
+        throw new Error("Upgrade to a paid plan to withdraw your earnings.");
+      }
+      throw err;
     }
-    if (ledger.payouts.some((p) => p.status === "pending" || p.status === "reviewing")) {
-      throw new Error("You already have a withdrawal waiting for review.");
+
+    const snapshot = await earningsSnapshot(supabase, profileId);
+    const amount = Math.round((data.amount ?? snapshot.pendingBalance) * 100) / 100;
+    if (!(amount > 0)) throw new Error("You don't have anything to withdraw yet.");
+    if (amount > snapshot.pendingBalance) {
+      throw new Error("That's more than your available balance.");
+    }
+    if (amount < MINIMUM_PAYOUT) {
+      throw new Error(`The smallest withdrawal is ${snapshot.currency} ${MINIMUM_PAYOUT}.`);
     }
 
     const reference = `po_${crypto.randomUUID().replace(/-/g, "")}`;
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await (supabaseAdmin as any).from("payouts").insert({
+    const { error } = await (await admin()).from("payouts").insert({
       user_id: profileId,
       amount,
+      amount_minor: Math.round(amount * 100),
       method: "review",
       status: "pending",
-      currency: payoutCurrency(),
+      currency: snapshot.currency,
       reference,
       failure_reason: null,
       destination: data.note ? data.note : null,
     });
+    // The partial unique index `payouts_one_open_per_user` makes a second open
+    // withdrawal impossible even under a concurrent double-click race.
+    if (error && (error as any).code === "23505") {
+      throw new Error("You already have a withdrawal waiting for review.");
+    }
     if (error) {
       console.error("Could not record payout request:", error);
       throw new Error("We couldn't start that withdrawal. Please try again.");

@@ -25,6 +25,7 @@ import type { Profile, UserRole, UserStatus } from "@/lib/types";
 import { ROLE_DEFINITIONS } from "./AdminHeader";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 interface AdminUsersTabProps {
   activeRole: UserRole;
@@ -83,7 +84,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
       setEditingUser(null);
       showNotice(`Updated access for @${res.username} to ${newRole}`);
     } catch (err: any) {
-      toast.error(err.message || "Failed to update role");
+      toast.error(friendlyError(err, "Couldn't update that role. Try again."));
     }
   };
 
@@ -93,7 +94,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
       setUsers((prev) => prev.map((u) => (u.id === userId ? updated : u)));
       showNotice(`User @${updated.username} marked as ${newStatus}`);
     } catch (err: any) {
-      toast.error(err.message || "Failed to update status");
+      toast.error(friendlyError(err, "Couldn't update that status. Try again."));
     }
   };
 
@@ -107,7 +108,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
           : `Revoked verification from @${user.username}`,
       );
     } catch (err: any) {
-      toast.error(err.message || "Failed to update verified badge");
+      toast.error(friendlyError(err, "Couldn't update the verified badge. Try again."));
     }
   };
 
@@ -118,7 +119,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
       setUsers((prev) => prev.map((u) => (u.id === user.id ? updated : u)));
       showNotice(`Warning count for @${user.username} is now ${newCount}`);
     } catch (err: any) {
-      toast.error(err.message || "Failed to change warning count");
+      toast.error(friendlyError(err, "Couldn't change the warning count. Try again."));
     }
   };
 
@@ -130,7 +131,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
       setUsers((prev) => prev.map((u) => (u.id === user.id ? updated : u)));
       showNotice(`@${user.username} is now on the ${plan} plan`);
     } catch (err: any) {
-      toast.error(err.message || "Could not change that plan. Please try again.");
+      toast.error(friendlyError(err, "Could not change that plan. Please try again."));
     }
   };
 

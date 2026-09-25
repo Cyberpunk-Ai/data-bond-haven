@@ -29,6 +29,7 @@ import {
   Settings,
 } from "lucide-react";
 import { Avatar as UserAvatar } from "@/components/social/Avatar";
+import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/lib/auth-state";
 import { cn } from "@/lib/utils";
 
@@ -206,9 +207,7 @@ function Nav() {
             href="#top"
             className="flex items-center gap-2 group text-xl sm:text-2xl font-black tracking-tight text-foreground"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-2xl bg-gradient-to-tr from-brand via-brand-pink to-brand-orange text-white shadow-soft group-hover:scale-105 transition-transform">
-              <Sparkles className="h-4 w-4" />
-            </span>
+            <BrandLogo className="h-9 w-9 shadow-soft transition-transform group-hover:scale-105" />
             <span>Spaces1</span>
           </a>
 
@@ -450,7 +449,7 @@ function PhoneMockup() {
       <div className="relative h-[580px] w-72 rounded-[3rem] bg-gray-900 p-2 shadow-lift ring-1 ring-white/20">
         <div className="relative h-full w-full overflow-hidden rounded-[2.5rem] bg-white">
           <div className="absolute top-0 flex h-24 w-full items-start justify-between bg-gradient-to-br from-brand to-brand-pink p-6">
-            <Sparkles className="h-5 w-5 text-white" />
+            <BrandLogo className="h-6 w-6" />
             <span className="text-lg font-bold text-white">Spaces1</span>
             <Bell className="h-5 w-5 text-white" />
           </div>
@@ -519,10 +518,10 @@ function Hero() {
               {isLoggedIn ? "Open Your Feed" : "Get Started"}
             </Link>
             <a
-              href="#how-it-works"
+              href="#features"
               className="glass-panel flex items-center gap-2 rounded-full px-8 py-4 text-lg font-bold text-gray-800 transition-colors hover:bg-white active:scale-95"
             >
-              <Play className="h-4 w-4 fill-current" /> See How It Works
+              <Play className="h-4 w-4 fill-current" /> Explore Features
             </a>
           </div>
           <div className="flex items-center gap-4 pt-2">
@@ -570,50 +569,6 @@ function LogoCloud() {
 
 const iconBox =
   "flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br text-white";
-
-function HowItWorks() {
-  const steps = [
-    {
-      title: "Create your space",
-      body: "Sign up in seconds, pick a username, and set up your profile.",
-    },
-    {
-      title: "Share & connect",
-      body: "Post updates, stories and go live in audio Spaces with your community.",
-    },
-    {
-      title: "Grow & get paid",
-      body: "Turn followers into supporters with tips, subscriptions and analytics.",
-    },
-  ];
-  return (
-    <section id="how-it-works" className="relative scroll-mt-24 py-24">
-      <div className="container mx-auto px-6">
-        <Reveal className="mx-auto mb-16 max-w-2xl text-center">
-          <h2 className="mb-4 text-4xl font-bold sm:text-5xl">
-            See how it <span className="gradient-text">works</span>
-          </h2>
-          <p className="text-xl text-gray-600">
-            From sign-up to your first supporter, here's the whole journey.
-          </p>
-        </Reveal>
-        <div className="grid gap-6 md:grid-cols-3">
-          {steps.map((s, i) => (
-            <Reveal key={s.title} delay={i * 100}>
-              <div className="glass-panel h-full rounded-3xl p-8 shadow-soft transition-all duration-500 hover:shadow-lift">
-                <span className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-pink text-sm font-black text-white">
-                  {i + 1}
-                </span>
-                <h3 className="mb-2 text-xl font-bold">{s.title}</h3>
-                <p className="text-gray-600">{s.body}</p>
-              </div>
-            </Reveal>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
 
 function Features() {
   return (
@@ -827,8 +782,8 @@ function Creators() {
               <p className="mt-1 text-sm text-gray-500">Revenue share to creators</p>
             </div>
             <div className="glass-panel rounded-3xl p-6 shadow-soft">
-              <p className="text-3xl font-extrabold gradient-text">$45M</p>
-              <p className="mt-1 text-sm text-gray-500">Paid out last year</p>
+              <p className="text-3xl font-extrabold gradient-text">$15K</p>
+              <p className="mt-1 text-sm text-gray-500">Paid to date</p>
             </div>
           </div>
         </Reveal>
@@ -1163,7 +1118,6 @@ function Index() {
       <Nav />
       <Hero />
       <LogoCloud />
-      <HowItWorks />
       <Features />
       <Community />
       <Creators />

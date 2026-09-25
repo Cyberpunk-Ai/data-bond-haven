@@ -23,6 +23,7 @@ import { useRealtime } from "@/lib/realtime";
 import type { SystemSettings, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 interface AdminSystemSettingsTabProps {
   activeRole: UserRole;
@@ -47,7 +48,7 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
       setSyncResult({ counts: res.counts, durationMs: res.durationMs });
       toast.success(`Remote Supabase database synchronized (${res.durationMs}ms)`);
     } catch (err: any) {
-      toast.error(err.message || "Failed to sync remote database");
+      toast.error(friendlyError(err, "Couldn't sync the remote database. Try again."));
     } finally {
       setSyncingDb(false);
     }
@@ -89,7 +90,7 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
       setSettings(updated);
       showToast("Platform system settings & banner published live");
     } catch (err: any) {
-      toast.error(err.message || "Failed to update settings");
+      toast.error(friendlyError(err, "Couldn't save these settings. Try again."));
     } finally {
       setSaving(false);
     }

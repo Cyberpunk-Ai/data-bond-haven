@@ -15,6 +15,7 @@ import {
   Hash,
 } from "lucide-react";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 import { Avatar } from "@/components/social/Avatar";
 import type { Post, Poll } from "@/lib/types";
 import { currentUser } from "@/lib/profile-service";
@@ -181,7 +182,7 @@ export function Composer({
       );
     } catch (err: any) {
       console.error("Upload failed:", err);
-      toast.error(err?.message || "Upload failed. Please try again.");
+      toast.error(friendlyError(err, "Upload failed. Please try again."));
     } finally {
       setUploadingImage(false);
       e.target.value = "";
@@ -250,7 +251,7 @@ export function Composer({
       toast.success("Published to your feed!");
     } catch (err: any) {
       console.error("Failed to post:", err);
-      toast.error("Failed to post: " + (err.message || "Please try again"));
+      toast.error(friendlyError(err, "Your post didn't go through. Please try again."));
     } finally {
       setPosting(false);
     }

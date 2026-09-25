@@ -8,8 +8,9 @@ import { currentUser } from "@/lib/profile-service";
 import { useServerFn } from "@tanstack/react-start";
 import { startTipCheckout } from "@/lib/paystack.functions";
 import { openPaystackPayment } from "@/lib/paystack-checkout";
-import { getMyTipEarnings, requestTipPayout } from "@/lib/tips.functions";
+import { getEarnings, requestPayout } from "@/lib/payouts.functions";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 import { cn } from "@/lib/utils";
 
 interface TipModalProps {
@@ -25,18 +26,32 @@ interface TipModalProps {
   spaceId?: string;
 }
 
-const PRESET_AMOUNTS = [2, 5, 10, 25, 50];
+const PRESET_AMOUNTS = [0.25, 0.5, 1, 5, 10];
+const MIN_TIP = 0.1;
+const MAX_TIP = 1000;
+
+function formatTip(amount: number) {
+  return `$${amount.toFixed(2)}`;
+}
 
 export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) {
   const { user } = useAuth();
   const activeUser = user || currentUser;
   const beginTip = useServerFn(startTipCheckout);
-  const loadEarnings = useServerFn(getMyTipEarnings);
-  const payout = useServerFn(requestTipPayout);
+  const loadEarnings = useServerFn(getEarnings);
+  const payout = useServerFn(requestPayout);
   const [earnings, setEarnings] = useState<{
-    total: number;
-    supporters: number;
-    recent: { id: string; amount: number; message: string; created_at: string; sender: string }[];
+    pendingBalance: number;
+    currency: string;
+    minimumPayout: number;
+    tips: {
+      id: string;
+      amount: number;
+      message: string;
+      createdAt: string;
+      senderName: string;
+      senderUsername: string;
+    }[];
   } | null>(null);
 
   const [selectedAmount, setSelectedAmount] = useState<number>(5);
@@ -51,7 +66,9 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
     if (!isOpen || !isSelf) return;
     loadEarnings({})
       .then((res: any) => setEarnings(res))
-      .catch(() => setEarnings({ total: 0, supporters: 0, recent: [] }));
+      .catch(() =>
+        setEarnings({ pendingBalance: 0, currency: "KES", minimumPayout: 10, tips: [] }),
+      );
   }, [isOpen, isSelf]);
 
   if (!isOpen) return null;
@@ -62,8 +79,8 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSelf) return;
-    if (!(effectiveAmount > 0)) {
-      toast.error("Please enter a valid tip amount");
+    if (!(effectiveAmount >= MIN_TIP)) {
+      toast.error(`Please enter a tip of at least ${formatTip(MIN_TIP)}`);
       return;
     }
 
@@ -90,7 +107,7 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
         onCancel: () => setIsSubmitting(false),
       });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "We couldn't start that tip.");
+      toast.error(friendlyError(err, "We couldn't start that tip."));
       setIsSubmitting(false);
     }
   };
@@ -130,22 +147,19 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
 
             <div className="rounded-2xl bg-gradient-to-br from-amber-500/15 via-brand/10 to-transparent p-4 border border-amber-500/30 space-y-2">
               <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                <Sparkles className="h-3.5 w-3.5" /> Total Tips Balance
+                <Sparkles className="h-3.5 w-3.5" /> Available Balance
               </span>
               <div className="flex items-baseline justify-between">
                 <span className="text-3xl font-black tracking-tight text-foreground">
-                  ${(earnings?.total ?? 0).toFixed(2)}
-                </span>
-                <span className="text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2.5 py-1 rounded-full">
-                  100% Payout Rate
+                  {earnings?.currency ?? "KES"} {(earnings?.pendingBalance ?? 0).toFixed(2)}
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
                 {earnings === null
                   ? "Loading your supporters..."
-                  : earnings.supporters === 0
+                  : (earnings?.tips.length ?? 0) === 0
                     ? "No tips yet. Share your profile so people can support you."
-                    : `Directly received from ${earnings.supporters} community supporter${earnings.supporters === 1 ? "" : "s"}.`}
+                    : `Withdrawable earnings from ${new Set(earnings!.tips.map((t) => t.senderUsername)).size} community supporter${new Set(earnings!.tips.map((t) => t.senderUsername)).size === 1 ? "" : "s"}.`}
               </p>
             </div>
 
@@ -154,26 +168,28 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
                 Recent Supporters
               </h4>
               <div className="space-y-2">
-                {(earnings?.recent ?? []).length === 0 ? (
+                {(earnings?.tips ?? []).length === 0 ? (
                   <p className="rounded-2xl border border-dashed border-border/60 p-4 text-center text-xs text-muted-foreground">
                     Tips you receive will appear here.
                   </p>
                 ) : (
-                  (earnings?.recent ?? []).map((s) => (
+                  (earnings?.tips ?? []).map((s) => (
                     <div
                       key={s.id}
                       className="flex items-center justify-between rounded-2xl bg-foreground/[0.03] p-3 text-xs border border-border/50"
                     >
                       <div>
-                        <p className="font-bold text-foreground">{s.sender}</p>
+                        <p className="font-bold text-foreground">{s.senderName}</p>
                         {s.message ? (
                           <p className="text-muted-foreground text-[11px] italic">"{s.message}"</p>
                         ) : null}
                       </div>
                       <div className="text-right">
-                        <p className="font-extrabold text-amber-500">${s.amount.toFixed(2)}</p>
+                        <p className="font-extrabold text-amber-500">
+                          {earnings?.currency ?? "KES"} {s.amount.toFixed(2)}
+                        </p>
                         <p className="text-[10px] text-muted-foreground">
-                          {new Date(s.created_at).toLocaleDateString()}
+                          {new Date(s.createdAt).toLocaleDateString()}
                         </p>
                       </div>
                     </div>
@@ -185,22 +201,22 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
             <div className="pt-2">
               <button
                 type="button"
-                disabled={(earnings?.total ?? 0) < 10}
+                disabled={(earnings?.pendingBalance ?? 0) < (earnings?.minimumPayout ?? 10)}
                 onClick={async () => {
                   try {
-                    const res = await payout({});
+                    const res = await payout({ data: {} });
                     toast.success(
-                      `Payout of $${res.amount.toFixed(2)} requested. Funds arrive in 1-2 business days.`,
+                      `Withdrawal of ${earnings?.currency ?? "KES"} ${res.amount.toFixed(2)} requested. Staff will review it shortly.`,
                     );
                     onClose();
                   } catch (err) {
-                    toast.error(err instanceof Error ? err.message : "Payout request failed.");
+                    toast.error(friendlyError(err, "Payout request failed."));
                   }
                 }}
                 className="w-full rounded-2xl bg-gradient-to-r from-brand to-brand-pink py-3 text-sm font-extrabold text-white shadow-soft hover:shadow-glow transition-all cursor-pointer active:scale-98 disabled:opacity-50"
               >
-                Request Payout ({"$"}
-                {(earnings?.total ?? 0).toFixed(2)})
+                Request Withdrawal ({earnings?.currency ?? "KES"}
+                {(earnings?.pendingBalance ?? 0).toFixed(2)})
               </button>
             </div>
           </div>
@@ -252,8 +268,9 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
 
             {/* Amount Presets */}
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                Select Tip Amount
+              <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+                <span>Select Tip Amount</span>
+                <span className="font-semibold normal-case tracking-normal">Min {formatTip(MIN_TIP)}</span>
               </label>
               <div className="grid grid-cols-5 gap-2">
                 {PRESET_AMOUNTS.map((amt) => {
@@ -273,7 +290,7 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
                           : "border border-border/80 bg-muted/40 hover:bg-muted text-foreground",
                       )}
                     >
-                      ${amt}
+                      {formatTip(amt)}
                     </button>
                   );
                 })}
@@ -286,9 +303,9 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
                 </div>
                 <input
                   type="number"
-                  step="1"
-                  min="1"
-                  max="1000"
+                  step="0.1"
+                  min={MIN_TIP}
+                  max={MAX_TIP}
                   placeholder="Custom amount"
                   value={customAmount}
                   onChange={(e) => {
@@ -325,11 +342,11 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting || effectiveAmount <= 0}
+                disabled={isSubmitting || effectiveAmount < MIN_TIP}
                 className="flex-[2] rounded-2xl bg-gradient-to-r from-brand to-brand-pink py-3 text-sm font-bold text-white shadow-soft hover:brightness-105 transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
               >
                 <Heart className="h-4 w-4 fill-white" />
-                <span>Send Tip ${effectiveAmount.toFixed(2)}</span>
+                <span>Send Tip {formatTip(effectiveAmount)}</span>
               </button>
             </div>
 

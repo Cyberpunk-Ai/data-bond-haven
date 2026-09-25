@@ -19,6 +19,7 @@ import {
   Moon,
 } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
+import { BrandLogo } from "@/components/BrandLogo";
 import { UserBadge } from "@/components/social/UserBadge";
 import { AnnouncementBanner } from "@/components/social/AnnouncementBanner";
 import { currentUser } from "@/lib/profile-service";
@@ -122,9 +123,7 @@ function Sidebar({
     <div className="flex h-full flex-col gap-2">
       <div className="mb-2 flex items-center justify-between px-2 py-2">
         <Link to="/" className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-brand-pink">
-            <Sparkles className="h-5 w-5 text-white" />
-          </span>
+          <BrandLogo className="h-9 w-9" />
           <span className="text-2xl font-extrabold tracking-tight">Spaces1</span>
         </Link>
         <button
@@ -389,9 +388,7 @@ export function AppShell({
         </div>
 
         <Link to="/" className="flex items-center gap-1.5">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-brand to-brand-pink">
-            <Sparkles className="h-4 w-4 text-white" />
-          </span>
+          <BrandLogo className="h-7 w-7" />
           <span className="text-lg font-extrabold tracking-tight">Spaces1</span>
         </Link>
 

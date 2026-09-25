@@ -7,8 +7,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@supabase/supabase-js";
 
 function publicClient() {
-  const url = (process.env["SUPABASE_URL"] || process.env["BACKEND_URL"]);
-  const key = (process.env["SUPABASE_PUBLISHABLE_KEY"] || process.env["BACKEND_PUBLISHABLE_KEY"]);
+  const url = process.env["SUPABASE_URL"];
+  const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
   if (!url || !key) throw new Error("Backend is not configured");
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },

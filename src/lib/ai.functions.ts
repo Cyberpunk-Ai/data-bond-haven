@@ -3,9 +3,7 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { PLAN_DETAILS, type PlanTier } from "@/lib/plans";
-
-const MODEL = "google/gemini-2.5-flash";
-const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
+import { env } from "@/lib/env.server";
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -65,15 +63,18 @@ async function consumeQuota(authUserId: string) {
 }
 
 async function chat(system: string, user: string): Promise<string> {
-  const apiKey = (process.env["AI_API_KEY"] || process.env["LOVABLE_API_KEY"]);
+  const { apiKey, gatewayUrl, textModel } = env().ai;
   if (!apiKey) {
     throw new Error("The AI assistant isn't configured yet. Add an AI key to enable it.");
+  }
+  if (!gatewayUrl) {
+    throw new Error("AI_GATEWAY_URL is not configured — set it to any OpenAI-compatible chat completions endpoint.");
   }
 
   // Model and gateway are environment-configurable so the same build can be
   // pointed at a different assistant without a code change.
-  const model = process.env["AI_TEXT_MODEL"] || MODEL;
-  const gateway = process.env["AI_GATEWAY_URL"] || GATEWAY;
+  const model = textModel;
+  const gateway = gatewayUrl;
 
   const res = await fetch(gateway, {
     method: "POST",

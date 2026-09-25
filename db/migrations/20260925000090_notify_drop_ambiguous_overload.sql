@@ -1,0 +1,12 @@
+-- Resolve: "function public.notify(uuid, uuid, unknown, unknown) is not unique".
+--
+-- Two overloads coexist:
+--   • notify(_recipient uuid, _actor uuid, _type text, _body text)                  (…000004)
+--   • notify(_recipient uuid, _actor uuid, _type text, _body text, _post_id uuid default null) (…0000011)
+-- Because the 5-arg form has a DEFAULT, a 4-arg call matches BOTH signatures, so
+-- Postgres cannot pick one and every legacy 4-arg trigger (follow, story_like,
+-- message, tip) fails at insert time.
+--
+-- Drop the 4-arg overload. The 5-arg form (post_id defaults to null) serves all
+-- callers, so behaviour is unchanged apart from the ambiguity going away.
+drop function if exists public.notify(uuid, uuid, text, text);

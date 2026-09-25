@@ -49,6 +49,7 @@ import { clearAllUnreadNotifications, decrementUnreadNotifications } from "@/lib
 import { useRealtime } from "@/lib/realtime";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/notifications")({
@@ -315,7 +316,7 @@ function InviteActions({ notification }: { notification: { action: { member_id: 
     });
     setBusy(false);
     if (error) {
-      toast.error(error.message);
+      toast.error(friendlyError(error));
       return;
     }
     setState(accept ? "accepted" : "declined");

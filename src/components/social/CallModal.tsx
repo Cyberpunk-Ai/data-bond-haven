@@ -56,7 +56,6 @@ export function CallModal({
   const [reactions, setReactions] = useState<Array<{ id: string; emoji: string; left: number }>>(
     [],
   );
-  const [noiseSuppression, setNoiseSuppression] = useState(true);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -85,7 +84,10 @@ export function CallModal({
   // Attach media streams to the elements.
   useEffect(() => {
     if (localVideoRef.current) localVideoRef.current.srcObject = session.localStream;
-    cameraTrackRef.current = session.localStream?.getVideoTracks()[0] ?? null;
+    // Remember the *camera* track only — never the screen-share one, or ending
+    // a share would "restore" a dead display track.
+    cameraTrackRef.current =
+      session.localStream?.getVideoTracks().find((t) => !t.getSettings().displaySurface) ?? null;
   }, [session.localStream]);
 
   useEffect(() => {
@@ -167,6 +169,28 @@ export function CallModal({
     } catch {
       // user cancelled the picker
     }
+  }
+
+  async function handleToggleVideo() {
+    if (!videoOff) {
+      // Stop sending frames but keep the track — flipping back on is instant
+      // and never renegotiates.
+      setVideoOff(true);
+      return;
+    }
+    // Voice call upgrade: grab the camera the first time video is wanted.
+    if (!cameraTrackRef.current && !session.localStream?.getVideoTracks().length) {
+      try {
+        const track = await session.startCamera();
+        if (!track) throw new Error("no camera track");
+        await session.replaceVideoTrack(track);
+        cameraTrackRef.current = track;
+      } catch {
+        toast.error("We couldn't reach your camera. Check your browser permissions.");
+        return;
+      }
+    }
+    setVideoOff(false);
   }
 
   function handleSendNote() {
@@ -388,7 +412,7 @@ export function CallModal({
 
           {/* Toggle Video */}
           <button
-            onClick={() => setVideoOff(!videoOff)}
+            onClick={handleToggleVideo}
             aria-label={videoOff ? "Turn on camera" : "Turn off camera"}
             className={cn(
               "rounded-full p-3.5 backdrop-blur-md transition-all active:scale-95 shadow-md cursor-pointer",

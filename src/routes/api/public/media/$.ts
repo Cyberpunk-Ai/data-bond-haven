@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { getStorageProvider } from "@/lib/storage/index.server";
 
 const PUBLIC_FOLDERS = ["avatars", "posts", "stories", "media"];
-const AUTHED_FOLDERS = ["messages"];
+const AUTHED_FOLDERS = ["messages", "recordings"];
 
 // Content types we are willing to render inline. Anything else (notably
 // image/svg+xml and text/html, which can carry script) is forced to a
@@ -52,11 +52,18 @@ export const Route = createFileRoute("/api/public/media/$")({
           return new Response("Not found", { status: 404 });
         }
 
-        if (isAuthed) {
-          const authorized = await isAuthorizedForMessageMedia(request, path);
-          if (!authorized) {
+        if (folder === "messages") {
+          if (!(await isAuthorizedForMessageMedia(request, path))) {
             return new Response("Not found", { status: 404 });
           }
+        } else if (folder === "recordings") {
+          if (!(await isAuthorizedForRecording(request, path))) {
+            return new Response("Not found", { status: 404 });
+          }
+        } else if (isAuthed) {
+          // Defensive: any future authed folder fails closed until it has a
+          // purpose-written authorisation check.
+          return new Response("Not found", { status: 404 });
         }
 
         const object = await getStorageProvider().get(path);
@@ -92,19 +99,13 @@ export const Route = createFileRoute("/api/public/media/$")({
  * references this attachment.
  */
 async function isAuthorizedForMessageMedia(request: Request, path: string): Promise<boolean> {
-  const authUserId = await verifiedAuthUserId(request);
-  if (!authUserId) return false;
+  const { identityFromRequest } = await import("@/lib/identity.server");
+  const identity = await identityFromRequest(request);
+  if (!identity) return false;
+  const { profileId, authUserId } = identity;
 
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const db = supabaseAdmin as any;
-
-  const { data: profile } = await db
-    .from("profiles")
-    .select("id")
-    .eq("auth_user_id", authUserId)
-    .maybeSingle();
-  const profileId = profile?.id;
-  if (!profileId) return false;
 
   const mediaUrl = `/api/public/media/${path}`;
   const { data: message } = await db
@@ -114,35 +115,53 @@ async function isAuthorizedForMessageMedia(request: Request, path: string): Prom
     .maybeSingle();
   if (!message) {
     // Legacy attachments uploaded before conversation linkage: fall back to
-    // "the caller owns the folder segment" (path is namespaced by uploader id).
+    // "the caller owns the folder segment". New uploads namespace the segment
+    // by profileId; pre-M3 uploads used the auth uid, so both are honoured
+    // during the grace period (plan §4.7).
     const segments = path.split("/");
-    return segments[1] === profileId;
+    return segments[1] === profileId || segments[1] === authUserId;
   }
 
   const convo = (message as any).conversations;
   return convo?.user_a === profileId || convo?.user_b === profileId;
 }
 
-/** Verify the request carries a valid Supabase session and return the auth user id. */
-async function verifiedAuthUserId(request: Request): Promise<string | null> {
-  const header = request.headers.get("authorization");
-  if (!header?.startsWith("Bearer ")) return null;
-  const token = header.slice("Bearer ".length).trim();
-  if (!token || token.split(".").length !== 3) return null;
+/**
+ * A Space recording may only be read by the host, an approved participant, or
+ * staff. The recording's public URL is stored on `spaces.recording_url`, so we
+ * resolve the owning Space from the path and check membership there rather
+ * than trusting the (auth-uid-namespaced) folder segment.
+ */
+async function isAuthorizedForRecording(request: Request, path: string): Promise<boolean> {
+  const { identityFromRequest } = await import("@/lib/identity.server");
+  const identity = await identityFromRequest(request);
+  if (!identity) return false;
+  const { profileId, authUserId } = identity;
 
-  const url = process.env["SUPABASE_URL"] || process.env["BACKEND_URL"];
-  const key = process.env["SUPABASE_PUBLISHABLE_KEY"] || process.env["BACKEND_PUBLISHABLE_KEY"];
-  if (!url || !key) return null;
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const db = supabaseAdmin as any;
 
-  try {
-    const { createClient } = await import("@supabase/supabase-js");
-    const supabase = createClient(url, key, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data, error } = await supabase.auth.getClaims(token);
-    if (error || !data?.claims?.sub) return null;
-    return String(data.claims.sub);
-  } catch {
-    return null;
+  const mediaUrl = `/api/public/media/${path}`;
+  const { data: space } = await db
+    .from("spaces")
+    .select("id, host_id, space_participants(user_id)")
+    .eq("recording_url", mediaUrl)
+    .maybeSingle();
+  if (!space) {
+    // Recording not (yet) attached to a Space row: fail closed except for the
+    // uploader owning the folder segment (profileId cannot equal the auth-uid
+    // segment, so this is effectively a safe 404 until finalize links the row).
+    return false;
   }
+  if (space.host_id === profileId) return true;
+  const participants: Array<{ user_id: string }> = space.space_participants ?? [];
+  if (participants.some((p) => p.user_id === profileId)) return true;
+
+  const { data: staff } = await db
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", authUserId)
+    .in("role", ["admin", "moderator"])
+    .maybeSingle();
+  return Boolean(staff);
 }

@@ -43,6 +43,7 @@ import { PaymentHistory } from "@/components/social/PaymentHistory";
 import { cn } from "@/lib/utils";
 
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 import { updateUserProfile, uploadMedia } from "@/lib/api-client";
 
 const AnalyticsDashboard = lazy(() =>
@@ -261,7 +262,7 @@ function SettingsPage() {
       toast.success("Profile photo updated!", { id: "avatar-upload" });
     } catch (err: any) {
       console.error("Avatar upload failed:", err);
-      toast.error(err?.message || "Could not upload photo. Please try again.", {
+      toast.error(friendlyError(err, "Could not upload photo. Please try again."), {
         id: "avatar-upload",
       });
     } finally {

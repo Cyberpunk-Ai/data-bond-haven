@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, Check, RefreshCw, Wallet, X } from "lucide-react";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 import { listPayoutRequests, reviewPayout } from "@/lib/payouts.functions";
 import { cn } from "@/lib/utils";
@@ -26,7 +27,7 @@ export function AdminPayoutsTab() {
     try {
       setRows(await listPayoutRequests());
     } catch (err: any) {
-      setError(err?.message || "We couldn't load withdrawal requests.");
+      setError(friendlyError(err, "We couldn't load withdrawal requests."));
     } finally {
       setLoading(false);
     }
@@ -56,7 +57,7 @@ export function AdminPayoutsTab() {
       );
       await load();
     } catch (err: any) {
-      toast.error(err?.message || "We couldn't update that withdrawal.");
+      toast.error(friendlyError(err, "We couldn't update that withdrawal."));
     } finally {
       setBusyId(null);
     }

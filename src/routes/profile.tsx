@@ -21,11 +21,13 @@ import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
 import { PostCard } from "@/components/social/PostCard";
 import { FeedSkeleton } from "@/components/social/PostSkeleton";
+import { TimeAgo } from "@/components/social/TimeAgo";
 import { DefaultRail } from "@/components/social/RightRail";
 import { EditProfileModal } from "@/components/social/EditProfileModal";
 import { TipModal } from "@/components/social/TipModal";
 import { compact } from "@/lib/formatters";
-import { currentUser as defaultUser, getProfile } from "@/lib/profile-service";
+import { currentUser as defaultUser, getProfile, fetchProfile } from "@/lib/profile-service";
+import { getProfileTabPosts } from "@/lib/profile.functions";
 import type { Post, Profile } from "@/lib/types";
 import {
   getPosts,
@@ -70,8 +72,8 @@ export const Route = createFileRoute("/profile")({
   component: ProfilePage,
 });
 
-const ownTabs = ["Posts", "Reposts", "Media", "Likes", "Analytics"] as const;
-const otherTabs = ["Posts", "Reposts", "Media"] as const;
+const ownTabs = ["Posts", "Replies", "Reposts", "Media", "Likes", "Analytics"] as const;
+const otherTabs = ["Posts", "Replies", "Reposts", "Media"] as const;
 
 function ProfilePage() {
   const navigate = useNavigate();
@@ -103,6 +105,8 @@ function ProfilePage() {
   const [isFollowing, setIsFollowing] = useState(false);
   const [followLoading, setFollowLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [replies, setReplies] = useState<any[]>([]);
+  const [repliesLoading, setRepliesLoading] = useState(false);
 
   useEffect(() => {
     setUserProfile(resolvedProfile);
@@ -148,6 +152,31 @@ function ProfilePage() {
       .catch((err) => console.warn("Failed loading profile details:", err))
       .finally(() => setLoading(false));
   }, [isMe, targetId]);
+
+  // The "Replies" tab is its own targeted server query (comments this profile
+  // made, joined to their parent post) rather than a client filter of the feed
+  // page — the backend already supports it (getProfileTabPosts), the UI didn't.
+  useEffect(() => {
+    if (tab !== "Replies" || !userProfile?.id || userProfile.id === "guest") return;
+    let active = true;
+    setRepliesLoading(true);
+    getProfileTabPosts({ data: { profileId: userProfile.id, tab: "replies", limit: 30 } })
+      .then(async (res) => {
+        const items = ((res as any)?.replies ?? []) as any[];
+        const authorIds = Array.from(
+          new Set(items.map((r) => r.post?.user_id).filter(Boolean) as string[]),
+        );
+        await Promise.all(authorIds.map((id) => fetchProfile(id).catch(() => null)));
+        if (active) setReplies(items);
+      })
+      .catch((err) => console.warn("Failed loading replies:", err))
+      .finally(() => {
+        if (active) setRepliesLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [tab, userProfile?.id]);
 
   const viewerId = useCurrentUserId();
   useEffect(() => {
@@ -464,6 +493,55 @@ function ProfilePage() {
             <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl bg-muted/40" />}>
               <AnalyticsDashboard />
             </Suspense>
+          ) : tab === "Replies" ? (
+            <>
+              {repliesLoading && replies.length === 0 && <FeedSkeleton />}
+              {!repliesLoading &&
+                replies.map((r) => {
+                  const parent = r.post ?? {};
+                  const parentAuthor = getProfile(parent.user_id);
+                  return (
+                    <Panel key={r.commentId} className="space-y-2.5 p-4 sm:p-5">
+                      <p className="whitespace-pre-wrap text-[0.95rem] leading-relaxed [overflow-wrap:anywhere]">
+                        {r.replyContent}
+                      </p>
+                      <Link
+                        to="/post/$id"
+                        params={{ id: parent.id }}
+                        className="block rounded-2xl border border-border/60 bg-foreground/[0.03] p-3 transition-colors hover:border-brand/40"
+                      >
+                        <p className="text-[11px] font-bold text-muted-foreground">
+                          in reply to {parentAuthor.display_name}
+                        </p>
+                        <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                          {parent.content}
+                        </p>
+                      </Link>
+                      <div className="flex items-center justify-between">
+                        <TimeAgo iso={r.repliedAt} className="text-[11px] text-muted-foreground" />
+                        <Link
+                          to="/post/$id"
+                          params={{ id: parent.id }}
+                          className="text-[11px] font-bold text-brand hover:underline"
+                        >
+                          View post
+                        </Link>
+                      </div>
+                    </Panel>
+                  );
+                })}
+              {!repliesLoading && replies.length === 0 && (
+                <Panel className="flex flex-col items-center gap-3 py-14 text-center">
+                  <MessageSquare className="h-8 w-8 text-muted-foreground" />
+                  <p className="font-bold">No replies yet</p>
+                  <p className="text-xs text-muted-foreground max-w-xs">
+                    {isMe
+                      ? "Comments you post on other people's threads will show up here."
+                      : `@${userProfile.username} hasn't replied to anyone yet.`}
+                  </p>
+                </Panel>
+              )}
+            </>
           ) : (
             <>
               {list.map((p, i) => (

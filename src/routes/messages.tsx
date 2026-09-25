@@ -39,7 +39,8 @@ import { AppShell } from "@/components/social/AppShell";
 import { Avatar } from "@/components/social/Avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TimeAgo, useLiveNow } from "@/components/social/TimeAgo";
-import { CallModal } from "@/components/social/CallModal";
+import { useCallDialer } from "@/components/calls/IncomingCallProvider";
+import { usePresenceMap } from "@/lib/presence";
 import { InfoModal } from "@/components/social/InfoModal";
 import { TipModal } from "@/components/social/TipModal";
 import { timeAgo } from "@/lib/formatters";
@@ -62,6 +63,7 @@ import { useAuth } from "@/lib/auth-state";
 import { useRealtime, emitRealtime } from "@/lib/realtime";
 import { cn, optimizeImageUrl } from "@/lib/utils";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 
 export const Route = createFileRoute("/messages")({
   validateSearch: (search: Record<string, unknown>): { user?: string; id?: string } => ({
@@ -592,92 +594,12 @@ function MessagesPage() {
 
   const [query, setQuery] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [activeCall, setActiveCall] = useState<{
-    user: Profile;
-    type: "audio" | "video";
-    callId: string | null;
-    role: "caller" | "callee";
-    status: "ringing" | "active";
-  } | null>(null);
-  const [incomingCall, setIncomingCall] = useState<{
-    user: Profile;
-    type: "audio" | "video";
-    callId: string;
-  } | null>(null);
-
-  // Start a real call: create the call record, then connect once answered.
-  async function beginCall(user: Profile, type: "audio" | "video") {
-    try {
-      const { createCall, endCall, subscribeCallStatus } = await import("@/lib/calls");
-      const row = await createCall(user.id, type);
-      if (!row) return;
-      setActiveCall({ user, type, callId: row.id, role: "caller", status: "ringing" });
-      const stop = subscribeCallStatus(row.id, (call) => {
-        if (call.status === "active") {
-          setActiveCall((c) => (c ? { ...c, status: "active" } : c));
-        } else if (call.status === "declined" || call.status === "ended") {
-          toast.info(call.status === "declined" ? "Call declined" : "Call ended");
-          setActiveCall(null);
-          stop();
-        }
-      });
-      // Stop ringing after 45 seconds with no answer.
-      setTimeout(() => {
-        setActiveCall((c) => {
-          if (c?.callId === row.id && c.status === "ringing") {
-            void endCall(row.id, 0);
-            toast.info("No answer");
-            return null;
-          }
-          return c;
-        });
-      }, 45_000);
-    } catch {
-      toast.error("Couldn't start the call.");
-    }
-  }
-
-  // Ring when someone calls this user. We never auto-answer — the callee gets
-  // an incoming-call prompt and must explicitly accept or decline.
-  useEffect(() => {
-    let stop = () => {};
-    let cancelled = false;
-    void (async () => {
-      const { subscribeIncomingCalls } = await import("@/lib/calls");
-      if (cancelled) return;
-      stop = subscribeIncomingCalls(async (call) => {
-        const res = await getUsers().catch(() => null);
-        const caller = (res?.profiles || []).find((u) => u.id === call.caller_id);
-        if (!caller) return;
-        setIncomingCall({ user: caller, type: call.kind, callId: call.id });
-      });
-    })();
-    return () => {
-      cancelled = true;
-      stop();
-    };
-  }, []);
-
-  async function acceptIncomingCall() {
-    if (!incomingCall) return;
-    const { answerCall } = await import("@/lib/calls");
-    await answerCall(incomingCall.callId);
-    setActiveCall({
-      user: incomingCall.user,
-      type: incomingCall.type,
-      callId: incomingCall.callId,
-      role: "callee",
-      status: "active",
-    });
-    setIncomingCall(null);
-  }
-
-  async function declineIncomingCall() {
-    if (!incomingCall) return;
-    const { declineCall } = await import("@/lib/calls");
-    await declineCall(incomingCall.callId).catch(() => {});
-    setIncomingCall(null);
-  }
+  // Calls are handled by the single global CallModal rendered inside
+  // <IncomingCallProvider> (mounted at the app root). This page only dials; the
+  // second, page-local copy of the ring/accept/modal UI here is what produced
+  // the duplicate call screen and shadowed the app-wide presence channel.
+  const { startCall } = useCallDialer();
+  const presence = usePresenceMap();
   const [showInfo, setShowInfo] = useState(false);
   const [showTipModal, setShowTipModal] = useState(false);
   const [showNewMsgModal, setShowNewMsgModal] = useState(false);
@@ -1079,7 +1001,7 @@ function MessagesPage() {
       // Never pretend an unsent message was delivered.
       setAll((prev) => prev.filter((m) => m.id !== tempId));
       setDraft(body);
-      toast.error(err?.message || "Message could not be sent");
+      toast.error(friendlyError(err, "Message could not be sent"));
     } finally {
       setSending(false);
     }
@@ -1293,7 +1215,7 @@ function MessagesPage() {
       } catch (err: any) {
         console.error("Attachment upload failed:", err);
         setAll((prev) => prev.filter((m) => m.id !== tempId));
-        toast.error(err?.message || `Could not send ${file.name}`, { id: `msg-upload-${i}` });
+        toast.error(friendlyError(err, `Could not send ${file.name}`), { id: `msg-upload-${i}` });
       }
     }
     e.target.value = "";
@@ -1403,7 +1325,7 @@ function MessagesPage() {
                           src={p.avatar_url}
                           className="h-11 w-11 text-xs"
                         />
-                        {c.online && (
+                        {presence[c.participant_id]?.online && (
                           <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-card" />
                         )}
                       </span>
@@ -1489,7 +1411,7 @@ function MessagesPage() {
                     {partner.display_name}
                   </Link>
                   <p className="truncate text-xs text-muted-foreground flex items-center gap-1.5">
-                    {active.online ? (
+                    {presence[partner.id]?.online ? (
                       <>
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 inline-block" />
                         <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
@@ -1513,14 +1435,14 @@ function MessagesPage() {
                   </button>
 
                   <button
-                    onClick={() => void beginCall(partner, "audio")}
+                    onClick={() => startCall(partner, "audio")}
                     aria-label="Start Voice Call"
                     className="rounded-full p-2 transition-all duration-300 hover:bg-foreground/5 hover:text-foreground min-h-[38px] min-w-[38px] flex items-center justify-center cursor-pointer"
                   >
                     <Phone className="h-4 w-4" />
                   </button>
                   <button
-                    onClick={() => void beginCall(partner, "video")}
+                    onClick={() => startCall(partner, "video")}
                     aria-label="Start Video Call"
                     className="rounded-full p-2 transition-all duration-300 hover:bg-foreground/5 hover:text-foreground min-h-[38px] min-w-[38px] flex items-center justify-center cursor-pointer"
                   >
@@ -2047,71 +1969,9 @@ function MessagesPage() {
         </div>
       )}
 
-      {/* Call Modal */}
-      {activeCall && (
-        <CallModal
-          partner={activeCall.user}
-          type={activeCall.type}
-          isOpen={Boolean(activeCall)}
-          callId={activeCall.callId}
-          role={activeCall.role}
-          callStatus={activeCall.status}
-          onClose={() => {
-            if (activeCall.callId) {
-              void import("@/lib/calls").then((m) => m.endCall(activeCall.callId!, 0));
-            }
-            setActiveCall(null);
-          }}
-        />
-      )}
-
-      {/* Incoming call ring — callee must explicitly accept or decline */}
-      {incomingCall && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Incoming ${incomingCall.type} call from ${incomingCall.user.display_name}`}
-        >
-          <div className="glass-panel w-full max-w-sm rounded-3xl border border-border/80 bg-card/95 p-6 text-center shadow-2xl">
-            <div className="mx-auto mb-4 w-fit">
-              <Avatar
-                src={incomingCall.user.avatar_url}
-                name={incomingCall.user.display_name}
-                className="h-20 w-20"
-              />
-            </div>
-            <p className="text-sm font-semibold text-foreground">
-              {incomingCall.user.display_name}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Incoming {incomingCall.type === "video" ? "video" : "audio"} call…
-            </p>
-            <div className="mt-6 flex items-center justify-center gap-4">
-              <button
-                type="button"
-                onClick={() => void declineIncomingCall()}
-                aria-label="Decline call"
-                className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500 text-white transition-transform hover:scale-105"
-              >
-                <X className="h-6 w-6" />
-              </button>
-              <button
-                type="button"
-                onClick={() => void acceptIncomingCall()}
-                aria-label="Accept call"
-                className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white transition-transform hover:scale-105"
-              >
-                {incomingCall.type === "video" ? (
-                  <Video className="h-6 w-6" />
-                ) : (
-                  <Phone className="h-6 w-6" />
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Active + incoming calls render through the single global CallModal in
+          <IncomingCallProvider>; a page-local copy here caused the duplicate
+          call screen. */}
 
       {/* Tip Modal */}
       {showTipModal && partner && (

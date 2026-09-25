@@ -25,8 +25,11 @@ import {
   ThumbsUp,
   ThumbsDown,
   ExternalLink,
+  CornerDownLeft,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { friendlyError } from "@/lib/error-messages";
 import { editPost } from "@/lib/post-edit.functions";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
@@ -36,13 +39,14 @@ import { ReportModal } from "@/components/social/ReportModal";
 import { ModernVideoPlayer } from "@/components/social/ModernVideoPlayer";
 import { compact } from "@/lib/formatters";
 import type { Post, Comment, Poll } from "@/lib/types";
-import { getProfile, useProfile, currentUser } from "@/lib/profile-service";
+import { getProfile, useProfile, currentUser, fetchProfile } from "@/lib/profile-service";
 import {
   toggleLikePost,
   toggleRepostPost,
   toggleBookmarkPost,
   recordPostImpression,
   addPostComment,
+  getPostComments,
   deletePost,
   votePoll,
   sendFeedFeedback,
@@ -243,7 +247,9 @@ function PostCardBase({
     });
     if (post.comments) {
       setCommentsList(post.comments);
+      commentsLoadedRef.current = true;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     post.id,
     post.likeCount,
@@ -342,8 +348,12 @@ function PostCardBase({
   const [showComments, setShowComments] = useState(false);
   const [showAllComments, setShowAllComments] = useState(false);
   const [commentsList, setCommentsList] = useState<Comment[]>(post.comments || []);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const commentsLoadedRef = useRef(Boolean(post.comments?.length));
   const [commentDraft, setCommentDraft] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [replyTarget, setReplyTarget] = useState<{ id: string; name: string } | null>(null);
+  const commentInputRef = useRef<HTMLInputElement | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [previewMediaUrl, setPreviewMediaUrl] = useState<string | null>(null);
@@ -384,6 +394,37 @@ function PostCardBase({
       observer.unobserve(videoEl);
     };
   }, [post.media_url]);
+
+  // Existing comments never ride along on the post payload, so the drawer would
+  // always open empty (the "comment reload" bug). Fetch the thread once, on first
+  // expand, and hydrate each commenter so names/avatars resolve.
+  useEffect(() => {
+    if (!showComments || commentsLoadedRef.current) return;
+    commentsLoadedRef.current = true;
+    let active = true;
+    setCommentsLoading(true);
+    getPostComments(post.id)
+      .then(async (rows) => {
+        const ids = Array.from(new Set(rows.map((r) => r.user_id)));
+        await Promise.all(ids.map((id) => fetchProfile(id).catch(() => null)));
+        if (!active) return;
+        setCommentsList((prev) => {
+          const seen = new Set(prev.map((c) => c.id));
+          return [...prev, ...rows.filter((r) => !seen.has(r.id))].sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+          );
+        });
+      })
+      .catch(() => {
+        commentsLoadedRef.current = false; // let a later retry re-open the fetch
+      })
+      .finally(() => {
+        if (active) setCommentsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [showComments, post.id]);
 
   // Poll interactive state
   const [poll, setPoll] = useState<Poll | undefined>(post.poll || undefined);
@@ -473,7 +514,7 @@ function PostCardBase({
     setSubmittingComment(true);
     const text = commentDraft.trim();
     try {
-      const res = await addPostComment(post.id, text);
+      const res = await addPostComment(post.id, text, replyTarget?.id ?? null);
       const newComment = res.comment as Comment;
       // The same comment also arrives through the realtime bridge, so only add
       // it when it isn't already in the list.
@@ -481,12 +522,138 @@ function PostCardBase({
         prev.some((c) => c.id === newComment.id) ? prev : [...prev, newComment],
       );
       setCommentDraft("");
+      setReplyTarget(null);
       toast.success("Comment added");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not add your comment");
+      toast.error(friendlyError(err, "Could not add your comment"));
     } finally {
       setSubmittingComment(false);
     }
+  }
+
+  // Group stored replies under their top-level parent so the UI shows a single
+  // level of threading (a reply to a reply still renders beneath the root).
+  function renderCommentThreads() {
+    const byId = new Map(commentsList.map((c) => [c.id, c]));
+    const isTopLevel = (c: Comment) => !c.parent_id || !byId.has(c.parent_id);
+    const rootOf = (c: Comment): string => {
+      let cur = c;
+      const guard = new Set<string>();
+      while (cur.parent_id && byId.has(cur.parent_id) && !guard.has(cur.id)) {
+        guard.add(cur.id);
+        cur = byId.get(cur.parent_id)!;
+      }
+      return cur.id;
+    };
+    const byDate = (a: Comment, b: Comment) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+
+    const topLevel = commentsList.filter(isTopLevel).sort(byDate);
+    const repliesByRoot = new Map<string, Comment[]>();
+    for (const c of commentsList) {
+      if (isTopLevel(c)) continue;
+      const root = rootOf(c);
+      const arr = repliesByRoot.get(root) ?? [];
+      arr.push(c);
+      repliesByRoot.set(root, arr);
+    }
+
+    const renderRow = (c: Comment, isReply: boolean) => {
+      const cAuthor = getProfile(c.user_id);
+      return (
+        <div
+          key={c.id}
+          className={cn("flex items-start gap-2.5 text-xs", isReply && "ml-6 sm:ml-9")}
+        >
+          <Link
+            to="/profile"
+            search={{ id: cAuthor.id, user: cAuthor.username }}
+            className="shrink-0 mt-0.5 transition-transform hover:scale-105 active:scale-95"
+          >
+            <Avatar
+              name={cAuthor.display_name}
+              src={cAuthor.avatar_url}
+              className={cn("text-[0.6rem] shrink-0", isReply ? "h-6 w-6" : "h-7 w-7")}
+            />
+          </Link>
+          <div className="flex-1 rounded-2xl bg-foreground/5 p-2.5">
+            <div className="flex items-baseline justify-between gap-1">
+              <Link
+                to="/profile"
+                search={{ id: cAuthor.id, user: cAuthor.username }}
+                className="font-bold inline-flex items-center gap-1 hover:text-brand transition-colors"
+              >
+                {cAuthor.display_name}
+                <UserBadge
+                  plan={cAuthor.plan}
+                  verified={cAuthor.verified}
+                  isMe={c.user_id === currentUser.id}
+                  size="xs"
+                />
+              </Link>
+              <TimeAgo iso={c.created_at} className="text-[10px] text-muted-foreground" />
+            </div>
+            <div className="mt-1 text-foreground/90 leading-relaxed">
+              <ClampText text={c.content} lines={4} limit={240} render={renderContentWithLinks} />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setReplyTarget((prev) =>
+                  prev?.id === c.id ? null : { id: c.id, name: cAuthor.username },
+                );
+                commentInputRef.current?.focus();
+              }}
+              className="mt-1.5 inline-flex items-center gap-1 text-[0.7rem] font-bold text-muted-foreground hover:text-brand transition-colors cursor-pointer"
+            >
+              <CornerDownLeft className="h-3 w-3" /> Reply
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    const visible = showAllComments ? topLevel : topLevel.slice(0, 3);
+
+    return (
+      <>
+        {commentsLoading && commentsList.length === 0 && (
+          <p className="text-xs text-muted-foreground py-2 text-center">Loading comments…</p>
+        )}
+        {visible.map((root) => (
+          <div key={root.id} className="space-y-2">
+            {renderRow(root, false)}
+            {(repliesByRoot.get(root.id) ?? []).sort(byDate).map((r) => renderRow(r, true))}
+          </div>
+        ))}
+
+        {topLevel.length > 3 && !showAllComments && (
+          <button
+            type="button"
+            onClick={() => setShowAllComments(true)}
+            className="w-full text-center text-xs font-bold text-brand hover:text-brand-pink hover:underline py-2 transition-all"
+          >
+            Show all {commentsList.length} comments
+          </button>
+        )}
+
+        {topLevel.length > 3 && showAllComments && (
+          <button
+            type="button"
+            onClick={() => setShowAllComments(false)}
+            className="w-full text-center text-xs font-bold text-brand hover:text-brand-pink hover:underline py-2 transition-all"
+          >
+            Collapse comments
+          </button>
+        )}
+
+        {commentsList.length === 0 && !commentsLoading && (
+          <p className="text-xs text-muted-foreground py-2 text-center">
+            No comments yet. Start the conversation!
+          </p>
+        )}
+      </>
+    );
   }
 
   function handleShare() {
@@ -512,7 +679,7 @@ function PostCardBase({
       onDeleted?.(post.id);
       toast.success("Post deleted");
     } catch (err: any) {
-      toast.error("Failed to delete post: " + (err.message || "Error"));
+      toast.error(friendlyError(err, "We couldn't delete that post. Please try again."));
     }
   }
 
@@ -534,7 +701,7 @@ function PostCardBase({
       toast.success("Post updated");
       emitRealtimeUpdate();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update post");
+      toast.error(friendlyError(err, "Couldn't update the post. Please try again."));
     } finally {
       setSavingEdit(false);
     }
@@ -1020,7 +1187,7 @@ function PostCardBase({
         <Action
           icon={MessageCircle}
           label="Comment"
-          count={commentsList.length}
+          count={commentsList.length || post.commentCount}
           active={showComments}
           activeClass="text-sky-500"
           onClick={() => setShowComments(!showComments)}
@@ -1058,79 +1225,24 @@ function PostCardBase({
             Comments ({commentsList.length})
           </h4>
 
-          {/* Comments List */}
+          {/* Comments List — one-level threading: replies render beneath their parent */}
           <div className="space-y-3 max-h-72 overflow-y-auto custom-scrollbar pr-1.5">
-            {(showAllComments ? commentsList : commentsList.slice(0, 3)).map((c) => {
-              const cAuthor = getProfile(c.user_id);
-              return (
-                <div key={c.id} className="flex items-start gap-2.5 text-xs">
-                  <Link
-                    to="/profile"
-                    search={{ id: cAuthor.id, user: cAuthor.username }}
-                    className="shrink-0 mt-0.5 transition-transform hover:scale-105 active:scale-95"
-                  >
-                    <Avatar
-                      name={cAuthor.display_name}
-                      src={cAuthor.avatar_url}
-                      className="h-7 w-7 text-[0.6rem] shrink-0"
-                    />
-                  </Link>
-                  <div className="flex-1 rounded-2xl bg-foreground/5 p-2.5">
-                    <div className="flex items-baseline justify-between gap-1">
-                      <Link
-                        to="/profile"
-                        search={{ id: cAuthor.id, user: cAuthor.username }}
-                        className="font-bold inline-flex items-center gap-1 hover:text-brand transition-colors"
-                      >
-                        {cAuthor.display_name}
-                        <UserBadge
-                          plan={cAuthor.plan}
-                          verified={cAuthor.verified}
-                          isMe={c.user_id === currentUser.id}
-                          size="xs"
-                        />
-                      </Link>
-                      <TimeAgo iso={c.created_at} className="text-[10px] text-muted-foreground" />
-                    </div>
-                    <div className="mt-1 text-foreground/90 leading-relaxed">
-                      <ClampText
-                        text={c.content}
-                        lines={4}
-                        limit={240}
-                        render={renderContentWithLinks}
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-
-            {commentsList.length > 3 && !showAllComments && (
-              <button
-                type="button"
-                onClick={() => setShowAllComments(true)}
-                className="w-full text-center text-xs font-bold text-brand hover:text-brand-pink hover:underline py-2 transition-all"
-              >
-                Show all {commentsList.length} comments
-              </button>
-            )}
-
-            {commentsList.length > 3 && showAllComments && (
-              <button
-                type="button"
-                onClick={() => setShowAllComments(false)}
-                className="w-full text-center text-xs font-bold text-brand hover:text-brand-pink hover:underline py-2 transition-all"
-              >
-                Collapse comments
-              </button>
-            )}
-
-            {commentsList.length === 0 && (
-              <p className="text-xs text-muted-foreground py-2 text-center">
-                No comments yet. Start the conversation!
-              </p>
-            )}
+            {renderCommentThreads()}
           </div>
+
+          {replyTarget && (
+            <div className="flex items-center justify-between gap-2 rounded-2xl border border-brand/20 bg-brand/10 px-3 py-1.5 text-[0.7rem] font-semibold text-brand">
+              <span className="truncate">Replying to @{replyTarget.name}</span>
+              <button
+                type="button"
+                onClick={() => setReplyTarget(null)}
+                aria-label="Cancel reply"
+                className="shrink-0 rounded-full p-0.5 hover:bg-brand/20 cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Add comment input */}
           <form onSubmit={handleCommentSubmit} className="flex items-center gap-2 pt-1">
@@ -1146,10 +1258,11 @@ function PostCardBase({
               />
             </Link>
             <input
+              ref={commentInputRef}
               type="text"
               value={commentDraft}
               onChange={(e) => setCommentDraft(e.target.value)}
-              placeholder="Write a reply..."
+              placeholder={replyTarget ? `Reply to @${replyTarget.name}...` : "Write a comment..."}
               className="flex-1 rounded-full bg-foreground/5 px-4 py-2 text-xs outline-none border border-transparent focus:border-brand/40"
             />
             <button

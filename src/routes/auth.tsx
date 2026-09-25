@@ -1,10 +1,12 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Loader2, Sparkles, CheckCircle2, ArrowRight } from "lucide-react";
-import React, { useState } from "react";
+import { Loader2, CheckCircle2, ArrowRight } from "lucide-react";
+import { BrandLogo } from "@/components/BrandLogo";
+import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
 import { setLoggedOut, useAuth } from "@/lib/auth-state";
+import { friendlyError } from "@/lib/error-messages";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/auth")({
@@ -49,7 +51,8 @@ function friendlyAuthError(message: string): string {
     return "Too many attempts. Please wait a minute and try again.";
   if (m.includes("unsupported provider") || m.includes("provider is not enabled"))
     return "Google sign-in isn't available right now. Use your email and password instead.";
-  return message;
+  // Never surface raw provider/technical text — degrade gracefully.
+  return friendlyError(message, "We couldn't complete that step. Please try again.");
 }
 
 function AuthPage() {
@@ -62,7 +65,18 @@ function AuthPage() {
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [checkInbox, setCheckInbox] = useState<false | "confirm" | "link">(false);
+  const [checkInbox, setCheckInbox] = useState<false | "confirm" | "link" | "reset">(false);
+  // A recovery link from the "forgot password" email lands here with a
+  // PASSWORD_RECOVERY session; we then swap the form for a set-new-password one.
+  const [recovering, setRecovering] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") setRecovering(true);
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
 
   async function handleGoogle() {
     setBusy(true);
@@ -178,29 +192,118 @@ function AuthPage() {
     }
   }
 
+  /** Send a password-reset link to the entered email. */
+  async function handleForgotPassword() {
+    const address = email.trim();
+    if (!address) {
+      toast.error("Please type your email above first");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(address, {
+        redirectTo: `${window.location.origin}/auth`,
+      });
+      if (error) {
+        toast.error(friendlyAuthError(error.message));
+        return;
+      }
+      setCheckInbox("reset");
+      toast.success("Reset link sent — check your inbox.");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? friendlyAuthError(err.message) : "Could not send the reset link",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Complete recovery: set a new password on the authenticated recovery session. */
+  async function handleResetSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      toast.error("Your password must be at least 6 characters");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) {
+        toast.error(friendlyAuthError(error.message));
+        return;
+      }
+      toast.success("Password updated — welcome back!");
+      setRecovering(false);
+      setNewPassword("");
+      void navigate({ to: "/" });
+    } catch (err) {
+      toast.error(err instanceof Error ? friendlyAuthError(err.message) : "Could not update password");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
       <div className="w-full max-w-sm rounded-3xl border border-border/80 bg-card p-6 shadow-soft transition-all">
         {/* Header */}
         <div className="mb-6 flex items-center gap-2.5">
-          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-brand to-brand-pink text-white shadow-sm">
-            <Sparkles className="h-5 w-5" />
-          </span>
+          <BrandLogo className="h-10 w-10 shadow-sm" />
           <div>
             <h1 className="text-xl font-black tracking-tight text-foreground">
-              {isLoggedIn ? "Account Active" : mode === "signin" ? "Welcome back" : "Join Spaces1"}
+              {recovering
+                ? "Reset your password"
+                : isLoggedIn
+                  ? "Account Active"
+                  : mode === "signin"
+                    ? "Welcome back"
+                    : "Join Spaces1"}
             </h1>
             <p className="text-xs text-muted-foreground">
-              {isLoggedIn
-                ? "You are currently signed in"
-                : mode === "signin"
-                  ? "Sign in to post, chat & go live"
-                  : "Create an account in seconds"}
+              {recovering
+                ? "Choose a new password to secure your account"
+                : isLoggedIn
+                  ? "You are currently signed in"
+                  : mode === "signin"
+                    ? "Sign in to post, chat & go live"
+                    : "Create an account in seconds"}
             </p>
           </div>
         </div>
 
-        {isLoggedIn && user ? (
+        {recovering ? (
+          <form onSubmit={handleResetSubmit} className="space-y-3">
+            <div>
+              <label
+                htmlFor="auth-new-password"
+                className="block text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-1"
+              >
+                New Password
+              </label>
+              <input
+                id="auth-new-password"
+                type="password"
+                required
+                minLength={6}
+                autoComplete="new-password"
+                autoFocus
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="At least 6 characters"
+                className="w-full rounded-2xl bg-foreground/5 px-4 py-2.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-brand placeholder:text-muted-foreground/60 border border-transparent focus:border-brand/40"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={busy}
+              className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-brand to-brand-pink py-2.5 text-sm font-bold text-white shadow-sm hover:opacity-95 active:scale-98 disabled:opacity-60 transition-all cursor-pointer"
+            >
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+              Update password
+            </button>
+          </form>
+        ) : isLoggedIn && user ? (
           <div className="space-y-4">
             <div className="flex items-center gap-3 rounded-2xl border border-border/60 bg-muted/30 p-3.5">
               {user.avatar_url ? (
@@ -314,11 +417,17 @@ function AuthPage() {
                     <span className="font-bold text-foreground">{email}</span>. Open it to activate
                     your account, then come back and sign in.
                   </>
+                ) : checkInbox === "reset" ? (
+                  <>
+                    We sent a password-reset link to{" "}
+                    <span className="font-bold text-foreground">{email}</span>. Open it on this device
+                    to choose a new password.
+                  </>
                 ) : (
                   <>
                     We sent a sign-in link to{" "}
-                    <span className="font-bold text-foreground">{email}</span>. Open it on this
-                    device to finish signing in.
+                    <span className="font-bold text-foreground">{email}</span>. Open it on this device
+                    to finish signing in.
                   </>
                 )}
               </div>
@@ -404,6 +513,19 @@ function AuthPage() {
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                 {mode === "signin" ? "Sign in" : "Create account"}
               </button>
+
+              {mode === "signin" && (
+                <div className="text-center">
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    disabled={busy}
+                    className="text-[11px] font-semibold text-brand hover:underline cursor-pointer disabled:opacity-60"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
             </form>
 
             <p className="mt-4 text-center text-[11px] leading-relaxed text-muted-foreground">
