@@ -168,20 +168,29 @@ function AdminPage() {
           />
         </Suspense>
       )}
-      {tab === "overview" && !overview && (
+      {tab === "overview" && !overview && refreshing && (
+        <div className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-28 animate-pulse rounded-2xl border border-border bg-card" />
+            ))}
+          </div>
+          <div className="h-64 animate-pulse rounded-2xl border border-border bg-card" />
+          <p className="text-center text-xs font-semibold text-muted-foreground">
+            Fetching the latest numbers…
+          </p>
+        </div>
+      )}
+      {tab === "overview" && !overview && !refreshing && (
         <div className="rounded-2xl border border-border bg-card p-8 text-center">
           <p className="text-sm font-bold">We couldn't load the dashboard stats.</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {refreshing ? "Fetching the latest numbers…" : "Check your connection and try again."}
-          </p>
-          {!refreshing && (
-            <button
-              onClick={() => void load()}
-              className="mt-4 rounded-full bg-brand px-4 py-2 text-xs font-bold text-white hover:opacity-90 transition-opacity cursor-pointer"
-            >
-              Try again
-            </button>
-          )}
+          <p className="mt-1 text-xs text-muted-foreground">Check your connection and try again.</p>
+          <button
+            onClick={() => void load()}
+            className="mt-4 rounded-full bg-brand px-4 py-2 text-xs font-bold text-white hover:opacity-90 transition-opacity cursor-pointer"
+          >
+            Try again
+          </button>
         </div>
       )}
       {tab === "users" && <AdminUsersTab activeRole={activeRole} currentUserId={profile.id} />}

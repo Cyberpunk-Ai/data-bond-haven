@@ -1,5 +1,17 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { useState, useEffect, useRef, type ReactNode } from "react";
+import { toast } from "sonner";
+
+/** True only after the first client paint. SSR and the very first client render
+ * both see `false`, so anything gated behind it renders a neutral placeholder on
+ * the server and swaps in real user data afterwards — this avoids the auth-driven
+ * hydration mismatch where SSR knows the visitor as a guest but the client has
+ * already resolved a session. */
+function useMounted() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  return mounted;
+}
 import {
   Home,
   Compass,
@@ -83,11 +95,14 @@ function Sidebar({
   onNavigate,
   unreadMessages = 0,
   unreadNotifications = 0,
+  showThemeToggle = true,
 }: {
   onNavigate?: () => void;
   unreadMessages?: number;
   unreadNotifications?: number;
+  showThemeToggle?: boolean;
 }) {
+  const mounted = useMounted();
   const { currentPlan, isPlus, isPro } = usePlan();
   const { user, signOut } = useAuth();
   const { isDark, toggleTheme, accent: currentAccent, setAccent } = useTheme();
@@ -126,18 +141,20 @@ function Sidebar({
           <BrandLogo className="h-9 w-9" />
           <span className="text-2xl font-extrabold tracking-tight">Spaces1</span>
         </Link>
-        <button
-          onClick={toggleTheme}
-          title={isDark ? "Switch to light theme" : "Switch to dark theme"}
-          aria-label="Toggle theme"
-          className="rounded-xl p-2 text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors cursor-pointer"
-        >
-          {isDark ? (
-            <Sun className="h-4.5 w-4.5 text-amber-400" />
-          ) : (
-            <Moon className="h-4.5 w-4.5" />
-          )}
-        </button>
+        {showThemeToggle && (
+          <button
+            onClick={toggleTheme}
+            title={isDark ? "Switch to light theme" : "Switch to dark theme"}
+            aria-label="Toggle theme"
+            className="rounded-xl p-2 text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors cursor-pointer"
+          >
+            {isDark ? (
+              <Sun className="h-4.5 w-4.5 text-amber-400" />
+            ) : (
+              <Moon className="h-4.5 w-4.5" />
+            )}
+          </button>
+        )}
       </div>
 
       {/* Theme Accent Picker Strip */}
@@ -226,34 +243,47 @@ function Sidebar({
         </div>
       )}
 
-      <WorkspaceSwitcher />
+      <WorkspaceSwitcher mounted={mounted} />
       <div className="mt-auto pt-4">
         <Link
           to="/profile"
           onClick={onNavigate}
           className="glass-panel flex items-center gap-3 rounded-2xl p-3 transition-all duration-300 hover:shadow-soft hover:bg-foreground/5"
         >
-          <Avatar
-            name={activeUser.display_name}
-            src={activeUser.avatar_url}
-            className={cn(
-              "h-10 w-10 text-xs",
-              isPro
-                ? "ring-2 ring-amber-400"
-                : isPlus
-                  ? "ring-2 ring-violet-500"
-                  : "ring-1 ring-border",
-            )}
-          />
+          {mounted ? (
+            <Avatar
+              name={activeUser.display_name}
+              src={activeUser.avatar_url}
+              className={cn(
+                "h-10 w-10 text-xs",
+                isPro
+                  ? "ring-2 ring-amber-400"
+                  : isPlus
+                    ? "ring-2 ring-violet-500"
+                    : "ring-1 ring-border",
+              )}
+            />
+          ) : (
+            <span className="h-10 w-10 shrink-0 animate-pulse rounded-full bg-foreground/10 ring-1 ring-border" />
+          )}
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <p className="truncate text-sm font-bold">{activeUser.display_name}</p>
-              <UserBadge isMe verified={activeUser.verified} size="xs" />
-            </div>
-            <p className="truncate text-xs text-muted-foreground">@{activeUser.username}</p>
+            {mounted ? (
+              <>
+                <div className="flex items-center gap-1.5">
+                  <p className="truncate text-sm font-bold">{activeUser.display_name}</p>
+                  <UserBadge isMe verified={activeUser.verified} size="xs" />
+                </div>
+                <p className="truncate text-xs text-muted-foreground">@{activeUser.username}</p>
+              </>
+            ) : (
+              <>
+                <span className="block h-3.5 w-24 animate-pulse rounded bg-foreground/10" />
+                <span className="mt-1.5 block h-3 w-16 animate-pulse rounded bg-foreground/10" />
+              </>
+            )}
           </div>
         </Link>
-        {user ? (
+        {mounted && user ? (
           <button
             onClick={() => {
               void signOut();
@@ -277,7 +307,7 @@ function Sidebar({
   );
 }
 
-function WorkspaceSwitcher() {
+function WorkspaceSwitcher({ mounted = true }: { mounted?: boolean }) {
   const { workspaces, activeWsId, isPersonal, setActiveWsId } = useWorkspace();
   if (!workspaces.length) return null;
   return (
@@ -287,13 +317,25 @@ function WorkspaceSwitcher() {
       </label>
       <select
         value={activeWsId}
-        onChange={(e) => setActiveWsId(e.target.value)}
+        onChange={(e) => {
+          const id = e.target.value;
+          setActiveWsId(id);
+          const ws = workspaces.find((w) => w.id === id);
+          toast.success(
+            ws
+              ? `Now posting as ${ws.logoEmoji} ${ws.name}${
+                  ws.myRole && ws.myRole !== "Viewer" ? "" : " (view only)"
+                }`
+              : "Switched back to your personal account",
+          );
+        }}
         className="w-full rounded-2xl border border-border/70 bg-foreground/[0.03] px-3 py-2 text-xs font-bold outline-none focus:border-brand"
       >
-        <option value="personal">👤 {currentUser.display_name || "Personal"}</option>
+        <option value="personal">👤 {mounted ? currentUser.display_name || "Personal" : "Personal"}</option>
         {workspaces.map((ws) => (
-          <option key={ws.id} value={ws.id}>
+          <option key={ws.id} value={ws.id} disabled={ws.myRole === "Viewer"}>
             {ws.logoEmoji} {ws.name}
+            {ws.myRole ? ` · ${ws.myRole}` : ""}
           </option>
         ))}
       </select>
@@ -311,6 +353,7 @@ export function AppShell({
   title: string;
 }) {
   const [open, setOpen] = useState(false);
+  const mounted = useMounted();
   const { user } = useAuth();
   const activeUser = user || currentUser;
   const { notifications: unreadNotifications, messages: unreadMessages } = useUnreadCounts();
@@ -379,11 +422,15 @@ export function AppShell({
             to="/profile"
             className="flex items-center gap-1.5 transition-transform active:scale-95"
           >
-            <Avatar
-              name={activeUser.display_name}
-              src={activeUser.avatar_url}
-              className="h-8 w-8 text-[0.65rem] ring-1 ring-brand/40"
-            />
+            {mounted ? (
+              <Avatar
+                name={activeUser.display_name}
+                src={activeUser.avatar_url}
+                className="h-8 w-8 text-[0.65rem] ring-1 ring-brand/40"
+              />
+            ) : (
+              <span className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-foreground/10 ring-1 ring-brand/40" />
+            )}
           </Link>
         </div>
 
@@ -441,6 +488,7 @@ export function AppShell({
             onNavigate={() => setOpen(false)}
             unreadMessages={unreadMessages}
             unreadNotifications={unreadNotifications}
+            showThemeToggle={false}
           />
         </aside>
       </div>

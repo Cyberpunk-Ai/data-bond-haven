@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Users, UserPlus, Shield, Trash2, Lock, Crown, Check, Mail, Building } from "lucide-react";
-import { useWorkspace, type WorkspaceRole } from "@/lib/workspace-state";
+import { Users, UserPlus, Shield, Trash2, Lock, Crown, Check, Mail, Building, Pencil } from "lucide-react";
+import { useWorkspace, type Workspace, type WorkspaceRole } from "@/lib/workspace-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { Avatar } from "@/components/social/Avatar";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,8 @@ export function TeamWorkspaceManager() {
     inviteMember,
     removeMember,
     updateMemberRole,
+    canManage,
+    updateWorkspaceProfile,
   } = useWorkspace();
 
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
@@ -157,6 +159,18 @@ export function TeamWorkspaceManager() {
         </div>
       </div>
 
+      {/* Workspace profile editor — writes name/bio/emoji to the shared brand
+          account. Only Owner/Admin can open it; the update itself is re-checked
+          server-side by the "workspaces owner update" RLS policy. */}
+      {canManage && (
+        <WorkspaceProfileEditor
+          workspace={activeWorkspace}
+          onSave={updateWorkspaceProfile}
+          onSwitchTo={(id) => setActiveWsId(id)}
+          allWorkspaces={workspaces}
+        />
+      )}
+
       {/* Team Roster */}
       <div className="rounded-3xl border border-border/80 bg-card p-5 md:p-6 space-y-4 shadow-soft">
         <div className="flex items-center justify-between">
@@ -208,8 +222,7 @@ export function TeamWorkspaceManager() {
                   >
                     <option value="Admin">Admin</option>
                     <option value="Editor">Editor</option>
-                    <option value="Analyst">Analyst</option>
-                    <option value="Contributor">Contributor</option>
+                    <option value="Viewer">Viewer</option>
                   </select>
                 )}
 
@@ -295,7 +308,7 @@ export function TeamWorkspaceManager() {
                   Assign Role
                 </label>
                 <div className="grid grid-cols-2 gap-2">
-                  {(["Editor", "Admin", "Analyst", "Contributor"] as WorkspaceRole[]).map((r) => (
+                  {(["Admin", "Editor", "Viewer"] as WorkspaceRole[]).map((r) => (
                     <button
                       key={r}
                       type="button"
@@ -338,13 +351,144 @@ export function TeamWorkspaceManager() {
 }
 
 /**
+ * Inline editor for a team's shared brand profile (display name, bio, logo).
+ * Rendered only for Owner/Admin; every save is routed through the RLS-guarded
+ * `workspaces` UPDATE policy so a granted-but-not-manager member can never
+ * mutate it even by hitting the API directly.
+ */
+function WorkspaceProfileEditor({
+  workspace,
+  onSave,
+}: {
+  workspace: Workspace;
+  onSave: (patch: { name?: string; bio?: string; logoEmoji?: string }) => Promise<void>;
+  onSwitchTo?: (id: string) => void;
+  allWorkspaces?: Workspace[];
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(workspace.name);
+  const [bio, setBio] = useState(workspace.bio);
+  const [logoEmoji, setLogoEmoji] = useState(workspace.logoEmoji);
+  const [saving, setSaving] = useState(false);
+
+  const reset = () => {
+    setName(workspace.name);
+    setBio(workspace.bio);
+    setLogoEmoji(workspace.logoEmoji);
+    setEditing(false);
+  };
+
+  const save = async () => {
+    if (!name.trim()) {
+      toast.error("Workspace needs a name.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave({ name: name.trim(), bio: bio.trim(), logoEmoji: logoEmoji.trim() || "✨" });
+      toast.success("Workspace profile updated.");
+      setEditing(false);
+    } catch (err) {
+      toast.error(friendlyError(err, "Could not save the workspace profile."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-3xl border border-border/80 bg-card p-5 md:p-6 space-y-4 shadow-soft">
+      <div className="flex items-center justify-between">
+        <h3 className="text-base font-bold flex items-center gap-2">
+          <Building className="h-4 w-4 text-amber-500" />
+          <span>Workspace Profile</span>
+        </h3>
+        {!editing && (
+          <button
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-bold text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors cursor-pointer"
+          >
+            <Pencil className="h-3.5 w-3.5" /> Edit profile
+          </button>
+        )}
+      </div>
+
+      {!editing ? (
+        <div className="space-y-1">
+          {bio ? (
+            <p className="text-sm text-muted-foreground leading-relaxed">{bio}</p>
+          ) : (
+            <p className="text-sm text-muted-foreground italic">
+              No description yet — add one so teammates know what this account posts.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-[4rem_1fr]">
+            <div>
+              <label className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
+                Logo
+              </label>
+              <input
+                value={logoEmoji}
+                onChange={(e) => setLogoEmoji(e.target.value)}
+                maxLength={2}
+                className="mt-1 h-10 w-full rounded-xl border border-border bg-muted/40 text-center text-xl outline-none focus:border-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
+                Display name
+              </label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-border bg-muted/40 px-3 py-2 text-sm font-semibold outline-none focus:border-amber-500"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
+              Bio
+            </label>
+            <textarea
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              rows={2}
+              maxLength={280}
+              placeholder="What does this team account post about?"
+              className="mt-1 w-full resize-none rounded-xl border border-border bg-muted/40 px-3 py-2 text-sm outline-none focus:border-amber-500"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={reset}
+              className="rounded-full px-4 py-2 text-xs font-bold text-muted-foreground hover:bg-foreground/5 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={save}
+              disabled={saving}
+              className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-5 py-2 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all cursor-pointer disabled:opacity-60"
+            >
+              {saving ? "Saving…" : <><Check className="h-3.5 w-3.5" /> Save profile</>}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Locked preview shown to everyone below the Pro plan. It intentionally renders
  * no real workspace data (no roster, seats, or member emails) — just a sample
  * showcase and an upgrade path — so the Settings tab behaves like the gated
  * Developer API preview rather than exposing the live manager to non-Pro users.
  */
 function WorkspacePreview() {
-  const roles = ["Admin", "Editor", "Analyst", "Contributor"];
+  const roles = ["Admin", "Editor", "Viewer"];
   const features = [
     {
       icon: UserPlus,

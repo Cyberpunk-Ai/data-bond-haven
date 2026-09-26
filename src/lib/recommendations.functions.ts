@@ -177,16 +177,47 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       };
     }
 
-    // Plan-based discovery boost: paid creators reach further, free still reaches.
+    // Plan-based discovery boost: paid creators AND paid team workspaces reach
+    // further; free still reaches. A workspace post inherits the boost from the
+    // workspace's own plan, falling back to its owner's personal plan when the
+    // workspace itself is on the free tier — so a Pro/Plus account boosts the
+    // reach of the team brand it posts under, not just its personal handle.
+    const planFactor = (plan?: string | null) =>
+      plan === "pro" ? 1.35 : plan === "plus" ? 1.18 : 1;
     const authorIds = [...new Set(rows.map((r: any) => r.user_id))];
+    const wsIds = [...new Set(rows.map((r: any) => r.workspace_id).filter(Boolean))];
     const planBoost = new Map<string, number>();
+    const wsBoost = new Map<string, number>();
     if (authorIds.length) {
       const { data: plans } = await supabase
         .from("profiles")
         .select("id, plan")
         .in("id", authorIds);
-      for (const p of plans ?? []) {
-        planBoost.set(p.id, p.plan === "pro" ? 1.35 : p.plan === "plus" ? 1.18 : 1);
+      for (const p of plans ?? []) planBoost.set(p.id, planFactor(p.plan));
+    }
+    if (wsIds.length) {
+      const { data: wsRows } = await supabase
+        .from("workspaces")
+        .select("id, plan, owner_id")
+        .in("id", wsIds);
+      const ownerIds = [
+        ...new Set(
+          (wsRows ?? [])
+            .filter((w: any) => !w.plan || w.plan === "free")
+            .map((w: any) => w.owner_id),
+        ),
+      ];
+      const ownerPlan = new Map<string, string>();
+      if (ownerIds.length) {
+        const { data: op } = await supabase
+          .from("profiles")
+          .select("id, plan")
+          .in("id", ownerIds);
+        for (const p of op ?? []) ownerPlan.set(p.id, p.plan);
+      }
+      for (const w of wsRows ?? []) {
+        const eff = w.plan && w.plan !== "free" ? w.plan : ownerPlan.get(w.owner_id);
+        wsBoost.set(w.id, planFactor(eff));
       }
     }
 
@@ -225,10 +256,12 @@ export const getForYouPosts = createServerFn({ method: "GET" })
         const seenPenalty = seenTimes > 0 && !engagedWeight.has(row.id) ? -1.5 * seenTimes : 0;
 
         const base = authorScore + tagScore + relationship + quality;
-        const score =
-          (base * (0.35 + decay) + decay * 2) * (planBoost.get(row.user_id) ?? 1) +
-          ownPenalty +
-          seenPenalty;
+        // Paid team workspaces boost by the workspace (or its owner's) plan;
+        // personal posts boost by the author's plan.
+        const reachBoost = row.workspace_id
+          ? (wsBoost.get(row.workspace_id) ?? planBoost.get(row.user_id) ?? 1)
+          : (planBoost.get(row.user_id) ?? 1);
+        const score = (base * (0.35 + decay) + decay * 2) * reachBoost + ownPenalty + seenPenalty;
 
         return { row, score };
       });
@@ -264,4 +297,91 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       personalised: true,
       nextCursor: lastItem ? encodeCursor(lastItem.score, lastItem.row.id) : null,
     };
+  });
+
+/**
+ * Personalised Space ranking — the audio-room analogue of `getForYouPosts`.
+ *
+ * Rooms are ranked by relationship to the viewer (hosts they follow, and
+ * friends-of-friends), topical affinity against their tuned feed interests,
+ * live-audience momentum, freshness, and a plan-based discovery boost. The
+ * client already has the full Space list; this returns only `{id, score}` so
+ * the Spaces page can reorder its existing cards without a second fetch, and
+ * degrades to the default (chronological) order for guests / unpersonalised
+ * accounts.
+ */
+export const getRecommendedSpaces = createServerFn({ method: "GET" })
+  .inputValidator((data: unknown) => {
+    const d = (data ?? {}) as { limit?: number };
+    const limit = Number(d.limit);
+    return { limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 100) : 60 };
+  })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as any;
+
+    const { data: me } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("auth_user_id", userId)
+      .maybeSingle();
+    if (!me) return { ranked: [] as { id: string; score: number }[], personalised: false };
+    const myId = me.id as string;
+
+    const [{ data: following }, feedPrefsRow] = await Promise.all([
+      supabase.from("follows").select("target_id").eq("follower_id", myId),
+      supabase.from("feed_preferences").select("prefs").eq("user_id", myId).maybeSingle(),
+    ]);
+    const firstDegree = new Set<string>((following ?? []).map((f: any) => f.target_id));
+    let secondDegree = new Set<string>();
+    if (firstDegree.size) {
+      const { data: theirFollows } = await supabase
+        .from("follows")
+        .select("target_id")
+        .in("follower_id", [...firstDegree].slice(0, 200));
+      secondDegree = new Set<string>(
+        (theirFollows ?? [])
+          .map((f: any) => f.target_id)
+          .filter((id: string) => id !== myId && !firstDegree.has(id)),
+      );
+    }
+
+    const prefs = (feedPrefsRow.data?.prefs ?? {}) as {
+      interests?: string[];
+      boostedTags?: string[];
+      mutedAuthors?: string[];
+    };
+    const mutedAuthors = new Set<string>(prefs.mutedAuthors ?? []);
+    const interestTokens = [...(prefs.interests ?? []), ...(prefs.boostedTags ?? [])]
+      .map((t) => String(t).toLowerCase().replace(/^#/, ""))
+      .filter(Boolean);
+
+    const epoch = Math.floor(Date.now() / (10 * 60_000)) * 10 * 60_000;
+    const { data: spaces } = await supabase
+      .from("spaces")
+      .select("id, host_id, topic, live, listeners, created_at")
+      .eq("recorded", false)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    const candidates = (spaces ?? []).filter((s: any) => !mutedAuthors.has(s.host_id));
+
+    const personalised = firstDegree.size > 0 || interestTokens.length > 0;
+    if (!personalised) return { ranked: [] as { id: string; score: number }[], personalised: false };
+
+    const scored = candidates.map((s: any) => {
+      const relationship = firstDegree.has(s.host_id) ? 3 : secondDegree.has(s.host_id) ? 1.4 : 0;
+      const topic = String(s.topic ?? "").toLowerCase();
+      const affinity = interestTokens.some((tok) => topic && topic.includes(tok)) ? 2 : 0;
+      const momentum = Math.log1p(Number(s.listeners ?? 0));
+      const ageHours = Math.max(0.1, (epoch - new Date(s.created_at).getTime()) / 3_600_000);
+      const freshness = Math.exp(-ageHours / 48);
+      // Live rooms get an immediate reach boost over merely-upcoming ones.
+      const liveBoost = s.live ? 1.5 : 0;
+      const ownPenalty = s.host_id === myId ? -2 : 0;
+      const score = relationship + affinity + momentum + freshness * 2 + liveBoost + ownPenalty;
+      return { id: s.id as string, score };
+    });
+
+    scored.sort((a: any, b: any) => b.score - a.score || (a.id < b.id ? -1 : 1));
+    return { ranked: scored.slice(0, data.limit), personalised: true };
   });

@@ -79,8 +79,8 @@ function PostPage() {
               <Avatar name={post.author.displayName} src={post.author.avatarUrl ?? undefined} />
               <div className="min-w-0">
                 <Link
-                  to="/u/$username"
-                  params={{ username: post.author.username }}
+                  to="/profile"
+                  search={{ user: post.author.username }}
                   className="block truncate font-bold hover:underline"
                 >
                   {post.author.displayName}

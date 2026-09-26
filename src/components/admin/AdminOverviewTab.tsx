@@ -21,8 +21,6 @@ import {
   PieChart,
   Pie,
   Cell,
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -31,6 +29,7 @@ import {
 } from "recharts";
 import type { AdminOverviewData, UserRole } from "@/lib/types";
 import { Avatar } from "@/components/social/Avatar";
+import { TimeAgo } from "@/components/social/TimeAgo";
 import { cn } from "@/lib/utils";
 
 interface AdminOverviewTabProps {
@@ -341,43 +340,47 @@ export function AdminOverviewTab({ overview, activeRole, onNavigateTab }: AdminO
           </div>
         </div>
 
-        {/* Real-time System Load Timeline */}
+        {/* Recent moderation & system activity — straight from the audit trail,
+            replacing a fabricated CPU/memory series. */}
         <div className="glass-panel rounded-3xl border border-border/80 p-5 shadow-soft">
           <h2 className="text-base font-bold text-foreground flex items-center gap-2">
             <Activity className="h-4 w-4 text-emerald-500" />
-            System Resource Timeline
+            Recent Activity
           </h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            CPU utilization and memory footprint
-          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">Latest moderation & system events</p>
 
-          <div className="h-56 w-full mt-4">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={charts.system_load_timeline}
-                margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="opacity-10" />
-                <XAxis dataKey="time" stroke="currentColor" className="text-[0.7rem] opacity-50" />
-                <YAxis stroke="currentColor" className="text-[0.7rem] opacity-50" />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "var(--card)",
-                    borderColor: "var(--border)",
-                    borderRadius: "0.75rem",
-                    fontSize: "0.75rem",
-                  }}
-                />
-                <Line type="monotone" dataKey="cpu" stroke="#f43f5e" strokeWidth={2} name="CPU %" />
-                <Line
-                  type="monotone"
-                  dataKey="memory"
-                  stroke="#3b82f6"
-                  strokeWidth={2}
-                  name="Memory (MB)"
-                />
-              </LineChart>
-            </ResponsiveContainer>
+          <div className="mt-4 max-h-56 space-y-1 overflow-y-auto custom-scrollbar pr-1">
+            {(recent_activity ?? []).length === 0 ? (
+              <div className="flex h-full items-center justify-center py-10 text-center text-xs text-muted-foreground">
+                No recorded activity yet.
+              </div>
+            ) : (
+              (recent_activity ?? []).map((a: any) => {
+                const dot =
+                  a.severity === "danger"
+                    ? "bg-rose-500"
+                    : a.severity === "warning"
+                      ? "bg-amber-500"
+                      : a.severity === "success"
+                        ? "bg-emerald-500"
+                        : "bg-brand";
+                return (
+                  <div key={a.id} className="flex items-start gap-2.5 rounded-xl px-2 py-2 hover:bg-foreground/5">
+                    <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-bold text-foreground">
+                        {a.actor_name} · {a.action}
+                        {a.target_type ? ` (${a.target_type})` : ""}
+                      </p>
+                      {a.details && (
+                        <p className="truncate text-[0.7rem] text-muted-foreground">{a.details}</p>
+                      )}
+                    </div>
+                    <TimeAgo iso={a.created_at} className="shrink-0 text-[0.65rem] text-muted-foreground" />
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       </div>

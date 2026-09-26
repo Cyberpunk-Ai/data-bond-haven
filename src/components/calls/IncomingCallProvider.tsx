@@ -5,6 +5,13 @@ import { toast } from "sonner";
 import { Avatar } from "@/components/social/Avatar";
 import { CallModal } from "@/components/social/CallModal";
 import { useAuth } from "@/lib/auth-state";
+import {
+  ensureNotificationsWorker,
+  notificationsSupported,
+  showSystemNotification,
+} from "@/lib/browser-notifications";
+import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
+import { getPreferences } from "@/lib/preferences-state";
 import { getUsers } from "@/lib/api-client";
 import { ensurePresenceJoined } from "@/lib/presence";
 import {
@@ -103,6 +110,12 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
     return ensurePresenceJoined();
   }, [user?.id]);
 
+  // OS-level alerts for messages / engagement while the app is backgrounded.
+  useDesktopNotifications(user?.id);
+  useEffect(() => {
+    if (user?.id && notificationsSupported()) void ensureNotificationsWorker();
+  }, [user?.id]);
+
   useEffect(() => {
     if (!user?.id) return undefined;
     let cancelled = false;
@@ -136,14 +149,49 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!incomingCall) return undefined;
     const stopRing = startRingtone();
+
+    // The user is on another tab/app: surface a system notification with
+    // Answer / Decline buttons (sw.js relays clicks back as window messages).
+    const toggles = getPreferences().toggles;
+    if (
+      (toggles["notify_calls"] ?? true) &&
+      (toggles["notify_system"] ?? true) &&
+      typeof document !== "undefined" &&
+      (document.visibilityState === "hidden" || !document.hasFocus())
+    ) {
+      void showSystemNotification({
+        id: incomingCall.callId,
+        tag: `spaces-call-${incomingCall.callId}`,
+        title: `${incomingCall.user.display_name} is calling`,
+        body: `Incoming ${incomingCall.type === "video" ? "video" : "audio"} call — tap to open`,
+        url: "/messages",
+        requireInteraction: true,
+        silent: !(toggles["notify_sounds"] ?? true),
+        actions: [
+          { action: "answer", title: "Answer" },
+          { action: "decline", title: "Decline" },
+        ],
+      });
+    }
+
+    const onAction = (e: MessageEvent) => {
+      const msg = e.data as { type?: string; action?: string; callId?: string } | null;
+      if (msg?.type !== "call-notification-action" || msg.callId !== incomingCall.callId) return;
+      if (msg.action === "answer") void acceptIncomingCall();
+      else if (msg.action === "decline") void declineIncomingCall();
+    };
+    window.addEventListener("message", onAction);
+
     const timer = setTimeout(() => {
       void markCallMissed(incomingCall.callId).catch(() => {});
       setIncomingCall(null);
     }, RING_TIMEOUT_MS);
     return () => {
       stopRing();
+      window.removeEventListener("message", onAction);
       clearTimeout(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingCall]);
 
   function startCall(target: Profile, type: CallKind) {

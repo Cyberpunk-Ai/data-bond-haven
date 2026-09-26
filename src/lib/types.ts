@@ -182,6 +182,17 @@ export interface Post {
   poll?: Poll | null;
   comments?: PostComment[];
   edited_at?: string | null;
+  /** Set when the post was published on behalf of a team workspace. */
+  workspace_id?: string | null;
+  /** Hydrated brand identity for workspace posts (shown instead of the member). */
+  workspace?: WorkspaceIdentity | null;
+}
+
+export interface WorkspaceIdentity {
+  id: string;
+  name: string;
+  logoEmoji: string;
+  avatarUrl: string | null;
 }
 
 export interface SpaceParticipant {
@@ -210,6 +221,7 @@ export interface Space {
   live: boolean;
   is_live?: boolean;
   startsIn?: string;
+  starts_at?: string | null;
   gradient: string;
   recorded?: boolean;
   duration?: string;

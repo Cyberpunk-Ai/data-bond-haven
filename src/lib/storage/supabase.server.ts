@@ -13,12 +13,19 @@ export function createSupabaseProvider(): StorageProvider {
       return { key };
     },
     async get(key) {
-      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-      const { data, error } = await supabaseAdmin.storage.from("media").download(key);
-      if (error || !data) return null;
-      const contentType = data.type || "application/octet-stream";
-      const body = new Uint8Array(await data.arrayBuffer());
-      return { body, contentType };
+      try {
+        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        const { data, error } = await supabaseAdmin.storage.from("media").download(key);
+        if (error || !data) return null;
+        const contentType = data.type || "application/octet-stream";
+        const body = new Uint8Array(await data.arrayBuffer());
+        return { body, contentType };
+      } catch (err) {
+        // Missing server credentials (SUPABASE_SERVICE_ROLE_KEY) surface here
+        // in local dev — answer 404 instead of an unhandled 500 error page.
+        console.error("[media] storage download failed:", err instanceof Error ? err.message : err);
+        return null;
+      }
     },
     async delete(keys) {
       const targets = keys.filter(Boolean);

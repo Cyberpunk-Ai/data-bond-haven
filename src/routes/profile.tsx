@@ -104,7 +104,9 @@ function ProfilePage() {
   const [isTipModalOpen, setIsTipModalOpen] = useState(false);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followLoading, setFollowLoading] = useState(false);
-  const [loading, setLoading] = useState(false);
+  // Load-first so the posts area shows the skeleton on the initial paint
+  // instead of flashing "Nothing in posts yet" before the fetch resolves.
+  const [loading, setLoading] = useState(true);
   const [replies, setReplies] = useState<any[]>([]);
   const [repliesLoading, setRepliesLoading] = useState(false);
 

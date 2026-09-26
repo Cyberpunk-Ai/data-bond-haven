@@ -204,7 +204,7 @@ export function StoryModal({
         style={
           currentStory.media_url
             ? {
-                backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.85) 100%), url(${currentStory.media_url})`,
+                backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.85) 100%), url(${currentStory.media_url.split(",")[0]?.trim()})`,
                 backgroundSize: "cover",
                 backgroundPosition: "center",
               }

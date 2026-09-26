@@ -67,7 +67,9 @@ function ExplorePage() {
   const [debouncedQuery, setDebouncedQuery] = useState(search.q || "");
   const [selectedTag, setSelectedTag] = useState<string | null>(search.tag || null);
   const [allPosts, setAllPosts] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Load-first so the initial paint keeps the skeleton instead of flashing an
+  // empty result set before the fetch effects resolve.
+  const [loading, setLoading] = useState(true);
   const [matchedPeople, setMatchedPeople] = useState<Profile[]>(() => {
     const cached = Object.values(profileRegistry).filter((p) => p.id && p.id !== currentUser.id);
     return cached;
@@ -233,7 +235,10 @@ function ExplorePage() {
   }, [allPosts, selectedTag, searchQuery]);
 
   function handleSelectTopic(topicName: string) {
-    setSelectedTag(topicName.toLowerCase());
+    // Topic cards show "#tag" but posts store bare tags — strip the "#" so the
+    // server `contains(tags, [tag])` filter actually matches.
+    const clean = topicName.replace(/^#/, "").trim().toLowerCase();
+    setSelectedTag(clean);
     setFilter("Top");
   }
 
@@ -427,7 +432,7 @@ function ExplorePage() {
                   onClick={() => setFilter("People")}
                   className="text-xs font-bold text-brand hover:underline cursor-pointer"
                 >
-                  View all ({filteredCreators.length})
+                  View all creators
                 </button>
               )}
             </div>
@@ -501,7 +506,7 @@ function ExplorePage() {
                     onClick={() => setFilter("People")}
                     className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-soft"
                   >
-                    View all {filteredCreators.length} creators
+                    View all creators
                   </button>
                 </div>
               )}
@@ -537,8 +542,9 @@ function ExplorePage() {
                       >
                         {p.image_url || p.media_url ? (
                           <div className="relative aspect-video w-full overflow-hidden bg-black/10">
+                            {/* media_url can hold several comma-joined attachments — the thumbnail uses the first. */}
                             <img
-                              src={p.image_url || p.media_url || ""}
+                              src={(p.image_url || p.media_url || "").split(",")[0]?.trim()}
                               alt={p.content}
                               loading="lazy"
                               decoding="async"

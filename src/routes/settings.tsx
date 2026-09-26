@@ -38,6 +38,10 @@ import { setLoggedOut, useAuth, updateUserSession } from "@/lib/auth-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { useTheme, ACCENT_PALETTES, type ThemeAccent, type ThemeMode } from "@/lib/theme-state";
 import { usePreferences } from "@/lib/preferences-state";
+import {
+  notificationPermission,
+  requestNotificationPermission,
+} from "@/lib/browser-notifications";
 import { PLAN_DETAILS, type PlanTier } from "@/lib/plans";
 import { PaymentHistory } from "@/components/social/PaymentHistory";
 import { cn } from "@/lib/utils";
@@ -156,8 +160,8 @@ function Toggle({
       >
         <span
           className={cn(
-            "absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-300",
-            on ? "translate-x-[1.4rem]" : "translate-x-0.5",
+            "absolute left-0 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-300",
+            on ? "translate-x-[1.375rem]" : "translate-x-0.5",
           )}
         />
       </button>
@@ -206,6 +210,38 @@ function SettingsPage() {
   const [notifyMentions, setNotifyMentions] = usePersistentToggle("notify_mentions", true);
   const [notifySpaces, setNotifySpaces] = usePersistentToggle("notify_spaces", false);
   const [notifyDigest, setNotifyDigest] = usePersistentToggle("notify_digest", false);
+
+  // System (OS) alert preferences — consumed by useDesktopNotifications and
+  // IncomingCallProvider when the app itself isn't visible/focused.
+  const [notifySystem, setNotifySystem] = usePersistentToggle("notify_system", true);
+  const [notifyMessages, setNotifyMessages] = usePersistentToggle("notify_messages", true);
+  const [notifyCalls, setNotifyCalls] = usePersistentToggle("notify_calls", true);
+  const [notifyTips, setNotifyTips] = usePersistentToggle("notify_tips", true);
+  const [notifySounds, setNotifySounds] = usePersistentToggle("notify_sounds", true);
+  const [notifyPreview, setNotifyPreview] = usePersistentToggle("notify_preview", true);
+  const [osPermission, setOsPermission] = useState<NotificationPermission | "unsupported">(
+    "default",
+  );
+  useEffect(() => {
+    setOsPermission(notificationPermission());
+  }, []);
+
+  // Must stay inside the click gesture: the browser only shows the OS
+  // permission prompt when requestPermission() is called synchronously here.
+  const toggleSystemAlerts = (next: boolean) => {
+    setNotifySystem(next);
+    if (!next) return;
+    void requestNotificationPermission().then((result) => {
+      setOsPermission(result);
+      if (result === "denied") {
+        toast.error("Your browser is blocking notifications — allow them in site settings.");
+      } else if (result === "unsupported") {
+        toast.error("This browser doesn't support system notifications.");
+      } else if (result === "granted") {
+        toast.success("System notifications are on");
+      }
+    });
+  };
 
   // Persistent privacy preferences
   const [privAccount, setPrivAccount] = usePersistentToggle("priv_account", false);
@@ -423,6 +459,58 @@ function SettingsPage() {
 
             {active === "notifications" && (
               <div className="space-y-1">
+                <p className="px-3 pb-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  System alerts
+                </p>
+                <Toggle
+                  label="Desktop & mobile alerts"
+                  description={
+                    !notifySystem
+                      ? "Off — you won't get OS alerts when the app is in the background."
+                      : osPermission === "granted"
+                        ? "On — alerts land in your notification center when you're away from this tab."
+                        : osPermission === "denied"
+                          ? "Your browser is blocking notifications — allow them in site settings."
+                          : osPermission === "unsupported"
+                            ? "Not supported in this browser — in-app alerts still work."
+                            : "Get OS alerts for messages, calls and activity when you're not looking at the app."
+                  }
+                  checked={notifySystem}
+                  onChange={toggleSystemAlerts}
+                />
+                <Toggle
+                  label="Direct messages"
+                  description="Alert me when someone sends a private message."
+                  checked={notifyMessages}
+                  onChange={setNotifyMessages}
+                />
+                <Toggle
+                  label="Incoming calls"
+                  description="Show call invites with Answer / Decline buttons."
+                  checked={notifyCalls}
+                  onChange={setNotifyCalls}
+                />
+                <Toggle
+                  label="Tips"
+                  description="Alert me when I receive money."
+                  checked={notifyTips}
+                  onChange={setNotifyTips}
+                />
+                <Toggle
+                  label="Alert sounds"
+                  description="Play the notification sound with alerts."
+                  checked={notifySounds}
+                  onChange={setNotifySounds}
+                />
+                <Toggle
+                  label="Show preview text"
+                  description="Hide message content in alerts when off."
+                  checked={notifyPreview}
+                  onChange={setNotifyPreview}
+                />
+                <p className="px-3 pt-3 pb-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  In-app notifications
+                </p>
                 <Toggle
                   label="Likes and reposts"
                   description="Ping me when someone reacts to my posts."

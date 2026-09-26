@@ -152,7 +152,17 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
         if (!space.live && (space.recorded || space.recording_url)) {
           await recordSpaceReplayView(space.id).catch(() => {});
         }
-      } catch {
+      } catch (err) {
+        // A full room (host plan cap reached) must not open — tell the user and
+        // back out. Any other failure stays offline-tolerant (fall back to just me).
+        const msg = err instanceof Error ? err.message : "";
+        if (/full|capacity/i.test(msg)) {
+          if (!cancelled) {
+            toast.error(msg || "This Space is full.");
+            onClose();
+          }
+          return;
+        }
         /* offline: fall back to just me */
       }
       if (cancelled) return;

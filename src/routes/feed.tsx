@@ -1,4 +1,5 @@
 import { useCurrentUserId } from "@/hooks/useCurrentUserId";
+import { useMounted } from "@/hooks/use-mounted";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Sparkles, RefreshCw, Loader2, Plus, Sparkle, ArrowUp, Compass } from "lucide-react";
@@ -13,7 +14,7 @@ import { FeedSkeleton } from "@/components/social/PostSkeleton";
 import { getCachedFeedData, triggerFeedPreload } from "@/lib/feed-cache";
 import type { Post, Profile, Story } from "@/lib/types";
 import { currentUser, getProfile } from "@/lib/profile-service";
-import { getPosts, getStories } from "@/lib/api-client";
+import { getPostsPage, getStories } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
 import { useAuth } from "@/lib/auth-state";
 import { cn } from "@/lib/utils";
@@ -43,6 +44,12 @@ export const Route = createFileRoute("/feed")({
 
 const tabs = ["For you", "Following", "Latest"] as const;
 
+// Fetch roughly two screens up front so the progressive reveal (15 at a time)
+// always has preloaded content behind it — scrolling stays smooth with no
+// "fetch gap" flash, and older pages load on demand via the cursor.
+const FEED_PRELOAD_COUNT = 30;
+const FEED_REVEAL_STEP = 15;
+
 interface StoriesBarProps {
   stories: Story[];
   onOpenStory: (storyIndex: number) => void;
@@ -51,6 +58,7 @@ interface StoriesBarProps {
 
 function StoriesBar({ stories, onOpenStory, onOpenCreator }: StoriesBarProps) {
   const { user } = useAuth();
+  const mounted = useMounted();
   const activeUser = user || currentUser;
   const myStories = stories.filter((s) => s.user_id === activeUser.id);
   const storyUserIds = Array.from(
@@ -97,7 +105,18 @@ function StoriesBar({ stories, onOpenStory, onOpenCreator }: StoriesBarProps) {
       <div className="flex gap-3 sm:gap-4 overflow-x-auto pb-1 pt-1 [scrollbar-width:none] touch-pan-x">
         {/* Slot 1: Current User (Add / View Your Story) */}
         <div className="relative group flex w-16 shrink-0 flex-col items-center gap-2">
-          {myStories.length > 0 ? (
+          {!mounted ? (
+            /* Neutral placeholder on SSR + first paint: the current user is a
+               guest on the server but resolves to the real account on the
+               client, so rendering their avatar/initials here would mismatch
+               and trigger a hydration error. */
+            <>
+              <span className="flex h-16 w-16 aspect-square shrink-0 items-center justify-center rounded-full border border-border p-[2.5px]">
+                <span className="h-full w-full aspect-square shrink-0 animate-pulse rounded-full bg-foreground/10" />
+              </span>
+              <span className="mt-1.5 block h-3 w-12 animate-pulse rounded bg-foreground/10" />
+            </>
+          ) : myStories.length > 0 ? (
             <>
               <button
                 onClick={() => {
@@ -225,12 +244,17 @@ function FeedPage() {
   // Guards against out-of-order responses when the user switches tabs quickly.
   const feedReqId = useRef(0);
 
-  // Progressive infinite scrolling for optimal DOM performance
-  const [visibleCount, setVisibleCount] = useState(15);
+  // Progressive infinite scrolling for optimal DOM performance: reveal ~15
+  // already-preloaded cards at a time (instant, no network) and only fetch an
+  // older page via the server cursor once the preloaded batch is exhausted.
+  const [visibleCount, setVisibleCount] = useState(FEED_REVEAL_STEP);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const cursorRef = useRef<string | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    setVisibleCount(15);
+    setVisibleCount(FEED_REVEAL_STEP);
   }, [tab]);
 
   useEffect(() => {
@@ -238,38 +262,50 @@ function FeedPage() {
     if (!node) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) {
-          setVisibleCount((prev) => prev + 15);
+        if (!entries[0].isIntersecting) return;
+        setVisibleCount((prev) => (prev < posts.length ? prev + FEED_REVEAL_STEP : prev));
+        if (visibleCount >= posts.length && hasMore && !loadingMore) {
+          void loadMorePosts();
         }
       },
       { rootMargin: "300px" },
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [posts.length, visibleCount]);
+    // loadMorePosts is a hoisted declaration; re-running on the counters below
+    // keeps the observer's view of `posts.length`/`hasMore` fresh without
+    // resubscribing on every unrelated render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [posts.length, visibleCount, hasMore, loadingMore]);
 
-  // Auto-hide tab switcher on scroll down, reveal on slight scroll up
+  // Auto-hide tab switcher on scroll down, reveal on scroll up. Throttled to
+  // one evaluation per animation frame (and a state write only on an actual
+  // direction change) so the fast scroll path stays smooth.
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const lastScrollY = useRef(0);
 
   useEffect(() => {
-    const handleScroll = () => {
-      const currentScrollY = window.scrollY;
-      if (currentScrollY < 50) {
+    let ticking = false;
+    const update = () => {
+      ticking = false;
+      const y = window.scrollY;
+      if (y < 50) {
         setIsHeaderVisible(true);
       } else {
-        const delta = currentScrollY - lastScrollY.current;
-        if (delta > 3) {
-          setIsHeaderVisible(false);
-        } else if (delta < -3) {
-          setIsHeaderVisible(true);
-        }
+        const delta = y - lastScrollY.current;
+        if (delta > 8) setIsHeaderVisible(false);
+        else if (delta < -8) setIsHeaderVisible(true);
       }
-      lastScrollY.current = currentScrollY;
+      lastScrollY.current = y;
     };
-
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
+    const onScroll = () => {
+      if (!ticking) {
+        ticking = true;
+        requestAnimationFrame(update);
+      }
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   // Auto-focus composer if search param contains compose
@@ -297,18 +333,52 @@ function FeedPage() {
     if (!silent) setLoading(true);
     try {
       const filterKey = tab === "Following" ? "following" : tab === "Latest" ? "latest" : "foryou";
-      const livePosts = await getPosts({ filter: filterKey });
+      const page = await getPostsPage({ filter: filterKey, limit: FEED_PRELOAD_COUNT });
       // Ignore responses from a superseded request (user switched tabs).
       if (reqId !== feedReqId.current) return;
-      if (Array.isArray(livePosts)) {
-        setPosts(livePosts);
+      if (Array.isArray(page.posts)) {
+        setPosts(page.posts);
         setPendingIncomingPosts([]);
+        cursorRef.current = page.nextCursor;
+        setHasMore(Boolean(page.nextCursor));
+        setVisibleCount(FEED_REVEAL_STEP);
       }
     } catch (err) {
       if (reqId !== feedReqId.current) return;
       console.warn("Feed fetch failed, keeping current posts:", err);
     } finally {
       if (reqId === feedReqId.current && !silent) setLoading(false);
+    }
+  }
+
+  // Fetch the next (older) page using the server cursor and append it without
+  // disturbing the already-rendered cards, so infinite scroll never re-flows
+  // or shifts what the user is looking at.
+  async function loadMorePosts() {
+    if (loadingMore || !cursorRef.current) return;
+    const reqId = feedReqId.current;
+    const filterKey = tab === "Following" ? "following" : tab === "Latest" ? "latest" : "foryou";
+    setLoadingMore(true);
+    try {
+      const page = await getPostsPage({
+        filter: filterKey,
+        limit: FEED_PRELOAD_COUNT,
+        cursor: filterKey === "foryou" ? (cursorRef.current ?? undefined) : undefined,
+        before: filterKey !== "foryou" ? (cursorRef.current ?? undefined) : undefined,
+      });
+      if (reqId !== feedReqId.current) return; // tab switched mid-flight
+      setPosts((prev) => {
+        const seen = new Set(prev.map((p) => p.id));
+        return [...prev, ...page.posts.filter((p) => !seen.has(p.id))];
+      });
+      cursorRef.current = page.nextCursor;
+      setHasMore(Boolean(page.nextCursor));
+      setVisibleCount((prev) => prev + FEED_REVEAL_STEP);
+    } catch (err) {
+      console.warn("Load more failed:", err);
+      setHasMore(false);
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -505,17 +575,21 @@ function FeedPage() {
           </div>
         )}
 
-        {visibleCount < posts.length && (
+        {(visibleCount < posts.length || hasMore) && (
           <div
             ref={loadMoreRef}
-            className="flex items-center justify-center py-6 text-sm text-muted-foreground gap-2 font-medium"
+            className="flex items-center justify-center gap-2 py-6 text-sm font-medium text-muted-foreground"
           >
-            <Loader2 className="h-4 w-4 animate-spin text-brand" />
-            <span>Loading more posts...</span>
+            {loadingMore && (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin text-brand" />
+                <span>Loading more posts...</span>
+              </>
+            )}
           </div>
         )}
 
-        {visibleCount >= posts.length && posts.length > 0 && (
+        {visibleCount >= posts.length && !hasMore && posts.length > 0 && (
           <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground font-medium">
             <Sparkles className="h-4 w-4 text-brand" /> You're all caught up ({posts.length} posts)
           </div>

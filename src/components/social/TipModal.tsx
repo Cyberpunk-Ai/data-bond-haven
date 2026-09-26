@@ -26,7 +26,7 @@ interface TipModalProps {
   spaceId?: string;
 }
 
-const PRESET_AMOUNTS = [0.25, 0.5, 1, 5, 10];
+const PRESET_AMOUNTS = [1, 5, 10, 25, 50];
 const MIN_TIP = 0.1;
 const MAX_TIP = 1000;
 

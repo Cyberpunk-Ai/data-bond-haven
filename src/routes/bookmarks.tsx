@@ -6,7 +6,7 @@ import { PostCard } from "@/components/social/PostCard";
 import { FeedSkeleton } from "@/components/social/PostSkeleton";
 import { DefaultRail } from "@/components/social/RightRail";
 import type { Post } from "@/lib/types";
-import { getProfile } from "@/lib/profile-service";
+import { getProfile, subscribeProfiles, currentUserId } from "@/lib/profile-service";
 import { getBookmarks, getPosts } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
@@ -52,6 +52,17 @@ function BookmarksPage() {
 
   useEffect(() => {
     fetchBookmarksList();
+    // On a direct load/reload the session restore resolves the profile id a
+    // beat after mount, so the first fetch can still run as "guest" and come
+    // back empty. Refetch once when the real id lands.
+    let prev = currentUserId;
+    const unsub = subscribeProfiles(() => {
+      if (prev === "guest" && currentUserId !== "guest") fetchBookmarksList();
+      prev = currentUserId;
+    });
+    return () => {
+      unsub();
+    };
   }, []);
 
   const saved = allPosts.filter((p) => p.bookmarkedByMe);

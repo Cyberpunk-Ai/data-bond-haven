@@ -225,6 +225,9 @@ function PostCardBase({
   const activeUser = user || currentUser;
   const { profile: hookProfile } = useProfile(post.user_id);
   const author = hookProfile ?? getProfile(post.user_id);
+  // A post published on behalf of a team workspace shows the brand, not the
+  // member who hit send (they're credited as "via @handle").
+  const ws = post.workspace ?? null;
   const cardRef = useRef<HTMLElement>(null);
   const [state, setState] = useState({
     liked: post.likedByMe,
@@ -743,20 +746,33 @@ function PostCardBase({
   return (
     <article
       ref={cardRef}
-      style={{ animationDelay: `${index * 60}ms` }}
-      className="glass-panel animate-in fade-in slide-in-from-bottom-3 rounded-3xl p-4 sm:p-5 shadow-soft duration-700 ease-out fill-mode-both transition-all hover:shadow-lift relative isolate overflow-hidden min-w-0 max-w-full break-words"
+      /* Only the first screen fades in (short, capped stagger); later
+         scroll-revealed cards render instantly so progressively loading the
+         feed never makes already-visible posts slide or shift. */
+      style={index < 6 ? { animationDelay: `${index * 40}ms` } : undefined}
+      className={cn(
+        "glass-panel rounded-3xl p-4 sm:p-5 shadow-soft relative isolate overflow-hidden min-w-0 max-w-full break-words transition-shadow hover:shadow-lift",
+        index < 6 && "animate-in fade-in duration-300 ease-out fill-mode-both",
+      )}
     >
       <header className="flex items-start gap-3">
         <Link
           to="/profile"
           search={{ id: author.id, user: author.username }}
           className="shrink-0 rounded-full transition-transform duration-200 hover:scale-105 active:scale-95"
+          title={ws ? `Team workspace: ${ws.name}` : undefined}
         >
-          <Avatar
-            name={author.display_name}
-            src={author.avatar_url}
-            className="h-11 w-11 text-xs shrink-0"
-          />
+          {ws && !ws.avatarUrl ? (
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand to-brand-pink text-lg shadow-soft">
+              {ws.logoEmoji}
+            </span>
+          ) : (
+            <Avatar
+              name={ws ? ws.name : author.display_name}
+              src={ws ? ws.avatarUrl : author.avatar_url}
+              className="h-11 w-11 text-xs shrink-0"
+            />
+          )}
         </Link>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -765,18 +781,33 @@ function PostCardBase({
               search={{ id: author.id, user: author.username }}
               className="truncate font-bold hover:text-brand hover:underline transition-colors"
             >
-              {author.display_name}
+              {ws ? ws.name : author.display_name}
             </Link>
-            <UserBadge plan={author.plan} verified={author.verified} isMe={isMine} size="xs" />
+            {ws ? (
+              <span className="rounded-full bg-brand/10 px-1.5 py-0.5 text-[0.6rem] font-bold uppercase tracking-wide text-brand">
+                Team
+              </span>
+            ) : (
+              <UserBadge plan={author.plan} verified={author.verified} isMe={isMine} size="xs" />
+            )}
             <Link
               to="/profile"
               search={{ id: author.id, user: author.username }}
               className="truncate text-sm text-muted-foreground hover:text-brand transition-colors"
             >
-              @{author.username}
+              {ws ? `via @${author.username}` : `@${author.username}`}
             </Link>
             <span className="text-muted-foreground">·</span>
-            <TimeAgo iso={post.created_at} className="shrink-0 text-sm text-muted-foreground" />
+            {/* Permalink, like every other social feed: the timestamp opens
+                the post's own page. */}
+            <Link
+              to="/post/$id"
+              params={{ id: post.id }}
+              aria-label="View post"
+              className="shrink-0 text-sm text-muted-foreground hover:text-brand hover:underline transition-colors"
+            >
+              <TimeAgo iso={post.created_at} />
+            </Link>
             {editedAt && (
               <span className="text-xs text-muted-foreground italic">· Edited</span>
             )}
@@ -1035,7 +1066,7 @@ function PostCardBase({
               setPreviewMediaUrl(singleUrl);
               setShowImagePreview(true);
             }}
-            className="mt-3.5 overflow-hidden rounded-2xl border border-border/60 bg-neutral-950/20 dark:bg-black/30 cursor-zoom-in transition-all duration-300 hover:border-brand/50 group relative flex items-center justify-center w-full p-0 sm:p-0.5 sm:max-h-[440px]"
+            className="mt-3.5 overflow-hidden rounded-2xl border border-border/60 bg-neutral-950/20 dark:bg-black/30 cursor-zoom-in transition-all duration-300 hover:border-brand/50 group relative flex items-center justify-center w-full p-0 sm:p-0.5 aspect-[4/3]"
           >
             <img
               src={optimizeImageUrl(singleUrl, 1000)}
@@ -1044,7 +1075,7 @@ function PostCardBase({
               decoding="async"
               referrerPolicy="no-referrer"
               onError={() => setImageError(true)}
-              className="w-full h-auto block rounded-2xl sm:rounded-xl sm:max-h-[420px] sm:object-contain transition-transform duration-500 ease-out group-hover:scale-[1.008]"
+              className="w-full h-full block object-cover rounded-2xl sm:rounded-xl transition-transform duration-500 ease-out group-hover:scale-[1.008]"
             />
             <div className="pointer-events-none absolute bottom-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-full bg-black/70 backdrop-blur-md px-2.5 py-1 text-[10px] font-bold text-white/95 flex items-center gap-1 shadow-sm">
               <Maximize2 className="h-3 w-3 text-brand" /> Zoom

@@ -33,6 +33,7 @@ import type {
   TrendingTag,
   UserFeedPreferences,
   FeedFeedbackPayload,
+  WorkspaceIdentity,
 } from "@/lib/types";
 
 const db = supabase as any;
@@ -77,24 +78,40 @@ export function rowToPost(row: any, extras: Partial<Post> = {}): Post {
     repostCount: row.repost_count ?? 0,
     viewCount: row.view_count ?? 0,
     poll: row.poll ?? null,
+    workspace_id: row.workspace_id ?? null,
     ...extras,
   };
 }
 
-export async function getPosts(
-  options: {
-    limit?: number;
-    userId?: string;
-    /** Alias of `userId`, kept for call sites that speak in author terms. */
-    authorId?: string;
-    tag?: string;
-    before?: string;
-    following?: boolean;
-    bookmarked?: boolean;
-    filter?: "foryou" | "following" | "latest";
-  } = {},
-): Promise<Post[]> {
-  if (options.bookmarked) return getBookmarkedPosts(options.limit ?? 50);
+export interface PostsPageOptions {
+  limit?: number;
+  userId?: string;
+  /** Alias of `userId`, kept for call sites that speak in author terms. */
+  authorId?: string;
+  tag?: string;
+  before?: string;
+  /** Opaque `(score, id)` cursor for the ranked "For you" feed. */
+  cursor?: string;
+  following?: boolean;
+  bookmarked?: boolean;
+  filter?: "foryou" | "following" | "latest";
+}
+
+export interface PostsPage {
+  posts: Post[];
+  /** Cursor to pass back for the next page, or `null` when the feed is exhausted. */
+  nextCursor: string | null;
+}
+
+/**
+ * Cursor-paginated post fetch used by the feed's infinite scroll. "For you" is
+ * ranked server-side and pages via the ranker's composite cursor; every other
+ * filter pages chronologically via a `created_at` (`before`) cursor. Keeping
+ * the cursor server-authoritative means a page never returns duplicate rows.
+ */
+export async function getPostsPage(options: PostsPageOptions = {}): Promise<PostsPage> {
+  if (options.bookmarked)
+    return { posts: await getBookmarkedPosts(options.limit ?? 50), nextCursor: null };
   // "For you" is ranked server-side (behaviour + graph + quality + diversity).
   if (options.filter === "foryou" && !options.userId && !options.tag && isDbId(me())) {
     try {
@@ -102,13 +119,15 @@ export async function getPosts(
       const res: any = await getForYouPosts({
         data: {
           limit: Math.min(options.limit ?? appConfig.feed.pageSize, appConfig.feed.maxPageSize),
+          cursor: options.cursor,
         },
       });
       const ranked = (res?.posts ?? []).map((row: any) => rowToPost(row));
       if (ranked.length > 0) {
         await hydrateAuthors(ranked.map((p: Post) => p.user_id));
+        await hydrateWorkspaces(ranked);
         await hydrateEngagement(ranked);
-        return ranked;
+        return { posts: ranked, nextCursor: res?.nextCursor ?? null };
       }
     } catch (err) {
       console.warn("For you ranking unavailable, using recency:", err);
@@ -125,13 +144,17 @@ export async function getPosts(
     .limit(limit);
   if (options.userId) query = query.eq("user_id", options.userId);
   if (options.before) query = query.lt("created_at", options.before);
-  if (options.tag) query = query.contains("tags", [options.tag]);
+  // `tags` is a jsonb array column. PostgREST's `cs` (contains) operator needs
+  // a valid JSON value on the right-hand side, so pass a JSON-array string
+  // (`["ai"]`) rather than a JS array — the latter serialises to the native
+  // `cs.{ai}` form, which the server rejects with "invalid input syntax for type json".
+  if (options.tag) query = query.contains("tags", JSON.stringify([options.tag]));
   if (options.following) {
     const { data: follows } = isDbId(me())
       ? await db.from("follows").select("target_id").eq("follower_id", me())
       : { data: [] as any[] };
     const ids = ((follows ?? []) as any[]).map((f) => f.target_id);
-    if (ids.length === 0) return [];
+    if (ids.length === 0) return { posts: [], nextCursor: null };
     query = query.in("user_id", [...ids, me()]);
   }
   const { data, error } = await query;
@@ -156,8 +179,16 @@ export async function getPosts(
   }
 
   await hydrateAuthors(posts.map((p: Post) => p.user_id));
+  await hydrateWorkspaces(posts);
   await hydrateEngagement(posts);
-  return posts;
+  // Chronological cursor: continue strictly older than the last returned row.
+  const last = posts[posts.length - 1];
+  const nextCursor = posts.length === limit && last ? last.created_at : null;
+  return { posts, nextCursor };
+}
+
+export async function getPosts(options: PostsPageOptions = {}): Promise<Post[]> {
+  return (await getPostsPage(options)).posts;
 }
 
 /** Posts the signed-in user has bookmarked, fetched by join instead of client filtering. */
@@ -173,6 +204,7 @@ export async function getBookmarkedPosts(limit = 50): Promise<Post[]> {
     .map((row) => (row.posts ? rowToPost(row.posts) : null))
     .filter(Boolean) as Post[];
   await hydrateAuthors(posts.map((p) => p.user_id));
+  await hydrateWorkspaces(posts);
   await hydrateEngagement(posts);
   return posts;
 }
@@ -237,12 +269,40 @@ async function hydrateAuthors(ids: string[]) {
   if (data) cacheProfiles((data as any[]).map(rowToProfile));
 }
 
+// Brand identity for team-workspace posts, cached by workspace id so a feed
+// with many posts from one team only hits `workspaces` once.
+const workspaceCache = new Map<string, WorkspaceIdentity>();
+async function hydrateWorkspaces(posts: Post[]) {
+  const ids = Array.from(new Set(posts.map((p) => p.workspace_id).filter(isDbId) as string[]));
+  if (ids.length === 0) return;
+  const missing = ids.filter((id) => !workspaceCache.has(id));
+  if (missing.length) {
+    const { data } = await db
+      .from("workspaces")
+      .select("id, name, logo_emoji, avatar_url")
+      .in("id", missing);
+    for (const w of (data ?? []) as any[]) {
+      workspaceCache.set(String(w.id), {
+        id: String(w.id),
+        name: String(w.name ?? "Workspace"),
+        logoEmoji: String(w.logo_emoji ?? "✨"),
+        avatarUrl: w.avatar_url ?? null,
+      });
+    }
+  }
+  for (const p of posts) {
+    if (p.workspace_id) p.workspace = workspaceCache.get(p.workspace_id) ?? null;
+  }
+}
+
 export async function createPost(input: {
   content: string;
   image_gradient?: string | undefined;
   media_url?: string | undefined;
   tags?: string[];
   poll?: any;
+  /** Publish on behalf of a team workspace (RLS enforces Owner/Admin/Editor). */
+  workspaceId?: string | null;
 }) {
   const userId = me();
   if (!isDbId(userId)) throw new Error("Sign in to post");
@@ -256,6 +316,7 @@ export async function createPost(input: {
       media_url: input.media_url ?? null,
       tags: input.tags ?? [],
       poll: input.poll ?? null,
+      workspace_id: input.workspaceId && isDbId(input.workspaceId) ? input.workspaceId : null,
     })
     .select("*")
     .single();
@@ -264,6 +325,7 @@ export async function createPost(input: {
 
   await hydrateAuthors([userId]);
   const post = rowToPost(data);
+  await hydrateWorkspaces([post]);
   emitRealtime("post:created", post);
   return { ...post, post } as Post & { post: Post };
 }
@@ -274,6 +336,7 @@ export async function getPostById(id: string): Promise<Post | null> {
   if (error || !data) return null;
   const post = rowToPost(data);
   await hydrateAuthors([post.user_id]);
+  await hydrateWorkspaces([post]);
   await hydrateEngagement([post]);
   return post;
 }
@@ -509,7 +572,9 @@ function rowToStory(row: any): Story {
     type: row.type ?? (row.media_url ? "image" : "gradient"),
     gradient: row.gradient ?? undefined,
     media_url: row.media_url ?? undefined,
-    image_url: row.media_url ?? undefined,
+    // media_url may hold several comma-joined attachments; single-URL
+    // consumers (image_url) must never receive the joined string.
+    image_url: (row.media_url ?? "").split(",")[0]?.trim() || undefined,
     text: row.text ?? undefined,
     caption: row.caption ?? undefined,
     created_at: row.created_at ?? nowIso(),
@@ -640,13 +705,18 @@ export async function isUsernameAvailable(username: string, exceptId?: string): 
   const u = normalizeUsername(username);
   if (!USERNAME_REGEX.test(u)) return false;
   let query = db.from("profiles").select("id").eq("username", u);
-  if (exceptId) query = query.neq("id", exceptId);
+  // Only exclude a real row: a placeholder id like "guest" would make
+  // PostgREST cast a non-uuid against the uuid column and 400.
+  if (exceptId && isDbId(exceptId)) query = query.neq("id", exceptId);
   const { data } = await query.maybeSingle();
   return !data;
 }
 
 export async function updateUserProfile(patch: Partial<Profile>) {
   const meId = me();
+  // Guests have a placeholder profile id; PATCHing `id=eq.guest` used to hit
+  // the DB with an invalid uuid cast and fail silently.
+  if (!isDbId(meId)) throw new Error("Sign in to save these changes");
   const update: Record<string, unknown> = {
     display_name: patch.display_name,
     bio: patch.bio,
@@ -807,7 +877,24 @@ function rowToSpace(row: any): Space {
     replay_count: row.replay_count ?? 0,
     participants: row.participants ?? [],
     messages: row.messages ?? [],
+    starts_at: row.starts_at ?? undefined,
+    startsIn: spaceStartsLabel(row),
   };
+}
+
+/**
+ * Human label for a scheduled (not live, not recorded) Space's start time,
+ * derived from the persisted `starts_at` so a reload keeps it in the Upcoming
+ * tab instead of falling back to the generic "no start info" state. Returns
+ * undefined for live, recorded, and past-due rooms.
+ */
+function spaceStartsLabel(row: any): string | undefined {
+  if (row.live || row.recorded || !row.starts_at) return undefined;
+  const when = new Date(row.starts_at);
+  if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) return undefined;
+  const day = when.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const time = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return `${day} at ${time}`;
 }
 
 export async function getSpaces(): Promise<{ spaces: Space[] }> {
@@ -868,9 +955,17 @@ async function syncSpaceListeners(spaceId: string) {
 }
 
 export async function joinSpace(spaceId: string) {
-  await db
+  const { error } = await db
     .from("space_participants")
     .upsert({ space_id: spaceId, user_id: me(), role: "listener" });
+  if (error) {
+    // The spaces_capacity_guard trigger rejects a join once the room is full
+    // for the host's plan tier; surface it so the UI can bail out gracefully.
+    if (/SPACE_AT_CAPACITY/i.test(error.message || "")) {
+      throw new Error("This Space is full — it has reached the host's listener limit.");
+    }
+    throw error;
+  }
   emitRealtime("space:joined", { spaceId, userId: me() });
   await syncSpaceListeners(spaceId);
   return { ok: true };
@@ -883,16 +978,24 @@ export async function leaveSpace(spaceId: string) {
   return { ok: true };
 }
 
-/** Host-only: close the room for everyone and mark it as a recording. */
+/** Host-only: close the room for everyone. A room only becomes a replayable
+ * "Recorded" item if a recording was actually saved (`recording_url` present,
+ * written by finalizeSpaceRecording). Ending a never-recorded room must not
+ * fabricate a dead "Listen Replay" entry. */
 export async function endSpace(spaceId: string) {
-  const { error } = await db
+  const { data, error } = await db
     .from("spaces")
-    .update({ live: false, recorded: true })
+    .update({ live: false, is_recording: false })
     .eq("id", spaceId)
-    .eq("host_id", me());
+    .eq("host_id", me())
+    .select("recording_url")
+    .maybeSingle();
   if (error) throw error;
+  await db
+    .from("spaces")
+    .update({ recorded: Boolean(data?.recording_url), listeners: 0 })
+    .eq("id", spaceId);
   await db.from("space_participants").delete().eq("space_id", spaceId);
-  await db.from("spaces").update({ listeners: 0 }).eq("id", spaceId);
   emitRealtime("space:ended", { spaceId });
   return { ok: true };
 }
@@ -1705,10 +1808,42 @@ export async function getAdminOverview(): Promise<AdminOverviewData> {
     .select("id", { count: "exact", head: true })
     .eq("verified", true);
 
+  // Real 24h-active count: distinct authors who posted in the last day.
+  let active24h = 0;
+  try {
+    const since = new Date(Date.now() - 86_400_000).toISOString();
+    const { data: recent } = await db
+      .from("posts")
+      .select("user_id")
+      .gte("created_at", since)
+      .limit(2000);
+    active24h = new Set((recent ?? []).map((r: any) => r.user_id)).size;
+  } catch {
+    active24h = 0;
+  }
+
+  // Recent moderation / system activity straight from the audit trail so the
+  // overview reflects what is actually happening across the site (was a gap).
+  let recent_activity: AdminOverviewData["recent_activity"] = [];
+  try {
+    const logs = await getAdminAuditLogs({ limit: 8 });
+    recent_activity = logs.map((l) => ({
+      id: l.id,
+      actor_name: l.actor_name || "System",
+      action: l.action,
+      target_type: l.target_type,
+      details: l.details,
+      severity: l.severity,
+      created_at: l.created_at,
+    }));
+  } catch {
+    recent_activity = [];
+  }
+
   return {
     stats: {
       total_users: counts.profiles ?? 0,
-      active_24h_users: counts.profiles ?? 0,
+      active_24h_users: active24h,
       total_posts: counts.posts ?? 0,
       total_stories: counts.stories ?? 0,
       total_spaces: counts.spaces ?? 0,
@@ -1742,7 +1877,7 @@ export async function getAdminOverview(): Promise<AdminOverviewData> {
       reposts: reposts ?? 0,
       impressions: impressions ?? 0,
     }),
-    recent_activity: [],
+    recent_activity,
     recent_reports: reports.slice(0, 5),
   };
 }
@@ -1911,7 +2046,9 @@ export async function getTopics(): Promise<{ topics: Topic[] }> {
   const { trendingTags } = await getTrendingTags();
   const topics: Topic[] = trendingTags.slice(0, 12).map((t, i) => ({
     name: `#${t.tag}`,
-    posts: String(t.count),
+    // getTrendingTags returns count as "N posts" — keep just the number so the
+    // UI can add its own suffix instead of rendering "5 posts active posts".
+    posts: String(parseInt(String(t.count), 10) || 0),
     gradient: TOPIC_GRADIENTS[i % TOPIC_GRADIENTS.length] ?? "from-brand to-brand-pink",
   }));
   return { topics };

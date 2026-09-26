@@ -56,6 +56,8 @@ export function subscribePreferences(fn: () => void) {
 }
 
 /** Loads the signed-in account's saved preferences (once per account). */
+let loadingPromise: Promise<void> | null = null;
+
 export async function hydratePreferences(force = false) {
   const userId = signedInProfileId();
   if (!userId) {
@@ -66,7 +68,18 @@ export async function hydratePreferences(force = false) {
     emit();
     return;
   }
-  if (!force && loadedFor === userId) return;
+  if (!force && loadedFor === userId && status === "ready") return;
+  if (!force && loadingPromise) {
+    await loadingPromise;
+    return;
+  }
+  loadingPromise = loadPreferences(userId).finally(() => {
+    loadingPromise = null;
+  });
+  await loadingPromise;
+}
+
+async function loadPreferences(userId: string) {
   loadedFor = userId;
   status = "loading";
   errorMessage = null;
@@ -79,6 +92,8 @@ export async function hydratePreferences(force = false) {
     .maybeSingle();
 
   if (error) {
+    // Clear the stamp so the next save/toggle retries the load.
+    loadedFor = null;
     status = "error";
     errorMessage = "We couldn't load your saved preferences. Check your connection and try again.";
     emit();
@@ -99,14 +114,45 @@ export async function hydratePreferences(force = false) {
   emit();
 }
 
+/**
+ * Session restore resolves the profile id a beat after a reload. Wait briefly
+ * for it instead of falsely rejecting the first toggle right after the page
+ * comes back.
+ */
+function waitForProfileId(ms = 4000): Promise<string | null> {
+  const now = signedInProfileId();
+  if (now) return Promise.resolve(now);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      unsub();
+      resolve(null);
+    }, ms);
+    const unsub = subscribeProfiles(() => {
+      const id = signedInProfileId();
+      if (id) {
+        clearTimeout(timer);
+        unsub();
+        resolve(id);
+      }
+    });
+  });
+}
+
 /** Applies a change instantly and writes it to the account. */
 export async function savePreferences(
   patch: Partial<Preferences>,
 ): Promise<{ ok: boolean; error?: string }> {
+  const current = signedInProfileId();
+  // Every write ships the whole prefs document, so it must be based on the
+  // server copy: hydrate first when that hasn't landed yet, or a pre-load
+  // snapshot silently reverts previously saved keys.
+  if (current && (loadedFor !== current || status !== "ready")) {
+    await hydratePreferences();
+  }
   state = { ...state, ...patch };
   emit();
 
-  const userId = signedInProfileId();
+  const userId = current ?? (await waitForProfileId());
   if (!userId) return { ok: false, error: "Sign in to save this preference to your account." };
 
   const { error } = await db.from("user_preferences").upsert(

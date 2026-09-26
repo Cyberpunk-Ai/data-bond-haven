@@ -55,6 +55,7 @@ function SpacesSkeleton() {
 import { getProfile } from "@/lib/profile-service";
 import type { Space } from "@/lib/types";
 import { getSpaces, createSpace } from "@/lib/api-client";
+import { getRecommendedSpaces } from "@/lib/recommendations.functions";
 import { useRealtime } from "@/lib/realtime";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { cn } from "@/lib/utils";
@@ -117,7 +118,7 @@ function SpaceCard({
       .map((p) => getProfile(p.id));
   }, [space.participants, space.host_id]);
 
-  const isRecorded = Boolean(space.recorded || (!space.live && !space.startsIn));
+  const isRecorded = Boolean(space.recorded);
 
   return (
     <article
@@ -266,6 +267,8 @@ function SpacesPage() {
   const [topicDraft, setTopicDraft] = useState("Design & Craft");
   const [gradientDraft, setGradientDraft] = useState(gradientChoices[0]!.value);
   const [creating, setCreating] = useState(false);
+  // Personalised ranking: Space id → recommendation rank (lower = more relevant).
+  const [recRank, setRecRank] = useState<Record<string, number>>({});
 
   useEffect(() => {
     setLoading(true);
@@ -277,6 +280,22 @@ function SpacesPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Fetch a personalised ordering once (best-effort; guests get chronological).
+  useEffect(() => {
+    let active = true;
+    getRecommendedSpaces({ data: { limit: 100 } })
+      .then((res) => {
+        if (!active || !res?.personalised) return;
+        const map: Record<string, number> = {};
+        (res.ranked as { id: string }[]).forEach((r, i) => (map[r.id] = i));
+        setRecRank(map);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // Keep the list in sync as rooms open, fill up and close
   useRealtime(
     (event: any) => {
@@ -285,8 +304,21 @@ function SpacesPage() {
           prev.some((s) => s.id === event.space.id) ? prev : [event.space, ...prev],
         );
       } else if (event.type === "space:ended" && event.spaceId) {
+        // Mirror endSpace's authoritative DB write: the room stops being live,
+        // any recorder is stopped, and it only files under Recorded when a real
+        // replay was saved (recording_url present) — never for a bare end.
         setAllSpaces((prev) =>
-          prev.map((s) => (s.id === event.spaceId ? { ...s, live: false, listeners: 0 } : s)),
+          prev.map((s) =>
+            s.id === event.spaceId
+              ? {
+                  ...s,
+                  live: false,
+                  is_recording: false,
+                  recorded: Boolean(s.recording_url),
+                  listeners: 0,
+                }
+              : s,
+          ),
         );
         setActiveSpace((cur) => (cur && cur.id === event.spaceId ? null : cur));
       } else if (event.type === "space:listeners" && event.spaceId) {
@@ -333,7 +365,7 @@ function SpacesPage() {
 
       const res = await createSpace({
         title: titleDraft.trim(),
-        topic: topicDraft,
+        topic: topicDraft.trim() || "General",
         gradient: gradientDraft,
         live: !isScheduled,
         startsAt: isScheduled ? new Date(`${scheduledDate}T${scheduledTime}`).toISOString() : null,
@@ -345,7 +377,14 @@ function SpacesPage() {
         startsIn: isScheduled ? startsInText : undefined,
       };
 
-      setAllSpaces((prev) => [newSpace, ...prev]);
+      // `createSpace` already broadcast `space:created`, which this tab
+      // receives locally, so the room may already be in the list. Merge on
+      // idempotency rather than prepending a second copy (duplicate React key).
+      setAllSpaces((prev) =>
+        prev.some((s) => s.id === newSpace.id)
+          ? prev.map((s) => (s.id === newSpace.id ? { ...s, ...newSpace } : s))
+          : [newSpace, ...prev],
+      );
       setShowCreateModal(false);
       setTitleDraft("");
 
@@ -363,12 +402,30 @@ function SpacesPage() {
     }
   }
 
+  // A Space is a replay only once a recording has actually been saved to
+  // storage (`recorded` + a real `recording_url`). Ending a never-recorded room
+  // must not create a dead "Listen Replay" entry, and a scheduled room that
+  // hasn't gone live belongs in Upcoming — not Recorded.
   const isRecordedSpace = (s: (typeof allSpaces)[number]) =>
-    Boolean(s.recorded || (!s.live && !s.startsIn));
+    Boolean(s.recorded && s.recording_url);
+  // A scheduled room is "Upcoming" only while its start time is still ahead of
+  // now; once it is past due and never went live it has no tab.
+  const isUpcomingSpace = (s: (typeof allSpaces)[number]) => {
+    if (s.live || isRecordedSpace(s)) return false;
+    const start = s.starts_at ? new Date(s.starts_at).getTime() : 0;
+    return Boolean(start && start > Date.now());
+  };
 
-  const filtered = allSpaces.filter((s) => {
+  // Defensive: never render two cards for the same room id, whatever path
+  // added it (create + realtime echo, or a re-fetch racing a broadcast).
+  const uniqueSpaces = useMemo(() => {
+    const seen = new Set<string>();
+    return allSpaces.filter((s) => (seen.has(s.id) ? false : (seen.add(s.id), true)));
+  }, [allSpaces]);
+
+  const matched = uniqueSpaces.filter((s) => {
     if (tab === "Live now" && !s.live) return false;
-    if (tab === "Upcoming" && (s.live || isRecordedSpace(s))) return false;
+    if (tab === "Upcoming" && !isUpcomingSpace(s)) return false;
     if (tab === "Recorded" && !isRecordedSpace(s)) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -376,6 +433,21 @@ function SpacesPage() {
     }
     return true;
   });
+
+  // Apply the personalised ordering to discovery tabs (Live / Upcoming) when we
+  // have it and the user isn't actively searching. Rooms created after mount
+  // aren't in the ranking yet, so they keep the top (newest-first) position.
+  const filtered = (() => {
+    if (tab === "Recorded" || searchQuery.trim() || Object.keys(recRank).length === 0) {
+      return matched;
+    }
+    const rankOf = (s: (typeof matched)[number], idx: number) =>
+      s.id in recRank ? recRank[s.id] : -(idx + 1);
+    return matched
+      .map((s, idx) => ({ s, idx }))
+      .sort((a, b) => rankOf(a.s, a.idx) - rankOf(b.s, b.idx))
+      .map((x) => x.s);
+  })();
 
   return (
     <AppShell
@@ -577,21 +649,31 @@ function SpacesPage() {
               </div>
 
               <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground block mb-1">
+                <label
+                  htmlFor="space-topic"
+                  className="text-xs font-bold uppercase tracking-wider text-muted-foreground block mb-1"
+                >
                   Topic / Category
                 </label>
-                <select
+                {/* Combobox: pick a suggested topic or type your own free-text category. */}
+                <input
+                  id="space-topic"
+                  type="text"
+                  required
+                  list="space-topic-suggestions"
                   value={topicDraft}
                   onChange={(e) => setTopicDraft(e.target.value)}
-                  className="w-full rounded-2xl bg-foreground/5 px-4 py-2.5 text-sm outline-none border border-transparent focus:border-brand/40 cursor-pointer"
-                >
-                  <option value="Design & Craft">Design & Craft</option>
-                  <option value="AI & Generative">AI & Generative</option>
-                  <option value="Photography">Photography</option>
-                  <option value="Product & Tech">Product & Tech</option>
-                  <option value="Sound Design">Sound Design</option>
-                  <option value="Open Mic">Open Mic</option>
-                </select>
+                  placeholder="e.g. Indie Game Dev, Study Together..."
+                  className="w-full rounded-2xl bg-foreground/5 px-4 py-2.5 text-sm outline-none border border-transparent focus:border-brand/40"
+                />
+                <datalist id="space-topic-suggestions">
+                  <option value="Design & Craft" />
+                  <option value="AI & Generative" />
+                  <option value="Photography" />
+                  <option value="Product & Tech" />
+                  <option value="Sound Design" />
+                  <option value="Open Mic" />
+                </datalist>
               </div>
 
               <div>

@@ -15,6 +15,11 @@
 // Reads DATABASE_URL from the environment, .env, or .dev.vars. Each applied
 // file is stored with a sha256 checksum so an accidental edit to an already
 // shipped migration is caught rather than silently ignored.
+//
+// After any apply/baseline the runner sends `NOTIFY pgrst, 'reload schema'`
+// so Supabase's PostgREST drops its cached schema immediately — without it,
+// new columns/functions stay invisible (PGRST204 / PGRST202) until the API
+// layer notices the change on its own.
 // =============================================================================
 import { readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -74,6 +79,16 @@ const TRACKING_DDL = `
   );
 `;
 
+async function reloadPostgrestSchema(sql) {
+  try {
+    await sql`select pg_notify('pgrst', 'reload schema')`;
+    console.log("PostgREST schema cache reload notified.");
+  } catch (err) {
+    // Never fail a migration because the notify didn't land.
+    console.warn("Could not notify PostgREST to reload schema:", err?.message ?? err);
+  }
+}
+
 async function main() {
   loadDotEnv();
   const url = process.env.DATABASE_URL;
@@ -124,6 +139,7 @@ async function main() {
         console.log(`baselined ${f.name} (not executed)`);
       }
       console.log(`\nRecorded ${pending.length} existing migrations as applied without running them.`);
+      await reloadPostgrestSchema(sql);
       return;
     }
 
@@ -151,6 +167,7 @@ async function main() {
       console.log(`\n${pending.length} migration(s) would be applied (dry run — nothing changed).`);
     } else {
       console.log(`\nApplied ${pending.length} migration(s).`);
+      await reloadPostgrestSchema(sql);
     }
   } finally {
     await sql.end({ timeout: 5 });

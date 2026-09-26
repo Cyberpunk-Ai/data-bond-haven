@@ -22,6 +22,7 @@ import { currentUser } from "@/lib/profile-service";
 import { createPost, uploadMedia } from "@/lib/api-client";
 import { AiDraftModal } from "@/components/social/AiDraftModal";
 import { useAuth } from "@/lib/auth-state";
+import { useWorkspace } from "@/lib/workspace-state";
 import { cn } from "@/lib/utils";
 
 const LIMIT = 1000;
@@ -68,6 +69,10 @@ export function Composer({
 }) {
   const { user } = useAuth();
   const activeUser = user || currentUser;
+  // Active posting identity: personal account or a team workspace the user can
+  // post to (Owner/Admin/Editor). Switching in the sidebar updates this live.
+  const { activeWorkspace, canPost: canPostAsWorkspace } = useWorkspace();
+  const postAsBrand = Boolean(activeWorkspace && canPostAsWorkspace);
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -232,6 +237,7 @@ export function Composer({
         media_url: attachedMedia.length > 0 ? attachedMedia.join(",") : undefined,
         tags: customTags,
         poll: pollData,
+        workspaceId: postAsBrand ? activeWorkspace!.id : null,
       });
 
       setDraft("");
@@ -278,12 +284,33 @@ export function Composer({
           compact && "p-3 sm:p-4",
         )}
       >
+        {/* Posting-as banner: makes the active identity explicit and reversible,
+            and warns a Viewer (who can't post as the brand) where it will go. */}
+        {activeWorkspace && (
+          <div className="mb-2.5 flex items-center gap-2 rounded-2xl border border-brand/20 bg-brand/5 px-3 py-1.5 text-xs">
+            <span className="text-sm leading-none">{activeWorkspace.logoEmoji}</span>
+            <span className="font-bold text-foreground">{activeWorkspace.name}</span>
+            {postAsBrand ? (
+              <span className="text-muted-foreground">· posting as team</span>
+            ) : (
+              <span className="font-semibold text-amber-600 dark:text-amber-400">
+                your role can't post here — will publish to your personal account
+              </span>
+            )}
+          </div>
+        )}
         <div className="flex gap-2.5 sm:gap-3">
-          <Avatar
-            name={activeUser.display_name}
-            src={activeUser.avatar_url}
-            className="h-9 w-9 sm:h-11 sm:w-11 text-xs shrink-0"
-          />
+          {postAsBrand && !activeWorkspace!.avatarUrl ? (
+            <span className="flex h-9 w-9 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand to-brand-pink text-lg shadow-soft">
+              {activeWorkspace!.logoEmoji}
+            </span>
+          ) : (
+            <Avatar
+              name={postAsBrand ? activeWorkspace!.name : activeUser.display_name}
+              src={postAsBrand ? activeWorkspace!.avatarUrl : activeUser.avatar_url}
+              className="h-9 w-9 sm:h-11 sm:w-11 text-xs shrink-0"
+            />
+          )}
           <div className="min-w-0 flex-1">
             <textarea
               ref={textareaRef}
@@ -291,7 +318,7 @@ export function Composer({
               onChange={(e) => setDraft(e.target.value)}
               onFocus={() => setFocused(true)}
               rows={focused || draft || attachedMedia.length > 0 || selectedGradient ? 3 : 1}
-              placeholder={placeholder}
+              placeholder={postAsBrand ? `Sharing to ${activeWorkspace!.name}…` : placeholder}
               className="w-full resize-none bg-transparent text-sm sm:text-[1.05rem] leading-relaxed placeholder:text-muted-foreground focus:outline-none min-h-[60px]"
             />
 

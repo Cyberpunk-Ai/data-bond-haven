@@ -92,7 +92,9 @@ function NotificationsPage() {
   const navigate = useNavigate();
   const [items, setItems] = useState<Notification[]>([]);
   const [filter, setFilter] = useState<(typeof filters)[number]>("All");
-  const [loading, setLoading] = useState(false);
+  // Start in the loading state so the first paint shows the skeleton instead of
+  // flashing an empty "no notifications" panel before the effect resolves.
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
@@ -294,7 +296,9 @@ function NotificationsPage() {
                 <BellOff className="h-8 w-8 text-muted-foreground" />
                 <p className="font-bold">Nothing here yet</p>
                 <p className="text-sm text-muted-foreground">
-                  New {filter.toLowerCase()} will show up in this tab.
+                  {filter === "All"
+                    ? "Activity like likes, mentions and follows will show up here."
+                    : `New ${filter.toLowerCase()} will show up here.`}
                 </p>
               </Panel>
             )}

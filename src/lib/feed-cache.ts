@@ -84,13 +84,17 @@ export async function triggerFeedPreload(force = false): Promise<PreloadBundleRe
       cache.spaces = bundle.spaces || [];
       cache.trendingTags = bundle.trendingTags || [];
 
-      // Warm image caches for all story avatars and media
+      // Warm image caches for all story avatars and media. media_url can hold
+      // several comma-joined attachments — prewarm each URL on its own, never
+      // the joined string (which 4xx/5xxs the media proxy as one path).
       const imagesToWarm: (string | null | undefined)[] = [];
+      const splitUrls = (value?: string | null) =>
+        value ? value.split(",").map((s) => s.trim()).filter(Boolean) : [];
       bundle.stories.forEach((s) => {
-        imagesToWarm.push(s.media_url);
+        imagesToWarm.push(...splitUrls(s.media_url));
       });
       bundle.foryou.forEach((p) => {
-        if (p.media_url) imagesToWarm.push(p.media_url);
+        imagesToWarm.push(...splitUrls(p.media_url));
       });
       prewarmImages(imagesToWarm);
 
