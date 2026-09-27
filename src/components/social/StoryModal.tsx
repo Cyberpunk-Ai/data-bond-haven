@@ -16,6 +16,7 @@ import { Avatar } from "@/components/social/Avatar";
 import type { Profile, Story } from "@/lib/types";
 import { getProfile, currentUserId } from "@/lib/profile-service";
 import { toggleLikeStory, deleteStory, sendMessage } from "@/lib/api-client";
+import { useAuthorizedMediaUrl } from "@/lib/media-access";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
@@ -54,6 +55,12 @@ export function StoryModal({
   const currentStory = stories[currentIndex];
   const author: Profile | undefined = currentStory ? getProfile(currentStory.user_id) : undefined;
   const isMyStory = currentStory?.user_id === currentUserId;
+
+  // Story images are follow-network media now: resolve the signed URL the
+  // media proxy accepts (a no-op for public/gradient stories).
+  const { src: authorizedMedia } = useAuthorizedMediaUrl(
+    currentStory?.media_url ? currentStory.media_url.split(",")[0]?.trim() : null,
+  );
 
   // Auto-progress timer
   useEffect(() => {
@@ -202,13 +209,18 @@ export function StoryModal({
           !currentStory.media_url && gradientClass,
         )}
         style={
-          currentStory.media_url
+          currentStory.media_url && authorizedMedia
             ? {
-                backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.85) 100%), url(${currentStory.media_url.split(",")[0]?.trim()})`,
+                backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.85) 100%), url(${authorizedMedia})`,
                 backgroundSize: "cover",
                 backgroundPosition: "center",
               }
-            : {}
+            : currentStory.media_url
+              ? // Signed URL still minting: hold the gradient, never a 404 image.
+                {
+                  backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.85) 100%)`,
+                }
+              : {}
         }
         onMouseDown={() => setIsPaused(true)}
         onMouseUp={() => setIsPaused(false)}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   FileText,
   Radio,
@@ -14,6 +14,9 @@ import {
   StopCircle,
   Tag,
   AlertTriangle,
+  X,
+  MapPin,
+  ExternalLink,
 } from "lucide-react";
 import {
   getAdminPosts,
@@ -24,8 +27,11 @@ import {
   deleteStory,
 } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
+import { useProfiles } from "@/lib/profile-service";
 import type { Post, Space, Story, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useAuthorizedMediaUrl } from "@/lib/media-access";
+import { Avatar } from "@/components/social/Avatar";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
 
@@ -42,12 +48,29 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  // Click-to-view previews: admins can open any post or story and see the
+  // exact content members see (full text, media, stats) before moderating.
+  const [previewPost, setPreviewPost] = useState<Post | null>(null);
+  const [previewStory, setPreviewStory] = useState<Story | null>(null);
+  // The Author column used to print raw profile UUIDs. getAdminPosts() already
+  // hydrates the shared profile cache for every author, so resolve names from
+  // it (batched, no per-row fetch).
+  const authorIds = useMemo(() => Array.from(new Set(posts.map((p) => p.user_id))), [posts]);
+  const authors = useProfiles(authorIds);
+
+  // Searching fired a fresh 200-row query on every keystroke. Debounce it and
+  // let the server narrow the result set instead.
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
   const fetchContent = async () => {
     try {
       setLoading(true);
       if (contentType === "posts") {
-        const p = await getAdminPosts({ query: searchQuery || undefined });
+        const p = await getAdminPosts({ query: debouncedQuery || undefined });
         setPosts(p);
       } else if (contentType === "spaces") {
         const res = await getSpaces();
@@ -65,7 +88,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
 
   useEffect(() => {
     fetchContent();
-  }, [contentType, searchQuery]);
+  }, [contentType, debouncedQuery]);
 
   useRealtime({
     "post:deleted": ({ id }: { id: string }) => {
@@ -219,7 +242,12 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
                 </tr>
               ) : (
                 posts.map((post) => (
-                  <tr key={post.id} className="transition-colors hover:bg-foreground/5">
+                  <tr
+                    key={post.id}
+                    onClick={() => setPreviewPost(post)}
+                    title="Click to view the full post"
+                    className="cursor-pointer transition-colors hover:bg-foreground/5"
+                  >
                     <td className="px-5 py-3.5 max-w-md">
                       <p className="line-clamp-2 font-medium text-foreground">{post.content}</p>
                       {post.tags && post.tags.length > 0 && (
@@ -237,7 +265,14 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
                       )}
                     </td>
                     <td className="px-4 py-3.5 text-muted-foreground">
-                      <code className="font-mono text-[0.7rem]">{post.user_id}</code>
+                      <p className="max-w-[11rem] truncate font-semibold text-foreground">
+                        {authors[post.user_id]?.display_name || "Unknown member"}
+                      </p>
+                      <p className="max-w-[11rem] truncate font-mono text-[0.7rem]">
+                        {authors[post.user_id]?.username
+                          ? `@${authors[post.user_id].username}`
+                          : `${post.user_id.slice(0, 8)}\u2026`}
+                      </p>
                     </td>
                     <td className="px-4 py-3.5">
                       <span className="flex items-center gap-1 font-bold text-foreground">
@@ -267,7 +302,10 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
                     <td className="px-5 py-3.5 text-right">
                       {canDeleteContent && (
                         <button
-                          onClick={() => handleDeletePost(post.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeletePost(post.id);
+                          }}
                           className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[0.7rem] font-bold text-rose-700 dark:text-rose-300 hover:bg-rose-500/20"
                           title="Purge post"
                         >
@@ -340,16 +378,30 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
           {stories.map((story) => (
             <div
               key={story.id}
+              onClick={() => setPreviewStory(story)}
+              title="Click to view the full story"
               className={cn(
-                "glass-panel relative flex h-52 flex-col justify-between overflow-hidden rounded-3xl border border-border/80 p-4 shadow-soft",
-                story.gradient || "bg-gradient-to-br from-violet-600 to-pink-600",
+                // Story gradients only carry the from/via/to colour stops (same
+                // as the feed's story rings) — without an explicit direction
+                // class nothing paints, which made these cards translucent
+                // with white text on top. Set the gradient AND a dark veil so
+                // the labels stay legible on every palette, including the
+                // light ones like the yellow theme.
+                "relative flex h-52 cursor-pointer flex-col justify-between overflow-hidden rounded-3xl border border-black/10 shadow-soft transition-transform hover:scale-[1.015] bg-gradient-to-br",
+                story.gradient || "from-violet-600 to-pink-600",
               )}
             >
-              <div className="flex items-center justify-between text-white drop-shadow-md">
+              {/* Image stories show the actual media behind the veil */}
+              {story.media_url && <StoryPreviewImage url={story.media_url} />}
+              <div className="absolute inset-0 bg-black/25" aria-hidden />
+              <div className="relative flex items-center justify-between text-white drop-shadow-md">
                 <span className="text-xs font-bold">{story.user_name || story.user_id}</span>
                 {canDeleteContent && (
                   <button
-                    onClick={() => handleDeleteStory(story.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteStory(story.id);
+                    }}
                     className="rounded-lg bg-black/40 p-1.5 text-white hover:bg-black/60"
                     title="Delete story"
                   >
@@ -358,11 +410,11 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
                 )}
               </div>
 
-              <p className="text-sm font-semibold text-white drop-shadow-md line-clamp-3">
+              <p className="relative text-sm font-semibold text-white drop-shadow-md line-clamp-3">
                 {story.text}
               </p>
 
-              <div className="flex items-center justify-between text-xs text-white/90 drop-shadow-md">
+              <div className="relative flex items-center justify-between text-xs text-white/95 drop-shadow-md">
                 <span>❤️ {story.likes_count || 0}</span>
                 <span className="text-[0.68rem]">
                   {new Date(story.created_at).toLocaleTimeString([], {
@@ -375,6 +427,262 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
           ))}
         </div>
       )}
+
+      {/* Click-to-view: full post preview */}
+      {previewPost && (
+        <PostPreviewModal
+          post={previewPost}
+          author={authors[previewPost.user_id]}
+          onClose={() => setPreviewPost(null)}
+          onDelete={
+            canDeleteContent
+              ? async () => {
+                  await handleDeletePost(previewPost.id);
+                  setPreviewPost(null);
+                }
+              : undefined
+          }
+        />
+      )}
+
+      {/* Click-to-view: full story preview */}
+      {previewStory && (
+        <StoryPreviewModal
+          story={previewStory}
+          authorName={previewStory.user_name || authors[previewStory.user_id]?.display_name}
+          onClose={() => setPreviewStory(null)}
+          onDelete={
+            canDeleteContent
+              ? async () => {
+                  await handleDeleteStory(previewStory.id);
+                  setPreviewStory(null);
+                }
+              : undefined
+          }
+        />
+      )}
     </div>
+  );
+}
+
+/** Story images are follow-network private media — mint the signed URL. */
+function StoryPreviewImage({ url, contain = false }: { url: string; contain?: boolean }) {
+  const first = url.split(",")[0]?.trim();
+  const { src } = useAuthorizedMediaUrl(first);
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt="Story media"
+      className={cn(
+        "absolute inset-0 h-full w-full",
+        contain ? "object-contain bg-black/60" : "object-cover",
+      )}
+    />
+  );
+}
+
+/** Same rule for post media (public folder — returned as-is, no token). */
+function PostMediaImage({ url }: { url: string }) {
+  const { src } = useAuthorizedMediaUrl(url);
+  if (!src) return null;
+  return (
+    <a href={src} target="_blank" rel="noopener noreferrer" className="block">
+      <img
+        src={src}
+        alt="Post media"
+        className="max-h-[22rem] w-full rounded-2xl border border-border/60 object-contain bg-black/40"
+      />
+      <span className="mt-1 flex items-center gap-1 text-[0.68rem] text-muted-foreground hover:text-brand">
+        <ExternalLink className="h-3 w-3" /> Open full size
+      </span>
+    </a>
+  );
+}
+
+function ModalShell({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl border border-border bg-card p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function PostPreviewModal({
+  post,
+  author,
+  onClose,
+  onDelete,
+}: {
+  post: Post;
+  author?: { display_name: string; username: string; avatar_url: string | null };
+  onClose: () => void;
+  onDelete?: () => void;
+}) {
+  const mediaUrls = (post.media_url || post.image_url || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return (
+    <ModalShell onClose={onClose}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Avatar
+            name={author?.display_name || "Member"}
+            src={author?.avatar_url}
+            className="h-9 w-9 text-xs"
+          />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold">
+              {author?.display_name || "Unknown member"}
+            </p>
+            <p className="truncate text-xs text-muted-foreground">
+              {author?.username ? `@${author.username}` : `${post.user_id.slice(0, 8)}…`}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close preview"
+          className="rounded-full p-1.5 text-muted-foreground hover:bg-muted cursor-pointer"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+        {post.content}
+      </p>
+
+      {post.tags && post.tags.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {post.tags.map((t) => (
+            <span key={t} className="rounded-md bg-brand/10 px-2 py-0.5 text-[0.7rem] font-semibold text-brand">
+              #{t}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {mediaUrls.length > 0 && (
+        <div className="mt-4 space-y-3">
+          {mediaUrls.map((u) => (
+            <PostMediaImage key={u} url={u} />
+          ))}
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-4 border-t border-border/60 pt-3 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <Eye className="h-3.5 w-3.5 text-emerald-500" /> {(post.viewCount || 0).toLocaleString()} views
+        </span>
+        <span className="flex items-center gap-1">
+          <Heart className="h-3.5 w-3.5 text-rose-500" /> {post.likeCount || 0}
+        </span>
+        <span className="flex items-center gap-1">
+          <MessageSquare className="h-3.5 w-3.5 text-blue-500" /> {post.commentCount || 0}
+        </span>
+        <span className="flex items-center gap-1">
+          <Repeat2 className="h-3.5 w-3.5 text-emerald-500" /> {post.repostCount || 0}
+        </span>
+        <span>{new Date(post.created_at).toLocaleString()}</span>
+      </div>
+
+      {onDelete && (
+        <button
+          onClick={onDelete}
+          className="mt-4 flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-500/20 dark:text-rose-300"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Delete this post
+        </button>
+      )}
+    </ModalShell>
+  );
+}
+
+function StoryPreviewModal({
+  story,
+  authorName,
+  onClose,
+  onDelete,
+}: {
+  story: Story;
+  authorName?: string;
+  onClose: () => void;
+  onDelete?: () => void;
+}) {
+  return (
+    <ModalShell onClose={onClose}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold">Story preview</p>
+          <p className="text-xs text-muted-foreground">
+            {authorName || story.user_name || `${story.user_id.slice(0, 8)}…`}
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close preview"
+          className="rounded-full p-1.5 text-muted-foreground hover:bg-muted cursor-pointer"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Re-render the story itself: gradient or image, veil, text, stickers */}
+      <div
+        className={cn(
+          "relative mx-auto mt-4 flex aspect-[9/16] max-h-[60vh] w-full max-w-[18rem] flex-col justify-between overflow-hidden rounded-3xl border border-black/15 p-4 text-white shadow-soft bg-gradient-to-br",
+          story.gradient || "from-violet-600 to-pink-600",
+        )}
+      >
+        {story.media_url && <StoryPreviewImage url={story.media_url} contain />}
+        <div className="absolute inset-0 bg-black/30" aria-hidden />
+        <div className="relative flex items-center justify-between text-xs font-bold drop-shadow">
+          <span>{authorName || "Member"}</span>
+          {story.mood && <span>{story.mood}</span>}
+        </div>
+        <div className="relative">
+          {(story.stickers?.length ?? 0) > 0 && (
+            <p className="mb-1 text-2xl drop-shadow">
+              {(story.stickers ?? [])
+                .map((s) => (typeof s === "string" ? s : s.emoji))
+                .filter(Boolean)
+                .join(" ")}
+            </p>
+          )}
+          <p className="whitespace-pre-wrap text-sm font-semibold drop-shadow-md">
+            {story.text || story.caption || "(media story)"}
+          </p>
+          {story.location && (
+            <p className="mt-1.5 flex items-center gap-1 text-[0.7rem] text-white/90">
+              <MapPin className="h-3 w-3" /> {story.location}
+            </p>
+          )}
+        </div>
+        <div className="relative flex items-center justify-between text-[0.7rem] font-semibold drop-shadow">
+          <span>❤️ {story.likes_count || 0}</span>
+          <span>👁 {story.view_count || 0}</span>
+          <span>{new Date(story.created_at).toLocaleString()}</span>
+        </div>
+      </div>
+
+      {onDelete && (
+        <button
+          onClick={onDelete}
+          className="mt-4 flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-500/20 dark:text-rose-300"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Delete this story
+        </button>
+      )}
+    </ModalShell>
   );
 }

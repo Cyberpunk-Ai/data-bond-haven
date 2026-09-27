@@ -458,7 +458,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
             className="fixed inset-0 bg-foreground/30 backdrop-blur-sm"
             onClick={() => setEditingUser(null)}
           />
-          <div className="relative w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-lift">
+          <div className="relative max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-3xl border border-border bg-card p-6 shadow-lift">
             <h3 className="text-base font-extrabold text-foreground">
               Modify RBAC Role for @{editingUser.username}
             </h3>

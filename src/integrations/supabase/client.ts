@@ -54,6 +54,12 @@ function createSupabaseClient() {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
+      // Google (and every other OAuth) sign-in is fully provider-driven:
+      // supabase.auth.signInWithOAuth redirects to Supabase Auth, and the
+      // session returned in the URL fragment/hash is detected and consumed
+      // here by supabase-js — never by a hand-rolled callback handler.
+      detectSessionInUrl: true,
+      flowType: "pkce",
     },
   });
 }

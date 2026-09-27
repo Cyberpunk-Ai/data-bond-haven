@@ -99,7 +99,7 @@ export function useDeveloper() {
     const key: ApiKey = {
       id: created.id,
       name,
-      maskedKey: `sk_live_••••••••${created.last4}`,
+      maskedKey: `sp1_live_••••••••${created.last4}`,
       fullKey: created.token,
       createdAt: new Date(created.createdAt).toLocaleDateString(),
       lastUsed: "Never",

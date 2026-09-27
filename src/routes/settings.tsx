@@ -86,7 +86,7 @@ const sections: Array<{
   { id: "profile", label: "Profile", icon: User },
   { id: "plan", label: "Plan & Billing", icon: CreditCard },
   { id: "analytics", label: "Creator Analytics", icon: TrendingUp, tier: "plus" },
-  { id: "monetization", label: "Monetization & Tips", icon: DollarSign, tier: "plus" },
+  { id: "monetization", label: "Monetization & Tips", icon: DollarSign },
   { id: "branding", label: "Custom Branding", icon: Sparkles, tier: "plus" },
   { id: "workspaces", label: "Team Workspaces", icon: Users, tier: "pro" },
   { id: "developer", label: "Developer API", icon: Code, tier: "pro" },

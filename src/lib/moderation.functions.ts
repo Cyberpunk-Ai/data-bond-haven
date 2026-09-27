@@ -255,12 +255,19 @@ export const saveSystemSettings = createServerFn({ method: "POST" })
         auto_mod_strictness: z.string().max(20),
         max_upload_size_mb: z.number().int().min(1).max(500),
         rate_limit_requests_per_min: z.number().int().min(1).max(10000),
-        announcement_banner: z.object({
-          active: z.boolean(),
-          message: z.string().max(300),
-          type: z.string().max(20),
-          dismissible: z.boolean(),
-        }),
+        announcement_banner: z
+          .object({
+            active: z.boolean(),
+            message: z.string().max(300),
+            type: z.string().max(20),
+            // The admin tab edits this field too; without it zod silently
+            // stripped the destination link on every save.
+            link: z.string().max(500).optional(),
+            dismissible: z.boolean(),
+          })
+          .refine((b) => !b.active || b.message.trim().length > 0, {
+            message: "Announcement banner needs a message before it can go live.",
+          }),
       })
       .parse(input),
   )

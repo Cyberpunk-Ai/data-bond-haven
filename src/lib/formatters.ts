@@ -18,6 +18,36 @@ export function initials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+/**
+ * The platform's advertising currency is USD everywhere (global audience), so
+ * money is rendered with a plain dollar sign rather than a locale-dependent
+ * currency name. Fixed `en-US` formatting keeps server and client output
+ * identical — no hydration flicker.
+ */
+export function usd(amount: number): string {
+  const value = Number.isFinite(amount) ? amount : 0;
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch {
+    return `$${value.toFixed(2)}`;
+  }
+}
+
+/** A local-currency equivalent for confirmations: "≈ KES 1,560". */
+export function approxLocal(amount: number, currency: string): string {
+  const value = Number.isFinite(amount) ? amount : 0;
+  try {
+    return `≈ ${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)} ${currency}`;
+  } catch {
+    return `≈ ${value.toFixed(2)} ${currency}`;
+  }
+}
+
 export function timeAgo(isoString: string, _now?: unknown): string {
   if (!isoString) return "";
   const date = new Date(isoString);

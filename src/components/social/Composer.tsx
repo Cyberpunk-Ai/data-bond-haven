@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
 import { Avatar } from "@/components/social/Avatar";
+import { TeamAvatar } from "@/components/social/TeamAvatar";
 import type { Post, Poll } from "@/lib/types";
 import { currentUser } from "@/lib/profile-service";
 import { createPost, uploadMedia } from "@/lib/api-client";
@@ -300,14 +301,18 @@ export function Composer({
           </div>
         )}
         <div className="flex gap-2.5 sm:gap-3">
-          {postAsBrand && !activeWorkspace!.avatarUrl ? (
-            <span className="flex h-9 w-9 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand to-brand-pink text-lg shadow-soft">
-              {activeWorkspace!.logoEmoji}
-            </span>
+          {postAsBrand ? (
+            <TeamAvatar
+              name={activeWorkspace!.name}
+              emoji={activeWorkspace!.logoEmoji}
+              avatarUrl={activeWorkspace!.avatarUrl}
+              size="sm"
+              className="sm:h-11 sm:w-11"
+            />
           ) : (
             <Avatar
-              name={postAsBrand ? activeWorkspace!.name : activeUser.display_name}
-              src={postAsBrand ? activeWorkspace!.avatarUrl : activeUser.avatar_url}
+              name={activeUser.display_name}
+              src={activeUser.avatar_url}
               className="h-9 w-9 sm:h-11 sm:w-11 text-xs shrink-0"
             />
           )}

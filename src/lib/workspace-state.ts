@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { currentUser } from "@/lib/profile-service";
+import { currentUser, subscribeProfiles } from "@/lib/profile-service";
 import { supabase } from "@/integrations/supabase/client";
 import { signedInProfileId } from "@/lib/remote-store";
 
@@ -40,6 +40,20 @@ export interface PendingInvite {
 
 const ACTIVE_KEY = "spaces:activeWorkspace";
 const PERSONAL_ID = "personal";
+
+/**
+ * Single source of truth for a workspace's display handle. Workspaces are keyed
+ * by their uuid everywhere (the `/workspace/$id` route, the `posts.workspace_id`
+ * FK); the slug is purely cosmetic — a lowercase, hyphenated form of the name
+ * shown next to the team. Derive it the same way in the profile route and on
+ * every team post so `@slug` never disagrees between surfaces.
+ */
+export function workspaceSlug(name: string): string {
+  return String(name ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
 
 // Workspaces always come from the database; nothing is kept in the browser except
 // which one is currently active, so switching accounts never shows another
@@ -130,7 +144,7 @@ async function hydrate(force = false) {
     return {
       id: String(row.id),
       name: String(row.name),
-      slug: String(row.name).toLowerCase().replace(/\s+/g, "-"),
+      slug: workspaceSlug(String(row.name)),
       logoEmoji: String(row.logo_emoji ?? "🚀"),
       avatarUrl: row.avatar_url ?? null,
       bio: String(row.bio ?? ""),
@@ -159,6 +173,24 @@ function mutateActive(fn: (ws: Workspace) => Workspace) {
   listeners.forEach((fn) => fn());
 }
 
+// Shared profile write used by both updateWorkspaceProfile (active team) and
+// updateWorkspaceFor (explicit team, e.g. the /workspace/$id page editing the
+// team it shows rather than the composer's active one).
+async function applyWorkspaceProfilePatch(
+  workspaceId: string,
+  patch: { name?: string; bio?: string; avatarUrl?: string | null; logoEmoji?: string },
+) {
+  if (!workspaceId || workspaceId === PERSONAL_ID) throw new Error("Choose a workspace first.");
+  const row: Record<string, unknown> = {};
+  if (patch.name !== undefined) row["name"] = patch.name;
+  if (patch.bio !== undefined) row["bio"] = patch.bio;
+  if (patch.avatarUrl !== undefined) row["avatar_url"] = patch.avatarUrl;
+  if (patch.logoEmoji !== undefined) row["logo_emoji"] = patch.logoEmoji;
+  const { error } = await db.from("workspaces").update(row).eq("id", workspaceId);
+  if (error) throw new Error(error.message);
+  await hydrate(true);
+}
+
 export function useWorkspace() {
   const [, force] = useState(0);
 
@@ -166,8 +198,19 @@ export function useWorkspace() {
     const rerender = () => force((n) => n + 1);
     listeners.add(rerender);
     void hydrate();
+    // The auth session can restore AFTER this mount's hydrate() no-oped as
+    // guest (direct load / refresh of any page). Re-run whenever the signed-in
+    // profile appears or disappears, so /workspace/$id always learns the
+    // viewer's real role instead of rendering the public variant.
+    const syncFromAuth = () => {
+      const uid = signedInProfileId();
+      if (uid && loadedFor !== uid) void hydrate();
+      else if (!uid && loadedFor) void hydrate();
+    };
+    const unsubscribeProfiles = subscribeProfiles(syncFromAuth);
     return () => {
       listeners.delete(rerender);
+      unsubscribeProfiles?.();
     };
   }, []);
 
@@ -229,12 +272,12 @@ export function useWorkspace() {
       const { error } = await db.from("workspace_members").update({ role }).eq("id", id);
       if (error) await hydrate(true);
     },
-    async createWorkspace(name: string, logoEmoji = "✨") {
+    async createWorkspace(name: string, logoEmoji = "✨", avatarUrl?: string | null) {
       const userId = signedInProfileId();
       if (!userId) throw new Error("Sign in to create a workspace.");
       const { data, error } = await db
         .from("workspaces")
-        .insert({ name, owner_id: userId, logo_emoji: logoEmoji })
+        .insert({ name, owner_id: userId, logo_emoji: logoEmoji, ...(avatarUrl ? { avatar_url: avatarUrl } : {}) })
         .select("id")
         .maybeSingle();
       if (error || !data?.id) throw new Error(error?.message ?? "Could not create that workspace.");
@@ -253,14 +296,13 @@ export function useWorkspace() {
     },
     async updateWorkspaceProfile(patch: { name?: string; bio?: string; avatarUrl?: string | null; logoEmoji?: string }) {
       if (!activeWsId || activeWsId === PERSONAL_ID) throw new Error("Choose a workspace first.");
-      const row: Record<string, unknown> = {};
-      if (patch.name !== undefined) row["name"] = patch.name;
-      if (patch.bio !== undefined) row["bio"] = patch.bio;
-      if (patch.avatarUrl !== undefined) row["avatar_url"] = patch.avatarUrl;
-      if (patch.logoEmoji !== undefined) row["logo_emoji"] = patch.logoEmoji;
-      const { error } = await db.from("workspaces").update(row).eq("id", activeWsId);
-      if (error) throw new Error(error.message);
-      await hydrate(true);
+      await applyWorkspaceProfilePatch(activeWsId, patch);
+    },
+    // Same edit, keyed by workspace id — lets the team profile page edit the
+    // team it is showing even when a different workspace is active in the
+    // composer. RLS ("workspaces owner update") still enforces Owner/Admin.
+    async updateWorkspaceFor(workspaceId: string, patch: { name?: string; bio?: string; avatarUrl?: string | null; logoEmoji?: string }) {
+      await applyWorkspaceProfilePatch(workspaceId, patch);
     },
     async respondToInvite(memberId: string, accept: boolean) {
       const { error } = await db.rpc("respond_workspace_invite", { _member_id: memberId, _accept: accept });

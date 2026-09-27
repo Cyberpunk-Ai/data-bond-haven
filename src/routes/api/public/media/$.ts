@@ -1,8 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getStorageProvider } from "@/lib/storage/index.server";
 
-const PUBLIC_FOLDERS = ["avatars", "posts", "stories", "media"];
-const AUTHED_FOLDERS = ["messages", "recordings"];
+// `stories` moved from public to authed: the rows are already limited to the
+// author's follow network by RLS, and the bytes now enforce the same rule.
+const PUBLIC_FOLDERS = ["avatars", "posts", "media"];
+const AUTHED_FOLDERS = ["messages", "recordings", "stories"];
 
 // Content types we are willing to render inline. Anything else (notably
 // image/svg+xml and text/html, which can carry script) is forced to a
@@ -32,7 +34,9 @@ const INLINE_CONTENT_TYPES = new Set([
  * AND that the caller is a participant in the conversation the attachment
  * belongs to. Every response is served with `nosniff` plus a content-type
  * allowlist that forces non-media payloads to download instead of rendering
- * inline.
+ * inline. Byte-range (`Range: bytes=…`) is honoured with 206/416 responses,
+ * which is what makes seeking work in the audio/video players, and private
+ * objects are cached `private,` never `public`.
  */
 export const Route = createFileRoute("/api/public/media/$")({
   server: {
@@ -52,18 +56,24 @@ export const Route = createFileRoute("/api/public/media/$")({
           return new Response("Not found", { status: 404 });
         }
 
-        if (folder === "messages") {
-          if (!(await isAuthorizedForMessageMedia(request, path))) {
-            return new Response("Not found", { status: 404 });
+        if (isAuthed) {
+          // Private object. Two ways in: the caller's bearer session, or a
+          // short-lived signed path (`?mt=`) minted by /api/media/token after
+          // the same ACL below - which is how <audio>/<video>/<img> elements
+          // reach private media, since a browser cannot send an Authorization
+          // header on a subresource load.
+          const [{ verifyMediaToken }, { canReadMediaPath }] = await Promise.all([
+            import("@/lib/media-token.server"),
+            import("@/lib/media-authz.server"),
+          ]);
+          const tokenParam = new URL(request.url).searchParams.get("mt");
+          const tokenProfile = verifyMediaToken(path, tokenParam);
+          if (!tokenProfile) {
+            const { identityFromRequest } = await import("@/lib/identity.server");
+            const identity = await identityFromRequest(request);
+            const allowed = await canReadMediaPath(path, identity);
+            if (!allowed) return new Response("Not found", { status: 404 });
           }
-        } else if (folder === "recordings") {
-          if (!(await isAuthorizedForRecording(request, path))) {
-            return new Response("Not found", { status: 404 });
-          }
-        } else if (isAuthed) {
-          // Defensive: any future authed folder fails closed until it has a
-          // purpose-written authorisation check.
-          return new Response("Not found", { status: 404 });
         }
 
         const object = await getStorageProvider().get(path);
@@ -77,16 +87,48 @@ export const Route = createFileRoute("/api/public/media/$")({
           .toLowerCase();
         const inline = INLINE_CONTENT_TYPES.has(rawType);
         const filename = path.split("/").pop() ?? "media";
+        const bytes = object.body instanceof Uint8Array ? object.body : new Uint8Array(object.body as ArrayBuffer);
 
-        return new Response(object.body as BodyInit, {
-          headers: {
-            "Content-Type": inline ? rawType : "application/octet-stream",
-            "X-Content-Type-Options": "nosniff",
-            "Content-Disposition": inline
-              ? `inline; filename="${filename}"`
-              : `attachment; filename="${filename}"`,
-            "Cache-Control": inline ? "public, max-age=31536000, immutable" : "no-store",
-          },
+        // A private object must never be stored by a shared cache — and not
+        // even by the browser for long: story/DM/recording access can be
+        // revoked (unfollow, delete) minutes after it was first viewed.
+        const cacheControl = !inline
+          ? "no-store"
+          : isPublic
+            ? "public, max-age=31536000, immutable"
+            : "no-store";
+
+        const baseHeaders: Record<string, string> = {
+          "Content-Type": inline ? rawType : "application/octet-stream",
+          "X-Content-Type-Options": "nosniff",
+          "Content-Disposition": inline
+            ? `inline; filename="${filename}"`
+            : `attachment; filename="${filename}"`,
+          "Cache-Control": cacheControl,
+          "Accept-Ranges": "bytes",
+        };
+
+        const range = parseByteRange(request.headers.get("range"), bytes.byteLength);
+        if (range === "unsatisfiable") {
+          return new Response(null, {
+            status: 416,
+            headers: { ...baseHeaders, "Content-Range": `bytes */${bytes.byteLength}` },
+          });
+        }
+        if (range) {
+          const slice = bytes.subarray(range.start, range.end + 1);
+          return new Response(slice as unknown as BodyInit, {
+            status: 206,
+            headers: {
+              ...baseHeaders,
+              "Content-Range": `bytes ${range.start}-${range.end}/${bytes.byteLength}`,
+              "Content-Length": String(slice.byteLength),
+            },
+          });
+        }
+
+        return new Response(bytes as unknown as BodyInit, {
+          headers: { ...baseHeaders, "Content-Length": String(bytes.byteLength) },
         });
       },
     },
@@ -94,74 +136,33 @@ export const Route = createFileRoute("/api/public/media/$")({
 });
 
 /**
- * A private DM attachment may only be read by someone signed in AND who is a
- * participant (sender or recipient) of a conversation that actually
- * references this attachment.
+ * Parse a single `Range: bytes=a-b` header against a known object size.
+ * Returns null when no range was requested (serve whole), "unsatisfiable"
+ * when it cannot be honoured, or the inclusive byte span.
  */
-async function isAuthorizedForMessageMedia(request: Request, path: string): Promise<boolean> {
-  const { identityFromRequest } = await import("@/lib/identity.server");
-  const identity = await identityFromRequest(request);
-  if (!identity) return false;
-  const { profileId, authUserId } = identity;
-
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const db = supabaseAdmin as any;
-
-  const mediaUrl = `/api/public/media/${path}`;
-  const { data: message } = await db
-    .from("messages")
-    .select("conversation_id, conversations!inner(user_a, user_b)")
-    .eq("media_url", mediaUrl)
-    .maybeSingle();
-  if (!message) {
-    // Legacy attachments uploaded before conversation linkage: fall back to
-    // "the caller owns the folder segment". New uploads namespace the segment
-    // by profileId; pre-M3 uploads used the auth uid, so both are honoured
-    // during the grace period (plan §4.7).
-    const segments = path.split("/");
-    return segments[1] === profileId || segments[1] === authUserId;
+function parseByteRange(
+  header: string | null,
+  size: number,
+): { start: number; end: number } | "unsatisfiable" | null {
+  const text = header?.trim().toLowerCase();
+  if (!text || !text.startsWith("bytes=")) return null;
+  // Only a single range is supported; a multi-range request serves the whole
+  // object rather than pretending to be a multipart/byteranges server.
+  if (text.split("=")[1]?.includes(",")) return null;
+  const [rawStart, rawEnd] = text.slice(6).split("-");
+  if (rawStart === "" || rawStart === undefined) {
+    // Suffix form `bytes=-N` = the last N bytes.
+    const suffix = Number(rawEnd);
+    if (!Number.isFinite(suffix) || suffix <= 0 || size === 0) return "unsatisfiable";
+    return { start: Math.max(0, size - suffix), end: size - 1 };
   }
-
-  const convo = (message as any).conversations;
-  return convo?.user_a === profileId || convo?.user_b === profileId;
+  const start = Number(rawStart);
+  if (!Number.isFinite(start) || start < 0 || start >= size) return "unsatisfiable";
+  const end = rawEnd === undefined || rawEnd === "" ? size - 1 : Number(rawEnd);
+  if (!Number.isFinite(end) || end < start) return "unsatisfiable";
+  return { start, end: Math.min(end, size - 1) };
 }
 
-/**
- * A Space recording may only be read by the host, an approved participant, or
- * staff. The recording's public URL is stored on `spaces.recording_url`, so we
- * resolve the owning Space from the path and check membership there rather
- * than trusting the (auth-uid-namespaced) folder segment.
- */
-async function isAuthorizedForRecording(request: Request, path: string): Promise<boolean> {
-  const { identityFromRequest } = await import("@/lib/identity.server");
-  const identity = await identityFromRequest(request);
-  if (!identity) return false;
-  const { profileId, authUserId } = identity;
+// The per-folder read rules live in src/lib/media-authz.server.ts so that this
+// reader and the /api/media/token issuer cannot drift apart.
 
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const db = supabaseAdmin as any;
-
-  const mediaUrl = `/api/public/media/${path}`;
-  const { data: space } = await db
-    .from("spaces")
-    .select("id, host_id, space_participants(user_id)")
-    .eq("recording_url", mediaUrl)
-    .maybeSingle();
-  if (!space) {
-    // Recording not (yet) attached to a Space row: fail closed except for the
-    // uploader owning the folder segment (profileId cannot equal the auth-uid
-    // segment, so this is effectively a safe 404 until finalize links the row).
-    return false;
-  }
-  if (space.host_id === profileId) return true;
-  const participants: Array<{ user_id: string }> = space.space_participants ?? [];
-  if (participants.some((p) => p.user_id === profileId)) return true;
-
-  const { data: staff } = await db
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", authUserId)
-    .in("role", ["admin", "moderator"])
-    .maybeSingle();
-  return Boolean(staff);
-}

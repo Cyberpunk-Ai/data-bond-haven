@@ -14,8 +14,8 @@ type BillingCycle = "monthly" | "annual";
  */
 
 async function paystackConfig() {
-  const { env } = await import("@/lib/env.server");
-  return env().paystack;
+  const { paystackConfig } = await import("@/lib/paystack-api.server");
+  return paystackConfig();
 }
 
 async function admin() {
@@ -45,21 +45,8 @@ async function planUsdPrice(plan: PlanTier, cycle: BillingCycle): Promise<number
 }
 
 async function paystack(path: string, init?: RequestInit) {
-  const key = (await paystackConfig()).secretKey;
-  if (!key) throw new Error("Payments are not configured yet.");
-  const res = await fetch(`https://api.paystack.co${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  const body = (await res.json().catch(() => ({}))) as any;
-  if (!res.ok || body?.status === false) {
-    throw new Error(body?.message || `Payment provider error (${res.status})`);
-  }
-  return body;
+  const { paystack } = await import("@/lib/paystack-api.server");
+  return paystack(path, init);
 }
 
 async function profileIdFor(supabase: any, userId: string): Promise<string> {
@@ -144,13 +131,17 @@ export const startPaystackCheckout = createServerFn({ method: "POST" })
 /**
  * Starts a real, paid tip. The tip is only recorded for the creator once
  * Paystack confirms the charge (callback or webhook), via the shared
- * `settle_paystack_transaction` function.
+ * `settle_paystack_transaction` function. When `recipientWorkspaceId` is set
+ * the tip belongs to a TEAM: we settle `recipient_workspace_id` so the credit
+ * lands on the workspace ledger, while `recipient_id` stays the workspace owner
+ * (satisfies the FK and anchors the platform-fee tier).
  */
 export const startTipCheckout = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator(
     (input: {
-      recipientUsername: string;
+      recipientUsername?: string;
+      recipientWorkspaceId?: string | null;
       amount: number;
       message?: string;
       postId?: string | null;
@@ -162,7 +153,9 @@ export const startTipCheckout = createServerFn({ method: "POST" })
       if (!Number.isFinite(amount) || amount < 0.1 || amount > 1000) {
         throw new Error("Tip amount must be between $0.10 and $1000.");
       }
-      if (!input.recipientUsername) throw new Error("Pick someone to tip.");
+      if (!input.recipientUsername && !input.recipientWorkspaceId) {
+        throw new Error("Pick someone to tip.");
+      }
       if (!/^https?:\/\//.test(input.origin)) throw new Error("Invalid origin");
       return { ...input, amount: Math.round(amount * 100) / 100 };
     },
@@ -171,15 +164,32 @@ export const startTipCheckout = createServerFn({ method: "POST" })
     const { supabase, userId, claims } = context as any;
     const profileId = await profileIdFor(supabase, userId);
 
-    const cleanUsername = data.recipientUsername.replace(/^@/, "");
-    const { data: recipient } = await supabase
-      .from("profiles")
-      .select("id, username")
-      .eq("username", cleanUsername)
-      .maybeSingle();
-    if (!recipient?.id) throw new Error("We couldn't find that creator.");
-    const recipientId = String(recipient.id);
-    if (recipientId === profileId) throw new Error("You can't tip yourself.");
+    const cleanUsername = (data.recipientUsername ?? "").replace(/^@/, "");
+    let recipientId: string;
+    let recipientWorkspaceId: string | null = null;
+
+    if (data.recipientWorkspaceId) {
+      // Team tip: resolve the workspace and its owner through the admin client
+      // (a supporter need not be a member, so the member-only table read is not
+      // enough here).
+      const { data: ws } = await (await admin())
+        .from("workspaces")
+        .select("id, owner_id")
+        .eq("id", data.recipientWorkspaceId)
+        .maybeSingle();
+      if (!ws?.id) throw new Error("We couldn't find that team.");
+      recipientWorkspaceId = String(ws.id);
+      recipientId = String(ws.owner_id);
+    } else {
+      const { data: recipient } = await supabase
+        .from("profiles")
+        .select("id, username")
+        .eq("username", cleanUsername)
+        .maybeSingle();
+      if (!recipient?.id) throw new Error("We couldn't find that creator.");
+      recipientId = String(recipient.id);
+      if (recipientId === profileId) throw new Error("You can't tip yourself.");
+    }
 
     const { currency, usdRate } = await paystackConfig();
     const email = claims?.email ?? `${profileId}@users.noreply.app`;
@@ -213,6 +223,7 @@ export const startTipCheckout = createServerFn({ method: "POST" })
       exchange_rate: usdRate,
       quoted_amount_usd: data.amount,
       recipient_id: recipientId,
+      recipient_workspace_id: recipientWorkspaceId,
       tip_message: (data.message ?? "").slice(0, 240),
       tip_post_id: data.postId ?? null,
       email,

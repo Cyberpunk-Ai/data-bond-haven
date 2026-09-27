@@ -1,8 +1,25 @@
 import { useState } from "react";
-import { Users, UserPlus, Shield, Trash2, Lock, Crown, Check, Mail, Building, Pencil } from "lucide-react";
+import type { FormEvent } from "react";
+import {
+  Users,
+  UserPlus,
+  Shield,
+  Trash2,
+  Lock,
+  Crown,
+  Check,
+  Mail,
+  Building,
+  Pencil,
+  Sparkles,
+  X,
+  Camera,
+  Loader2,
+} from "lucide-react";
 import { useWorkspace, type Workspace, type WorkspaceRole } from "@/lib/workspace-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { Avatar } from "@/components/social/Avatar";
+import { uploadMedia } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
@@ -18,7 +35,12 @@ export function TeamWorkspaceManager() {
     updateMemberRole,
     canManage,
     updateWorkspaceProfile,
+    pendingInvites,
+    respondToInvite,
+    createWorkspace,
   } = useWorkspace();
+
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -56,22 +78,76 @@ export function TeamWorkspaceManager() {
     }
   };
 
-  if (!isPro) return <WorkspacePreview />;
-
-  if (!activeWorkspace) {
+  if (!isPro || !activeWorkspace) {
+    // Invited teammates are not (yet) Pro customers, and a Pro account without
+    // a team still needs an entry point — so both the invite banner and the
+    // create-workspace flow render ahead of the gating below.
+    const inviteBanner = <PendingInvitesBanner />;
+    if (!isPro) {
+      return (
+        <div className="space-y-6">
+          {inviteBanner}
+          <WorkspacePreview />
+        </div>
+      );
+    }
+    if (workspaces.length > 0) {
+      // Pro account currently posting as Personal: the desk used to disappear
+      // even though the teams exist — offer a one-tap activation instead.
+      return (
+        <div className="space-y-6">
+          {inviteBanner}
+          <div className="rounded-3xl border border-border/80 bg-card p-5 md:p-6 space-y-4 shadow-soft">
+            <div>
+              <h3 className="text-base font-extrabold">Your teams</h3>
+              <p className="text-xs text-muted-foreground">
+                You're currently posting as Personal. Open a team desk to manage members, seats
+                and branding.
+              </p>
+            </div>
+            <div className="space-y-2">
+              {workspaces.map((w) => (
+                <div
+                  key={w.id}
+                  className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-foreground/[0.02] p-3"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-xl">
+                      {w.logoEmoji}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-extrabold">{w.name}</p>
+                      <p className="truncate text-[0.7rem] text-muted-foreground">
+                        @{w.slug} · {w.members.length}/{w.seatsTotal} seats ·{" "}
+                        {w.myRole ?? "Member"}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setActiveWsId(w.id)}
+                    className="shrink-0 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-xs font-bold text-white shadow-soft transition-all hover:brightness-105 cursor-pointer"
+                  >
+                    Open team desk
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <WorkspaceCreator onCreate={createWorkspace} variant="card" />
+        </div>
+      );
+    }
     return (
-      <div className="rounded-2xl border border-border bg-card p-10 text-center">
-        <Building className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-        <h3 className="text-base font-extrabold">Setting up your workspace</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          One moment — we&apos;re preparing your team space.
-        </p>
+      <div className="space-y-6">
+        {inviteBanner}
+        <WorkspaceCreator onCreate={createWorkspace} variant="card" />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      <PendingInvitesBanner />
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
@@ -87,13 +163,22 @@ export function TeamWorkspaceManager() {
         </div>
 
         {isPro ? (
-          <button
-            onClick={() => setIsInviteModalOpen(true)}
-            className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all cursor-pointer"
-          >
-            <UserPlus className="h-3.5 w-3.5" />
-            <span>Invite Team Member</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-full border border-border px-3.5 py-2 text-xs font-bold text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-all cursor-pointer"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>New workspace</span>
+            </button>
+            <button
+              onClick={() => setIsInviteModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all cursor-pointer"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              <span>Invite Team Member</span>
+            </button>
+          </div>
         ) : (
           <button
             onClick={() => openUpgradeModal("Team Workspaces & Roles")}
@@ -346,6 +431,230 @@ export function TeamWorkspaceManager() {
           </div>
         </div>
       )}
+
+      {/* New-workspace modal (owners can create more than one team) */}
+      {isCreateModalOpen && (
+        <WorkspaceCreator
+          onCreate={createWorkspace}
+          variant="modal"
+          onClose={() => setIsCreateModalOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Shown to every signed-in user with pending team invites — including
+ * Free/Plus users, since accepting makes them a member of someone else's
+ * Pro team. Accept/decline runs through the security-definer RPC, which
+ * flips the membership, marks the notification read, and pings the owner.
+ */
+function PendingInvitesBanner() {
+  const { pendingInvites, respondToInvite } = useWorkspace();
+  const [busyId, setBusyId] = useState<string | null>(null);
+  if (!pendingInvites.length) return null;
+
+  async function respond(memberId: string, accept: boolean) {
+    setBusyId(memberId);
+    try {
+      await respondToInvite(memberId, accept);
+      toast.success(accept ? "You joined the team!" : "Invitation declined.");
+    } catch (err) {
+      toast.error(friendlyError(err, "Could not respond to that invitation."));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      {pendingInvites.map((inv) => (
+        <div
+          key={inv.memberId}
+          className="rounded-3xl border border-brand/30 bg-gradient-to-r from-brand/10 via-brand-pink/10 to-transparent p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-3"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand/15 text-brand">
+              <UserPlus className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 text-center sm:text-left">
+              <p className="text-sm font-black truncate">Team invitation: {inv.workspaceName}</p>
+              <p className="text-xs text-muted-foreground">
+                You&apos;ve been invited as <span className="font-bold">{inv.role}</span>.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => void respond(inv.memberId, false)}
+              disabled={busyId === inv.memberId}
+              className="rounded-full border border-border px-4 py-2 text-xs font-bold text-muted-foreground hover:bg-muted transition-colors cursor-pointer disabled:opacity-60"
+            >
+              Decline
+            </button>
+            <button
+              onClick={() => void respond(inv.memberId, true)}
+              disabled={busyId === inv.memberId}
+              className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-brand to-brand-pink px-4 py-2 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all cursor-pointer disabled:opacity-60"
+            >
+              <Check className="h-3.5 w-3.5" />
+              {busyId === inv.memberId ? "Working…" : "Accept"}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Creates a workspace. `createWorkspace` inserts the row plus the owner
+ * membership server-side (the owner then becomes the active posting
+ * identity), so this form only collects the name, logo emoji, and an
+ * optional uploaded logo image (same device-upload path as a profile photo).
+ */
+function WorkspaceCreator({
+  onCreate,
+  variant,
+  onClose,
+}: {
+  onCreate: (name: string, logoEmoji?: string, avatarUrl?: string | null) => Promise<void>;
+  variant: "card" | "modal";
+  onClose?: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [emoji, setEmoji] = useState("✨");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const res = await uploadMedia(file, "avatars");
+      setAvatarUrl(res.url);
+      toast.success("Team logo uploaded — it'll be set on creation.");
+    } catch (err) {
+      toast.error(friendlyError(err, "Could not upload image. Please try again."));
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) {
+      toast.error("Give your team a name.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await onCreate(name.trim(), emoji.trim() || "✨", avatarUrl);
+      toast.success("Workspace created — invite your teammates!");
+      onClose?.();
+    } catch (err) {
+      toast.error(friendlyError(err, "Could not create that workspace."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const form = (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="flex items-center gap-3">
+        {/* Logo upload from device, exactly like the profile photo flow. */}
+        <label className="relative shrink-0 cursor-pointer group" title="Upload a logo from your device">
+          <input type="file" accept="image/*" className="sr-only" onChange={handleLogoChange} />
+          {avatarUrl ? (
+            <Avatar name={name || "Team"} src={avatarUrl} className="h-14 w-14 text-lg ring-2 ring-amber-500/40" />
+          ) : (
+            <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-border bg-muted/40 text-xl">
+              {emoji.trim() || "✨"}
+            </div>
+          )}
+          <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white shadow-soft ring-2 ring-card group-hover:brightness-110 transition-all">
+            {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+          </span>
+        </label>
+        <div className="grid flex-1 gap-3 sm:grid-cols-[5rem_1fr]">
+          <div>
+            <label className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
+              Logo emoji
+            </label>
+            <input
+              value={emoji}
+              onChange={(e) => setEmoji(e.target.value)}
+              maxLength={2}
+              className="mt-1 h-10 w-full rounded-xl border border-border bg-muted/40 text-center text-xl outline-none focus:border-amber-500"
+            />
+          </div>
+          <div>
+            <label className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
+              Team name
+            </label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              maxLength={60}
+              placeholder="e.g. Acme Social Team"
+              className="mt-1 w-full rounded-xl border border-border bg-muted/40 px-3 py-2 text-sm font-semibold outline-none focus:border-amber-500"
+            />
+          </div>
+        </div>
+      </div>
+      <button
+        type="submit"
+        disabled={busy}
+        className="w-full rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 py-2.5 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all cursor-pointer disabled:opacity-60"
+      >
+        {busy ? "Creating…" : "Create workspace"}
+      </button>
+    </form>
+  );
+
+  if (variant === "modal") {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-200"
+        onClick={onClose}
+      >
+        <div
+          className="w-full max-w-md rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-black">New team workspace</h3>
+            <button
+              onClick={onClose}
+              className="text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          {form}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-3xl border border-border/80 bg-card p-8 md:p-10 text-center space-y-5 shadow-soft">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 border border-amber-500/20">
+        <Building className="h-7 w-7 text-amber-500" />
+      </div>
+      <div className="space-y-1">
+        <h3 className="text-base font-extrabold">Create your first team workspace</h3>
+        <p className="mt-1 text-xs text-muted-foreground max-w-sm mx-auto">
+          A shared brand account your team can post from. You&apos;ll be the Owner and can invite
+          up to 10 members with Admin, Editor, or Viewer roles.
+        </p>
+      </div>
+      <div className="text-left max-w-sm mx-auto">{form}</div>
     </div>
   );
 }

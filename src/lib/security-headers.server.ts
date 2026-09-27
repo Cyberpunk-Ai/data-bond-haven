@@ -27,7 +27,7 @@ function supabaseHost(): string | null {
   }
 }
 
-function buildCsp(): string {
+function buildCsp(enforce: boolean): string {
   const sb = supabaseHost();
   const connectTargets = [
     "'self'",
@@ -56,7 +56,9 @@ function buildCsp(): string {
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self' https://paystack.com`,
-    `upgrade-insecure-requests`,
+    // Browsers ignore this directive inside a report-only policy and log a
+    // console error every navigation; only ship it when actually enforcing.
+    ...(enforce ? [`upgrade-insecure-requests`] : []),
   ].join("; ");
 }
 
@@ -67,12 +69,13 @@ function buildCsp(): string {
  * staging surface exercises the same policy.
  */
 export function securityHeaders(): Record<string, string> {
-  const cspKey = isProduction() && !truthy(process.env["CSP_REPORT_ONLY"])
+  const enforce = isProduction() && !truthy(process.env["CSP_REPORT_ONLY"]);
+  const cspKey = enforce
     ? "content-security-policy"
     : "content-security-policy-report-only";
 
   const headers: Record<string, string> = {
-    [cspKey]: buildCsp(),
+    [cspKey]: buildCsp(enforce),
     "x-content-type-options": "nosniff",
     "referrer-policy": "strict-origin-when-cross-origin",
     "cross-origin-opener-policy": "same-origin",

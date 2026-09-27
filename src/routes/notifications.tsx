@@ -151,7 +151,7 @@ function NotificationsPage() {
       return;
     }
     if ((n.type as string) === "workspace_invite" || (n.type as string) === "workspace") {
-      void navigate({ to: "/settings", search: { section: "workspace" } as any });
+      void navigate({ to: "/settings", search: { section: "workspaces" } as any });
       return;
     }
     if (n.type === "tip") {

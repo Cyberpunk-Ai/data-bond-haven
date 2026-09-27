@@ -38,11 +38,14 @@ function decodeCursor(cursor?: string | null): { rank: number; id: string } | nu
 
 export const getForYouPosts = createServerFn({ method: "GET" })
   .inputValidator((data: unknown) => {
-    const d = (data ?? {}) as { limit?: number; cursor?: string };
+    const d = (data ?? {}) as { limit?: number; cursor?: string; refresh?: boolean };
     const limit = Number(d.limit);
     return {
       limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 100) : 30,
       cursor: typeof d.cursor === "string" ? d.cursor : undefined,
+      // Manual refresh: rank with the live clock instead of the frozen 10-min
+      // epoch, so pressing Refresh can never return an identical page.
+      refresh: d.refresh === true,
     };
   })
   .middleware([requireSupabaseAuth])
@@ -159,7 +162,9 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     for (const row of recentRes.data ?? []) byId.set(row.id, row);
     for (const row of trendingRes.data ?? []) if (!byId.has(row.id)) byId.set(row.id, row);
 
-    const rows = [...byId.values()].filter((r) => !mutedAuthors.has(r.user_id));
+    // "For you" recommends OTHER people's content: your own posts live on your
+    // profile and the Latest tab, so they never occupy recommendation slots.
+    const rows = [...byId.values()].filter((r) => r.user_id !== myId && !mutedAuthors.has(r.user_id));
 
     const personalised = engagedIds.length > 0 || firstDegree.size > 0 || preferredTags.size > 0;
     if (!personalised) {
@@ -223,7 +228,10 @@ export const getForYouPosts = createServerFn({ method: "GET" })
 
     // Ranking epoch: bucket "now" to a 10-minute window so scores (and thus
     // order) are stable while a viewer scrolls/paginates through a session.
-    const epoch = Math.floor(Date.now() / (10 * 60_000)) * 10 * 60_000;
+    // An explicit refresh opts out and ranks with the live clock.
+    const epoch = data.refresh
+      ? Date.now()
+      : Math.floor(Date.now() / (10 * 60_000)) * 10 * 60_000;
 
     const scored: Array<{ row: any; score: number }> = rows
       .filter((row: any) => (impressionCount.get(row.id) ?? 0) < 3 || engagedWeight.has(row.id))
@@ -251,7 +259,6 @@ export const getForYouPosts = createServerFn({ method: "GET" })
           (firstDegree.has(row.user_id) ? 3 : secondDegree.has(row.user_id) ? 1.4 : 0) +
           Math.min(2, Math.log1p(authorAffinity.get(row.user_id) ?? 0) * 0.6);
 
-        const ownPenalty = row.user_id === myId ? -3 : 0;
         const seenTimes = impressionCount.get(row.id) ?? 0;
         const seenPenalty = seenTimes > 0 && !engagedWeight.has(row.id) ? -1.5 * seenTimes : 0;
 
@@ -261,7 +268,7 @@ export const getForYouPosts = createServerFn({ method: "GET" })
         const reachBoost = row.workspace_id
           ? (wsBoost.get(row.workspace_id) ?? planBoost.get(row.user_id) ?? 1)
           : (planBoost.get(row.user_id) ?? 1);
-        const score = (base * (0.35 + decay) + decay * 2) * reachBoost + ownPenalty + seenPenalty;
+        const score = (base * (0.35 + decay) + decay * 2) * reachBoost + seenPenalty;
 
         return { row, score };
       });
@@ -269,13 +276,16 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     // Stable tie-break by id keeps ordering deterministic within an epoch.
     scored.sort((a, b) => b.score - a.score || (a.row.id < b.row.id ? -1 : 1));
 
-    // Diversity cap: at most 2 posts per author within any 10-post window.
-    const perAuthor = new Map<string, number>();
+    // Diversity cap: at most 2 posts per author inside any 10-post sliding
+    // window (a very prolific author still reaches deeper pages — unlike a
+    // hard global cap — but no one floods a screenful).
     const ranked: Array<{ row: any; score: number }> = [];
     for (const item of scored) {
-      const used = perAuthor.get(item.row.user_id) ?? 0;
-      if (used >= 2) continue;
-      perAuthor.set(item.row.user_id, used + 1);
+      let inWindow = 0;
+      for (let i = Math.max(0, ranked.length - 9); i < ranked.length; i++) {
+        if (ranked[i].row.user_id === item.row.user_id) inWindow++;
+      }
+      if (inWindow >= 2) continue;
       ranked.push(item);
     }
 
@@ -297,6 +307,169 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       personalised: true,
       nextCursor: lastItem ? encodeCursor(lastItem.score, lastItem.row.id) : null,
     };
+  });
+
+/**
+ * Personalised "Who to follow" — the people analogue of `getForYouPosts`.
+ *
+ * Ranks not-yet-followed creators with the same signals the For-you feed
+ * uses: how much this viewer engages with their content (author affinity),
+ * graph proximity (people the accounts they follow also follow), overlap
+ * between the viewer's tuned interests/tags and the creator's recent posts,
+ * audience size, and activity/recency — plus a mild boost for paid-plan and
+ * verified creators. Already-followed and explicitly muted authors are
+ * filtered out entirely.
+ *
+ * Returns full profile rows so the rail can render them without a second
+ * fetch. Guests (no bearer token) can't call this — the rail keeps its
+ * chronological fallback for them.
+ */
+export const getWhoToFollow = createServerFn({ method: "GET" })
+  .inputValidator((data: unknown) => {
+    const d = (data ?? {}) as { limit?: number };
+    const limit = Number(d.limit);
+    return { limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 20) : 6 };
+  })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context, data }) => {
+    const { supabase, userId } = context as any;
+
+    const { data: me } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("auth_user_id", userId)
+      .maybeSingle();
+    if (!me) return { profiles: [] as any[] };
+    const myId = me.id as string;
+
+    // ---- behaviour signals (same affinity feeds the post ranker) ----------
+    const [likes, reposts, bookmarks, comments, feedPrefsRow] = await Promise.all([
+      supabase.from("likes").select("post_id").eq("user_id", myId).limit(300),
+      supabase.from("reposts").select("post_id").eq("user_id", myId).limit(300),
+      supabase.from("bookmarks").select("post_id").eq("user_id", myId).limit(300),
+      supabase.from("comments").select("post_id").eq("user_id", myId).limit(300),
+      supabase.from("feed_preferences").select("prefs").eq("user_id", myId).maybeSingle(),
+    ]);
+
+    const engagedIds = new Set<string>();
+    for (const rows of [likes.data, reposts.data, bookmarks.data, comments.data]) {
+      for (const r of rows ?? []) if (r?.post_id) engagedIds.add(r.post_id);
+    }
+
+    const prefs = (feedPrefsRow.data?.prefs ?? {}) as {
+      interests?: string[];
+      mutedAuthors?: string[];
+      boostedTags?: string[];
+    };
+    const mutedAuthors = new Set<string>(prefs.mutedAuthors ?? []);
+    const preferredTags = new Set<string>([
+      ...(prefs.interests ?? []),
+      ...(prefs.boostedTags ?? []),
+    ]);
+
+    // Author affinity: engagement weighted by interaction type.
+    const authorAffinity = new Map<string, number>();
+    const engagedList = [...engagedIds].slice(0, 400);
+    if (engagedList.length) {
+      const { data: engagedPosts } = await supabase
+        .from("posts")
+        .select("user_id")
+        .in("id", engagedList);
+      for (const p of engagedPosts ?? []) {
+        if (!p?.user_id) continue;
+        authorAffinity.set(p.user_id, (authorAffinity.get(p.user_id) ?? 0) + 3);
+      }
+    }
+
+    // ---- graph signals ------------------------------------------------------
+    const { data: following } = await supabase
+      .from("follows")
+      .select("target_id")
+      .eq("follower_id", myId);
+    const firstDegree = new Set<string>((following ?? []).map((f: any) => f.target_id));
+
+    // Second degree: who do the accounts I follow follow? (friends-of-friends)
+    const secondDegreeCount = new Map<string, number>();
+    if (firstDegree.size) {
+      const { data: theirFollows } = await supabase
+        .from("follows")
+        .select("target_id")
+        .in("follower_id", [...firstDegree].slice(0, 200));
+      for (const f of theirFollows ?? []) {
+        const tid = f?.target_id as string;
+        if (!tid || tid === myId || firstDegree.has(tid)) continue;
+        secondDegreeCount.set(tid, (secondDegreeCount.get(tid) ?? 0) + 1);
+      }
+    }
+
+    // Candidate pool: active accounts I don't follow yet, strongest audience
+    // first — plus everyone my network already follows (graph candidates can
+    // have a small audience but high relevance).
+    const candidateIds = new Set<string>(secondDegreeCount.keys());
+    const { data: popular } = await supabase
+      .from("profiles")
+      .select("id")
+      .neq("id", myId)
+      .eq("status", "active")
+      .order("followers", { ascending: false })
+      .limit(120);
+    for (const p of popular ?? []) candidateIds.add(p.id);
+    for (const [authorId] of authorAffinity) candidateIds.add(authorId);
+
+    const ids = [...candidateIds].filter((id) => id !== myId && !mutedAuthors.has(id));
+    if (!ids.length) return { profiles: [] as any[] };
+
+    const { data: rows } = await supabase
+      .from("profiles")
+      .select(
+        "id, username, display_name, avatar_url, bio, location, website, plan, verified, followers, following, last_active, created_at",
+      )
+      .eq("status", "active")
+      .in("id", ids.slice(0, 300));
+    let candidates = (rows ?? []).filter((p: any) => !firstDegree.has(p.id));
+
+    // Tag overlap: recent public topics each candidate posts about.
+    const candIds = candidates.map((p: any) => p.id);
+    const tagOverlap = new Map<string, number>();
+    const lastActive = new Map<string, number>();
+    if (candIds.length) {
+      const { data: recentPosts } = await supabase
+        .from("posts")
+        .select("user_id, tags, created_at")
+        .in("user_id", candIds)
+        .eq("hidden", false)
+        .order("created_at", { ascending: false })
+        .limit(600);
+      for (const post of recentPosts ?? []) {
+        const uid = post.user_id as string;
+        if (!lastActive.has(uid)) lastActive.set(uid, new Date(post.created_at).getTime());
+        for (const tag of (post.tags ?? []) as string[]) {
+          if (preferredTags.has(tag)) tagOverlap.set(uid, (tagOverlap.get(uid) ?? 0) + 1);
+        }
+      }
+    }
+
+    const planFactor = (plan?: string | null) =>
+      plan === "pro" ? 1.35 : plan === "plus" ? 1.18 : 1;
+    const now = Date.now();
+    const scored = candidates.map((p: any) => {
+      const relationship =
+        Math.min(3, (secondDegreeCount.get(p.id) ?? 0) * 0.8) +
+        Math.min(2, Math.log1p(authorAffinity.get(p.id) ?? 0) * 0.9);
+      const affinity = tagOverlap.get(p.id) ?? 0;
+      const audience = Math.log1p(Number(p.followers ?? 0));
+      const activityTs = lastActive.get(p.id) ?? new Date(p.last_active ?? 0).getTime();
+      const activityDays = Math.max(0.04, (now - activityTs) / 86_400_000);
+      const activity = 1.2 * Math.exp(-activityDays / 10);
+      const verifiedBoost = p.verified ? 0.6 : 0;
+      const score =
+        (1 + relationship) * (0.5 + audience + affinity * 1.5 + activity) * planFactor(p.plan) +
+        verifiedBoost;
+      return { p, score };
+    });
+
+    scored.sort((a: any, b: any) => b.score - a.score || (a.p.id < b.p.id ? -1 : 1));
+    return { profiles: scored.slice(0, data.limit).map((s: any) => s.p) };
   });
 
 /**

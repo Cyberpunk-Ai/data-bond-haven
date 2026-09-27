@@ -5,7 +5,6 @@ import { Search, TrendingUp, Radio, Plus, Check } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
 import { Panel } from "@/components/social/AppShell";
-import { InfoModal } from "@/components/social/InfoModal";
 import { compact } from "@/lib/formatters";
 import { currentUserId } from "@/lib/profile-service";
 import type { Profile, Space, TrendingTag } from "@/lib/types";
@@ -16,6 +15,7 @@ import {
   getUsers,
   getSpaces,
 } from "@/lib/api-client";
+import { getWhoToFollow } from "@/lib/recommendations.functions";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
@@ -160,22 +160,50 @@ export function TrendingPanel() {
 
 export function SuggestionsPanel() {
   const [people, setPeople] = useState<Profile[]>([]);
+  const viewerId = useCurrentUserId();
 
+  // Personalised by the recommendation engine when signed in (same affinity,
+  // graph-proximity and interest signals that rank the For-you feed); guests
+  // fall back to the chronological directory sample.
   useEffect(() => {
-    getUsers()
-      .then((res) => {
-        if (res?.profiles && res.profiles.length > 0) {
-          const seen = new Set<string>();
-          const unique = res.profiles.filter((p) => {
-            if (!p?.id || p.id === currentUserId || seen.has(p.id)) return false;
-            seen.add(p.id);
-            return true;
-          });
-          setPeople(unique.slice(0, 4));
-        }
-      })
-      .catch(() => {});
-  }, []);
+    let alive = true;
+    if (viewerId !== "guest") {
+      getWhoToFollow({ data: { limit: 6 } })
+        .then((res) => {
+          if (!alive) return;
+          const list = (res?.profiles ?? []).filter((p: any) => p?.id && p.id !== viewerId);
+          if (list.length > 0) {
+            setPeople(list.slice(0, 4));
+          } else {
+            void loadFallback();
+          }
+        })
+        .catch(() => {
+          if (alive) void loadFallback();
+        });
+      return () => {
+        alive = false;
+      };
+    }
+    void loadFallback();
+    return () => {
+      alive = false;
+    };
+
+    async function loadFallback() {
+      try {
+        const res = await getUsers();
+        if (!alive || !res?.profiles) return;
+        const seen = new Set<string>();
+        const unique = res.profiles.filter((p) => {
+          if (!p?.id || p.id === currentUserId || seen.has(p.id)) return false;
+          seen.add(p.id);
+          return true;
+        });
+        if (unique.length > 0) setPeople(unique.slice(0, 4));
+      } catch {}
+    }
+  }, [viewerId]);
 
   return (
     <Panel>
@@ -307,31 +335,30 @@ export function LiveSpacesPanel() {
 }
 
 export function RailFooter() {
-  const links = ["About", "Help", "Privacy", "Terms", "Guidelines", "Status"];
-  const [selectedInfo, setSelectedInfo] = useState<string | null>(null);
+  // Real pages, not modals — the same reworked About/Help/Privacy/Terms/
+  // Guidelines/Status content the marketing site uses, linked from the rail.
+  const links = [
+    { label: "About", to: "/about" },
+    { label: "Help", to: "/help" },
+    { label: "Privacy", to: "/privacy" },
+    { label: "Terms", to: "/terms" },
+    { label: "Guidelines", to: "/guidelines" },
+    { label: "Status", to: "/status" },
+  ] as const;
 
   return (
-    <>
-      <p className="px-4 text-xs leading-relaxed text-muted-foreground">
-        {links.map((l) => (
-          <button
-            key={l}
-            type="button"
-            onClick={() => setSelectedInfo(l)}
-            className="mr-2 cursor-pointer transition-colors hover:text-brand bg-transparent border-0 p-0 text-xs text-muted-foreground"
-          >
-            {l}
-          </button>
-        ))}
-        <span className="mt-2 block">© 2026 Spaces1</span>
-      </p>
-
-      <InfoModal
-        type={selectedInfo}
-        isOpen={Boolean(selectedInfo)}
-        onClose={() => setSelectedInfo(null)}
-      />
-    </>
+    <p className="px-4 text-xs leading-relaxed text-muted-foreground">
+      {links.map((l) => (
+        <Link
+          key={l.to}
+          to={l.to}
+          className="mr-2 inline-block transition-colors hover:text-brand"
+        >
+          {l.label}
+        </Link>
+      ))}
+      <span className="mt-2 block">© 2026 Spaces1</span>
+    </p>
   );
 }
 

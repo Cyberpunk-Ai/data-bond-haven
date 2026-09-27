@@ -30,6 +30,25 @@ export function friendlyError(err: unknown, fallback: string = GENERIC): string 
   msg = msg.trim();
   if (!msg) return fallback;
 
+  // Zod throws with a JSON array of issues as its message — never show that
+  // raw payload; surface the first human-written issue message instead.
+  if (msg.startsWith("[") || msg.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(msg);
+      const issues = Array.isArray(parsed) ? parsed : parsed?.issues;
+      if (Array.isArray(issues) && issues.length > 0) {
+        console.error("[friendlyError] validation payload:", msg);
+        const first = (issues[0] as { message?: unknown }).message;
+        const human =
+          typeof first === "string" && first && !TECHNICAL.test(first) ? first : fallback;
+        return issues.length > 1 ? `${human} (+${issues.length - 1} more check${issues.length - 1 > 1 ? "es" : ""})` : human;
+      }
+      return fallback;
+    } catch {
+      /* Not JSON after all — keep the message on the normal path. */
+    }
+  }
+
   const m = msg.toLowerCase();
   if (/failed to fetch|networkerror|network request failed|err_network|error connecting|timed? ?out/.test(m))
     return OFFLINE;

@@ -108,6 +108,10 @@ export interface AdminOverviewData {
     pending_reports_count: number;
     suspended_users_count: number;
     verified_creators_count: number;
+    /** Platform tipping activity: volume + newest tips for the admin overview. */
+    total_tips_count?: number;
+    total_tips_amount?: number;
+    tips_currency?: string;
     system_health: {
       status: "operational" | "degraded" | "maintenance";
       uptime_seconds: number;
@@ -128,6 +132,15 @@ export interface AdminOverviewData {
   charts: AdminCharts;
   recent_activity?: any[];
   recent_reports?: any[];
+  recent_tips?: {
+    id: string;
+    tipper: string;
+    recipient: string;
+    amount: number;
+    currency: string;
+    message: string;
+    created_at: string;
+  }[];
 }
 
 export interface PollVote {

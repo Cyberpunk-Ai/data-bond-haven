@@ -3,14 +3,18 @@ import { createPortal } from "react-dom";
 import { Heart, DollarSign, Sparkles, Check, X, ShieldCheck } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
+import { WorkspaceBadge } from "@/components/social/WorkspaceBadge";
+import { TeamAvatar } from "@/components/social/TeamAvatar";
 import { useAuth } from "@/lib/auth-state";
 import { currentUser } from "@/lib/profile-service";
 import { useServerFn } from "@tanstack/react-start";
 import { startTipCheckout } from "@/lib/paystack.functions";
 import { openPaystackPayment } from "@/lib/paystack-checkout";
 import { getEarnings, requestPayout } from "@/lib/payouts.functions";
+import { usd } from "@/lib/formatters";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
+import { workspaceSlug } from "@/lib/workspace-state";
 import { cn } from "@/lib/utils";
 
 interface TipModalProps {
@@ -22,6 +26,13 @@ interface TipModalProps {
     avatar_url?: string | null;
     plan?: string | null;
   };
+  /** When set, the tip is credited to a TEAM workspace ledger, not a person. */
+  team?: {
+    workspaceId: string;
+    name: string;
+    avatarUrl?: string | null;
+    logoEmoji?: string;
+  } | null;
   postId?: string;
   spaceId?: string;
 }
@@ -34,7 +45,7 @@ function formatTip(amount: number) {
   return `$${amount.toFixed(2)}`;
 }
 
-export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) {
+export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalProps) {
   const { user } = useAuth();
   const activeUser = user || currentUser;
   const beginTip = useServerFn(startTipCheckout);
@@ -44,6 +55,7 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
     pendingBalance: number;
     currency: string;
     minimumPayout: number;
+    feePercent?: number;
     tips: {
       id: string;
       amount: number;
@@ -60,14 +72,24 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const isSelf = recipient.username === activeUser.username;
+  const isTeam = !!team;
+  const displayName = isTeam ? (team as { name: string }).name : recipient.display_name;
+  const displayHandle = isTeam
+    ? `@${workspaceSlug((team as { name: string }).name)}`
+    : `@${recipient.username}`;
+  const displayAvatar = isTeam
+    ? ((team as { avatarUrl?: string | null }).avatarUrl ?? null)
+    : (recipient.avatar_url ?? null);
+
+  // A team is never the "self" dashboard — that only makes sense for a person.
+  const isSelf = !isTeam && recipient.username === activeUser.username;
 
   useEffect(() => {
     if (!isOpen || !isSelf) return;
     loadEarnings({})
       .then((res: any) => setEarnings(res))
       .catch(() =>
-        setEarnings({ pendingBalance: 0, currency: "KES", minimumPayout: 10, tips: [] }),
+        setEarnings({ pendingBalance: 0, currency: "USD", minimumPayout: 1, feePercent: 5, tips: [] }),
       );
   }, [isOpen, isSelf]);
 
@@ -89,7 +111,8 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
       // The tip is only recorded once the payment provider confirms the charge.
       const res = (await beginTip({
         data: {
-          recipientUsername: recipient.username,
+          recipientUsername: isTeam ? undefined : recipient.username,
+          recipientWorkspaceId: isTeam ? (team as { workspaceId: string }).workspaceId : null,
           amount: effectiveAmount,
           message: message.trim() || undefined,
           postId: postId ?? null,
@@ -151,7 +174,7 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
               </span>
               <div className="flex items-baseline justify-between">
                 <span className="text-3xl font-black tracking-tight text-foreground">
-                  {earnings?.currency ?? "KES"} {(earnings?.pendingBalance ?? 0).toFixed(2)}
+                  {usd(earnings?.pendingBalance ?? 0)}
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
@@ -186,7 +209,7 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
                       </div>
                       <div className="text-right">
                         <p className="font-extrabold text-amber-500">
-                          {earnings?.currency ?? "KES"} {s.amount.toFixed(2)}
+                          {usd(s.amount)}
                         </p>
                         <p className="text-[10px] text-muted-foreground">
                           {new Date(s.createdAt).toLocaleDateString()}
@@ -206,7 +229,9 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
                   try {
                     const res = await payout({ data: {} });
                     toast.success(
-                      `Withdrawal of ${earnings?.currency ?? "KES"} ${res.amount.toFixed(2)} requested. Staff will review it shortly.`,
+                      `Withdrawal requested — ${usd(res.netUsd ?? res.amount)}${
+                        res.feeUsd != null ? ` (${usd(res.feeUsd)} fee)` : ""
+                      } will be sent to your payout account after review.`,
                     );
                     onClose();
                   } catch (err) {
@@ -215,9 +240,19 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
                 }}
                 className="w-full rounded-2xl bg-gradient-to-r from-brand to-brand-pink py-3 text-sm font-extrabold text-white shadow-soft hover:shadow-glow transition-all cursor-pointer active:scale-98 disabled:opacity-50"
               >
-                Request Withdrawal ({earnings?.currency ?? "KES"}
-                {(earnings?.pendingBalance ?? 0).toFixed(2)})
+                Request Withdrawal ({usd(
+                  Math.max(
+                    (earnings?.pendingBalance ?? 0) *
+                      (1 - (earnings?.feePercent ?? 5) / 100),
+                    0,
+                  )
+                )}
+                )
               </button>
+              <p className="mt-1.5 text-center text-[10px] text-muted-foreground">
+                Balance {usd(earnings?.pendingBalance ?? 0)} · after a {earnings?.feePercent ?? 5}%
+                withdrawal fee
+              </p>
             </div>
           </div>
         ) : isSuccess ? (
@@ -228,24 +263,38 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
             <h3 className="text-xl font-extrabold">Tip Sent Successfully!</h3>
             <p className="text-sm text-muted-foreground">
               You sent <strong className="text-foreground">${effectiveAmount.toFixed(2)}</strong> to{" "}
-              <strong className="text-foreground">@{recipient.username}</strong>.
+              <strong className="text-foreground">{isTeam ? displayName : `@${recipient.username}`}</strong>.
             </p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <Avatar
-                  name={recipient.display_name}
-                  src={recipient.avatar_url}
-                  className="h-12 w-12 text-sm ring-2 ring-brand/20"
-                />
+                {isTeam ? (
+                  <TeamAvatar
+                    name={displayName}
+                    emoji={team?.logoEmoji}
+                    avatarUrl={displayAvatar}
+                    size="md"
+                    className="h-12 w-12 ring-2 ring-brand/20"
+                  />
+                ) : (
+                  <Avatar
+                    name={displayName}
+                    src={displayAvatar}
+                    className="h-12 w-12 text-sm ring-2 ring-brand/20"
+                  />
+                )}
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <span className="font-bold">{recipient.display_name}</span>
-                    <UserBadge plan={recipient.plan} size="xs" />
+                    <span className="font-bold">{displayName}</span>
+                    {isTeam ? (
+                      <WorkspaceBadge size="xs" />
+                    ) : (
+                      <UserBadge plan={recipient.plan} size="xs" />
+                    )}
                   </div>
-                  <p className="text-xs text-muted-foreground">@{recipient.username}</p>
+                  <p className="text-xs text-muted-foreground">{displayHandle}</p>
                 </div>
               </div>
               <button
@@ -259,10 +308,10 @@ export function TipModal({ isOpen, onClose, recipient, postId }: TipModalProps) 
 
             <div className="rounded-2xl bg-gradient-to-br from-brand/10 via-brand-pink/5 to-transparent p-4 border border-brand/20 text-center space-y-1">
               <span className="inline-flex items-center gap-1 text-xs font-extrabold uppercase tracking-wider text-brand">
-                <Sparkles className="h-3.5 w-3.5" /> Support This Creator
+                <Sparkles className="h-3.5 w-3.5" /> Support This {isTeam ? "Team" : "Creator"}
               </span>
               <p className="text-xs text-muted-foreground">
-                100% of your tip goes directly to the creator with zero hidden fees.
+                100% of your tip goes directly to the {isTeam ? "team" : "creator"} with zero hidden fees.
               </p>
             </div>
 

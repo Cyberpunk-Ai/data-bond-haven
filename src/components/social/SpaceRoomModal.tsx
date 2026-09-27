@@ -20,6 +20,8 @@ import {
   UserMinus,
   Radio,
   Disc3,
+  Play,
+  Pause,
   Pin,
   AlertTriangle,
   ShieldOff,
@@ -50,6 +52,7 @@ import {
   uploadMedia,
 } from "@/lib/api-client";
 import { appConfig } from "@/lib/config";
+import { useAuthorizedMediaUrl } from "@/lib/media-access";
 import { friendlyError } from "@/lib/error-messages";
 import { useRealtime } from "@/lib/realtime";
 import { cn } from "@/lib/utils";
@@ -125,9 +128,16 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // Live replay count once this open has been recorded; the `space` prop only
+  // carries the (stale) number captured when the list rendered.
+  const [liveReplayCount, setLiveReplayCount] = useState<number | null>(null);
 
   const host = getProfile(space.host_id);
   const isCurrentUserHost = space.host_id === currentUser.id;
+  // An ended room with a saved recording is a replay: play the stored audio
+  // instead of pretending the live stage is still up.
+  const isReplay = !space.live && Boolean(space.recorded && space.recording_url);
+  const shownReplays = liveReplayCount ?? space.replay_count ?? 0;
 
   // Load the room from the backend: who is here and what has been said.
   useEffect(() => {
@@ -150,7 +160,8 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
         await joinSpace(space.id);
         loaded = await getSpaceRoom(space.id);
         if (!space.live && (space.recorded || space.recording_url)) {
-          await recordSpaceReplayView(space.id).catch(() => {});
+          const rec = await recordSpaceReplayView(space.id).catch(() => null);
+          if (rec && typeof rec.replayCount === "number") setLiveReplayCount(rec.replayCount);
         }
       } catch (err) {
         // A full room (host plan cap reached) must not open — tell the user and
@@ -498,9 +509,10 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           });
           const uploaded = await uploadMedia(file, "recordings");
           if (!uploaded?.url || uploaded.url.startsWith("data:")) {
-            // uploadMedia falls back to a client-side data URL when the server
-            // upload fails. Storing that in recording_url would "succeed" with
-            // an unplayable, DB-bloating value — treat it as a real failure.
+            // A replay has to live in the media store: recording_url is what the
+            // proxy ACL resolves against, and `spaces.recording_url` now has a
+            // CHECK constraint rejecting anything but a /api/public/media/ path.
+            // Treat a non-stored result as a genuine failure.
             throw new Error("The recording could not be uploaded to storage. Please try again.");
           }
           await finalizeSpaceRecording(space.id, uploaded.url);
@@ -543,7 +555,8 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     userId: currentUser.id,
     speaker: myRole !== "listener",
     muted: isMuted,
-    enabled: true,
+    // Replay viewers must not open WebRTC connections to a dead room.
+    enabled: !isReplay,
   });
   useEffect(() => {
     if (audio.status === "mic-blocked")
@@ -566,13 +579,20 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           {/* Top Header */}
           <div className="flex items-center justify-between border-b border-border/60 p-3 sm:p-4 gap-2">
             <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-              <span className="flex items-center gap-1.5 rounded-full bg-rose-500/15 px-2.5 sm:px-3 py-1 text-[11px] sm:text-xs font-bold text-rose-500 shrink-0">
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-500 opacity-70" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-500" />
+              {isReplay ? (
+                <span className="flex items-center gap-1.5 rounded-full bg-brand/15 px-2.5 sm:px-3 py-1 text-[11px] sm:text-xs font-bold text-brand shrink-0">
+                  <Disc3 className="h-3 w-3" />
+                  RECORDED REPLAY
                 </span>
-                LIVE STAGE
-              </span>
+              ) : (
+                <span className="flex items-center gap-1.5 rounded-full bg-rose-500/15 px-2.5 sm:px-3 py-1 text-[11px] sm:text-xs font-bold text-rose-500 shrink-0">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-500 opacity-70" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-500" />
+                  </span>
+                  LIVE STAGE
+                </span>
+              )}
               <span className="truncate rounded-full bg-brand/10 px-2.5 sm:px-3 py-1 text-[11px] sm:text-xs font-bold text-brand">
                 {space.topic}
               </span>
@@ -659,12 +679,25 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
               <span className="flex items-center gap-1">
                 <Shield className="h-3.5 w-3.5 text-brand" /> Hosted by {host.display_name}
               </span>
-              <span className="flex items-center gap-1">
-                <Headphones className="h-3.5 w-3.5" /> {participants.length + space.listeners} in
-                room
-              </span>
+              {isReplay ? (
+                <span className="flex items-center gap-1">
+                  <Disc3 className="h-3.5 w-3.5 text-brand" />
+                  {shownReplays} {shownReplays === 1 ? "replay" : "replays"}
+                  {space.duration ? ` · ${space.duration}` : ""}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1">
+                  <Headphones className="h-3.5 w-3.5" /> {participants.length + space.listeners} in
+                  room
+                </span>
+              )}
             </div>
           </div>
+
+          {/* Replay audio bar */}
+          {isReplay && space.recording_url && (
+            <ReplayPlayer src={space.recording_url} durationLabel={space.duration} />
+          )}
 
           {/* Tab switcher */}
           <div className="flex px-4 sm:px-6 pt-2 border-b border-border/40 gap-4">
@@ -1080,6 +1113,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
 
           {/* Bottom Action Bar */}
           <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 border-t border-border/60 p-3 sm:p-4 bg-card/60">
+            {!isReplay && (
             <div className="flex items-center gap-2">
               <button
                 onClick={handleToggleMic}
@@ -1108,10 +1142,11 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                   {handRaised ? "Hand Raised" : "Raise Hand"}
                 </span>
               </button>
-            </div>
+              </div>
+            )}
 
             <div className="flex items-center gap-2 ml-auto">
-              {isCurrentUserHost ? (
+              {isCurrentUserHost && !isReplay ? (
                 <>
                   <button
                     type="button"
@@ -1227,5 +1262,142 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
         />
       )}
     </>
+  );
+}
+
+/* ---------------------------------------------------------------- replayer */
+
+function fmtReplayTime(s: number): string {
+  if (!Number.isFinite(s) || s < 0) return "0:00";
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+/**
+ * Audio bar for recorded Spaces. The stored URL points at the authenticated
+ * /api/public/media proxy (range-request capable, so seeking works), but an
+ * <audio> subresource load cannot carry a bearer header - the browser would
+ * just get a 404. So resolve the src through /api/media/token first, which
+ * mints a short-lived signed URL after the same host/participant/staff ACL.
+ */
+function ReplayPlayer({ src, durationLabel }: { src: string; durationLabel?: string }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [rate, setRate] = useState(1);
+  const [failed, setFailed] = useState(false);
+  const { src: playable, loading, error, refresh } = useAuthorizedMediaUrl(src);
+  const retriedRef = useRef(false);
+
+  // An expired token mid-playback looks like a plain media error: re-mint once
+  // automatically before falling back to the visible retry message.
+  function handleMediaError() {
+    const el = audioRef.current;
+    if (!retriedRef.current && el) {
+      retriedRef.current = true;
+      void refresh().then(() => {
+        if (el.src) void el.play().catch(() => setFailed(true));
+      });
+      return;
+    }
+    setFailed(true);
+  }
+
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = rate;
+  }, [rate]);
+
+  async function togglePlay() {
+    const el = audioRef.current;
+    if (!el) return;
+    try {
+      if (el.paused) await el.play();
+      else el.pause();
+    } catch {
+      setFailed(true);
+    }
+  }
+
+  const seekable = Number.isFinite(duration) && duration > 0;
+
+  return (
+    <div className="mx-4 sm:mx-6 mt-3 rounded-2xl border border-brand/25 bg-gradient-to-r from-brand/10 via-brand-pink/10 to-brand/10 p-3 sm:p-4 space-y-2">
+      <audio
+        ref={audioRef}
+        src={playable ?? undefined}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onError={handleMediaError}
+      />
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={togglePlay}
+          disabled={loading && !playable}
+          aria-label={playing ? "Pause replay" : "Play replay"}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-r from-brand to-brand-pink text-white shadow-glow transition-all hover:brightness-105 active:scale-95 cursor-pointer"
+        >
+          {playing ? (
+            <Pause className="h-5 w-5 fill-current" />
+          ) : (
+            <Play className="h-5 w-5 translate-x-0.5 fill-current" />
+          )}
+        </button>
+        <div className="min-w-0 flex-1">
+          <input
+            type="range"
+            min={0}
+            max={seekable ? duration : 0}
+            step={1}
+            value={seekable ? Math.min(time, duration) : 0}
+            disabled={!seekable}
+            onChange={(e) => {
+              const el = audioRef.current;
+              const v = Number(e.target.value);
+              if (el && Number.isFinite(v)) {
+                el.currentTime = v;
+                setTime(v);
+              }
+            }}
+            aria-label="Seek replay"
+            className="w-full accent-brand cursor-pointer disabled:cursor-default"
+          />
+          <div className="flex items-center justify-between text-[11px] font-semibold text-muted-foreground tabular-nums">
+            <span>{fmtReplayTime(time)}</span>
+            <span>{seekable ? fmtReplayTime(duration) : durationLabel || "—"}</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setRate(rate === 1 ? 1.5 : rate === 1.5 ? 2 : 1)}
+          aria-label="Cycle playback speed"
+          className="shrink-0 rounded-full border border-border bg-card px-2.5 py-1.5 text-[11px] font-bold text-foreground hover:bg-muted transition-colors cursor-pointer tabular-nums"
+        >
+          {rate}×
+        </button>
+      </div>
+      {(failed || error) && (
+        <p className="text-[11px] font-semibold text-rose-500">
+          This recording could not be streamed. It may have been removed, or your session expired.{" "}
+          <button
+            type="button"
+            onClick={() => {
+              retriedRef.current = false;
+              setFailed(false);
+              void refresh();
+            }}
+            className="underline font-bold cursor-pointer"
+          >
+            Try again
+          </button>
+        </p>
+      )}
+    </div>
   );
 }

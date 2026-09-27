@@ -10,6 +10,28 @@
  * Pure and dependency-free so it runs in the Worker and under unit tests.
  */
 
+/**
+ * Document content types we are willing to STORE. Unlike media they are never
+ * rendered inline by the read proxy (the reader forces any non-media type to
+ * `Content-Disposition: attachment` + `application/octet-stream` + `nosniff`),
+ * so a stored document can never execute on this origin regardless of its real
+ * bytes. That containment is why we can accept a declared document type without
+ * a magic-byte corroboration step — text/code/json/csv have no meaningful
+ * signature, and pdf/zip-family are already inert as downloads.
+ */
+export const DOCUMENT_CONTENT_TYPES = new Set<string>([
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "application/json",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/zip",
+  "application/octet-stream",
+]);
+
 type Kind = "image" | "video" | "audio";
 
 function startsWith(bytes: Uint8Array, sig: number[], offset = 0): boolean {
@@ -104,6 +126,9 @@ const CONTAINER_FAMILY: Record<string, string> = {
  * confidently detected a concrete MIME, that it equals the declared type.
  */
 export function signatureMatches(declaredContentType: string, bytes: Uint8Array): boolean {
+  // Documents are trusted on declaration: the read proxy always serves them as
+  // an inert download, so there is no inline-execution risk to corroborate.
+  if (DOCUMENT_CONTENT_TYPES.has(declaredContentType)) return true;
   const declaredKind = KIND_OF[declaredContentType];
   if (!declaredKind) return false; // type not in our allowlist at all
   const detected = sniffMediaType(bytes);

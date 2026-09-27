@@ -56,7 +56,7 @@ function EmptyPanel({ title, hint }: { title: string; hint: string }) {
   );
 }
 
-export function AnalyticsDashboard() {
+export function AnalyticsDashboard({ workspaceId }: { workspaceId?: string }) {
   const { currentPlan, isPlus, isPro } = usePlan();
   const { totalEarnings, pendingBalance } = useMonetization();
   const [timeframe, setTimeframe] = useState<"7d" | "30d">("7d");
@@ -71,7 +71,7 @@ export function AnalyticsDashboard() {
     let active = true;
     setLoading(true);
     setFailed(false);
-    getCreatorAnalytics(timeframe)
+    getCreatorAnalytics(timeframe, workspaceId ? { workspaceId } : {})
       .then((res) => {
         if (active) setData(res);
       })
@@ -84,7 +84,7 @@ export function AnalyticsDashboard() {
     return () => {
       active = false;
     };
-  }, [timeframe]);
+  }, [timeframe, workspaceId]);
 
   const chartData = data?.trend ?? [];
   const totals = data?.totals;
@@ -131,7 +131,7 @@ export function AnalyticsDashboard() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-xl font-black">Creator Analytics</h2>
+            <h2 className="text-xl font-black">{workspaceId ? "Team Analytics" : "Creator Analytics"}</h2>
             <span
               className={cn(
                 "px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wide",
@@ -222,25 +222,27 @@ export function AnalyticsDashboard() {
         >
           Audience & Peak Hours
         </button>
-        <button
-          onClick={() => {
-            if (!isPro && !isPlus) {
-              openUpgradeModal("Monetization & Tips Analytics");
-              return;
-            }
-            setActiveTab("revenue");
-          }}
-          className={cn(
-            "flex items-center gap-1 px-4 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap",
-            activeTab === "revenue"
-              ? "bg-foreground text-background shadow-xs"
-              : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-          )}
-        >
-          <DollarSign className="h-3 w-3" />
-          <span>Tips & Revenue</span>
-          {!isPlus && <Lock className="h-2.5 w-2.5 text-muted-foreground" />}
-        </button>
+        {!workspaceId && (
+          <button
+            onClick={() => {
+              if (!isPro && !isPlus) {
+                openUpgradeModal("Monetization & Tips Analytics");
+                return;
+              }
+              setActiveTab("revenue");
+            }}
+            className={cn(
+              "flex items-center gap-1 px-4 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap",
+              activeTab === "revenue"
+                ? "bg-foreground text-background shadow-xs"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+            )}
+          >
+            <DollarSign className="h-3 w-3" />
+            <span>Tips & Revenue</span>
+            {!isPlus && <Lock className="h-2.5 w-2.5 text-muted-foreground" />}
+          </button>
+        )}
         <button
           onClick={() => {
             if (!isPro) {

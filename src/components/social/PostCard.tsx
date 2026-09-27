@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, memo } from "react";
+import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import {
@@ -33,11 +34,14 @@ import { friendlyError } from "@/lib/error-messages";
 import { editPost } from "@/lib/post-edit.functions";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
+import { WorkspaceBadge } from "@/components/social/WorkspaceBadge";
+import { TeamAvatar } from "@/components/social/TeamAvatar";
 import { TimeAgo } from "@/components/social/TimeAgo";
 import { TipModal } from "@/components/social/TipModal";
 import { ReportModal } from "@/components/social/ReportModal";
 import { ModernVideoPlayer } from "@/components/social/ModernVideoPlayer";
 import { compact } from "@/lib/formatters";
+import { useWorkspace, workspaceSlug } from "@/lib/workspace-state";
 import type { Post, Comment, Poll } from "@/lib/types";
 import { getProfile, useProfile, currentUser, fetchProfile } from "@/lib/profile-service";
 import {
@@ -156,6 +160,8 @@ function Action({
   active,
   activeClass,
   label,
+  activeLabel,
+  pressed,
   onClick,
   filled,
 }: {
@@ -164,15 +170,20 @@ function Action({
   active?: boolean;
   activeClass: string;
   label: string;
+  activeLabel?: string;
+  /** Toggle actions expose aria-pressed so assistive tech hears on/off state. */
+  pressed?: boolean;
   onClick?: () => void;
   filled?: boolean;
 }) {
+  const text = active && activeLabel ? activeLabel : label;
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={label}
-      title={label}
+      aria-label={text}
+      aria-pressed={pressed ? !!active : undefined}
+      title={text}
       className={cn(
         "group/action flex shrink-0 items-center gap-1 sm:gap-1.5 rounded-full px-2 sm:px-2.5 py-1.5 text-xs sm:text-sm font-medium text-muted-foreground transition-all duration-200 touch-manipulation min-h-[40px] active:scale-95 cursor-pointer",
         active ? activeClass : "hover:text-foreground hover:bg-foreground/5",
@@ -193,6 +204,44 @@ function Action({
         </span>
       )}
     </button>
+  );
+}
+
+/**
+ * Avatar / name / handle link for a post header. Team posts open the workspace
+ * profile; personal posts open the author's profile. Branching the two `Link`
+ * usages (rather than spreading a union of props into a single `Link`) keeps
+ * TanStack Router's discriminated `to`/`params`/`search` typing satisfied.
+ */
+function BrandProfileLink({
+  ws,
+  author,
+  className,
+  title,
+  children,
+}: {
+  ws: { id: string } | null;
+  author: { id: string; username: string };
+  className?: string;
+  title?: string;
+  children: ReactNode;
+}) {
+  if (ws) {
+    return (
+      <Link to="/workspace/$id" params={{ id: ws.id }} className={className} title={title}>
+        {children}
+      </Link>
+    );
+  }
+  return (
+    <Link
+      to="/profile"
+      search={{ id: author.id, user: author.username }}
+      className={className}
+      title={title}
+    >
+      {children}
+    </Link>
   );
 }
 
@@ -228,6 +277,9 @@ function PostCardBase({
   // A post published on behalf of a team workspace shows the brand, not the
   // member who hit send (they're credited as "via @handle").
   const ws = post.workspace ?? null;
+  // Reposts follow the composer identity: members who can post as their team
+  // also repost as the team; everyone else reposts personally.
+  const { activeWorkspace, canPost } = useWorkspace();
   const cardRef = useRef<HTMLElement>(null);
   const [state, setState] = useState({
     liked: post.likedByMe,
@@ -484,14 +536,22 @@ function PostCardBase({
     const nextReposts = state.reposts + (nextReposted ? 1 : -1);
     setState((s) => ({ ...s, reposted: nextReposted, reposts: Math.max(0, nextReposts) }));
 
+    const teamId = activeWorkspace && canPost ? activeWorkspace.id : null;
     try {
-      const res = await toggleRepostPost(post.id);
+      const res = await toggleRepostPost(post.id, teamId);
       if (res && typeof res.repostCount === "number") {
         setState((s) => ({ ...s, reposted: res.reposted, reposts: res.repostCount }));
       }
-      toast(nextReposted ? "Reposted to your profile" : "Repost undone");
+      toast(
+        res && !res.reposted
+          ? "Repost undone"
+          : teamId
+            ? `Reposted as ${activeWorkspace?.name ?? "your team"}`
+            : "Reposted to your profile",
+      );
     } catch (err) {
       console.warn("Repost sync fallback:", err);
+      toast.error("Couldn't repost right now — try again in a moment.");
     }
   }
 
@@ -756,47 +816,39 @@ function PostCardBase({
       )}
     >
       <header className="flex items-start gap-3">
-        <Link
-          to="/profile"
-          search={{ id: author.id, user: author.username }}
+        <BrandProfileLink
+          ws={ws}
+          author={author}
           className="shrink-0 rounded-full transition-transform duration-200 hover:scale-105 active:scale-95"
           title={ws ? `Team workspace: ${ws.name}` : undefined}
         >
-          {ws && !ws.avatarUrl ? (
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-brand to-brand-pink text-lg shadow-soft">
-              {ws.logoEmoji}
-            </span>
+          {ws ? (
+            <TeamAvatar name={ws.name} emoji={ws.logoEmoji} avatarUrl={ws.avatarUrl} size="md" />
           ) : (
-            <Avatar
-              name={ws ? ws.name : author.display_name}
-              src={ws ? ws.avatarUrl : author.avatar_url}
-              className="h-11 w-11 text-xs shrink-0"
-            />
+            <Avatar name={author.display_name} src={author.avatar_url} className="h-11 w-11 text-xs shrink-0" />
           )}
-        </Link>
+        </BrandProfileLink>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <Link
-              to="/profile"
-              search={{ id: author.id, user: author.username }}
+            <BrandProfileLink
+              ws={ws}
+              author={author}
               className="truncate font-bold hover:text-brand hover:underline transition-colors"
             >
               {ws ? ws.name : author.display_name}
-            </Link>
+            </BrandProfileLink>
             {ws ? (
-              <span className="rounded-full bg-brand/10 px-1.5 py-0.5 text-[0.6rem] font-bold uppercase tracking-wide text-brand">
-                Team
-              </span>
+              <WorkspaceBadge size="xs" />
             ) : (
               <UserBadge plan={author.plan} verified={author.verified} isMe={isMine} size="xs" />
             )}
-            <Link
-              to="/profile"
-              search={{ id: author.id, user: author.username }}
+            <BrandProfileLink
+              ws={ws}
+              author={author}
               className="truncate text-sm text-muted-foreground hover:text-brand transition-colors"
             >
-              {ws ? `via @${author.username}` : `@${author.username}`}
-            </Link>
+              {ws ? `@${workspaceSlug(ws.name)}` : `@${author.username}`}
+            </BrandProfileLink>
             <span className="text-muted-foreground">·</span>
             {/* Permalink, like every other social feed: the timestamp opens
                 the post's own page. */}
@@ -1209,6 +1261,8 @@ function PostCardBase({
         <Action
           icon={Heart}
           label="Like"
+          activeLabel="Unlike"
+          pressed
           count={state.likes}
           active={state.liked}
           filled
@@ -1226,6 +1280,8 @@ function PostCardBase({
         <Action
           icon={Repeat2}
           label="Repost"
+          activeLabel="Undo repost"
+          pressed
           count={state.reposts}
           active={state.reposted}
           activeClass="text-emerald-500"
@@ -1234,13 +1290,15 @@ function PostCardBase({
         <Action icon={BarChart3} label="Views" count={state.views} activeClass="" />
         <Action
           icon={DollarSign}
-          label="Tip Creator"
+          label={ws ? "Tip team" : "Tip Creator"}
           activeClass="text-amber-500"
           onClick={() => setIsTipModalOpen(true)}
         />
         <Action
           icon={Bookmark}
           label="Bookmark"
+          activeLabel="Remove bookmark"
+          pressed
           active={state.saved}
           filled
           activeClass="text-brand"
@@ -1317,6 +1375,11 @@ function PostCardBase({
           avatar_url: author.avatar_url,
           plan: author.plan,
         }}
+        team={
+          ws
+            ? { workspaceId: ws.id, name: ws.name, avatarUrl: ws.avatarUrl, logoEmoji: ws.logoEmoji }
+            : null
+        }
         postId={post.id}
       />
 

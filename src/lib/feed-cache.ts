@@ -87,12 +87,11 @@ export async function triggerFeedPreload(force = false): Promise<PreloadBundleRe
       // Warm image caches for all story avatars and media. media_url can hold
       // several comma-joined attachments — prewarm each URL on its own, never
       // the joined string (which 4xx/5xxs the media proxy as one path).
+      // Story media is follow-network private now: a raw prewarm would just
+      // 404 (and cache nothing), so only public post media is warmed here.
       const imagesToWarm: (string | null | undefined)[] = [];
       const splitUrls = (value?: string | null) =>
         value ? value.split(",").map((s) => s.trim()).filter(Boolean) : [];
-      bundle.stories.forEach((s) => {
-        imagesToWarm.push(...splitUrls(s.media_url));
-      });
       bundle.foryou.forEach((p) => {
         imagesToWarm.push(...splitUrls(p.media_url));
       });

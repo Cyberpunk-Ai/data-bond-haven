@@ -55,6 +55,16 @@ function friendlyAuthError(message: string): string {
   return friendlyError(message, "We couldn't complete that step. Please try again.");
 }
 
+/**
+ * First-party post-auth landing URL (https://spaces1.com/oauth/callback in
+ * production). Registering this branded route as the redirect destination keeps
+ * the copy-able "redirect URL" on the spaces1.com origin rather than the raw
+ * site root or a Supabase-hosted endpoint.
+ */
+function authCallbackUrl(): string {
+  return `${window.location.origin}/oauth/callback`;
+}
+
 function AuthPage() {
   const navigate = useNavigate();
   const { user, isLoggedIn } = useAuth();
@@ -81,17 +91,15 @@ function AuthPage() {
   async function handleGoogle() {
     setBusy(true);
     try {
+      // On success the browser is redirected to Google — nothing after this
+      // point runs, so there is no "signed in" UI to render here.
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: window.location.origin },
+        options: { redirectTo: authCallbackUrl() },
       });
       if (error) {
         toast.error(friendlyAuthError(error.message));
-        return;
       }
-      return;
-      toast.success("Signed in");
-      void navigate({ to: "/" });
     } catch (err) {
       toast.error(err instanceof Error ? friendlyAuthError(err.message) : "Google sign-in failed");
     } finally {
@@ -119,7 +127,7 @@ function AuthPage() {
           email: address,
           password,
           options: {
-            emailRedirectTo: `${window.location.origin}/`,
+            emailRedirectTo: authCallbackUrl(),
             data: {
               display_name: displayName.trim() || handleFrom(address, "member"),
               username: handleFrom(address, "member"),
@@ -175,7 +183,7 @@ function AuthPage() {
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email: address,
-        options: { emailRedirectTo: `${window.location.origin}/` },
+        options: { emailRedirectTo: authCallbackUrl() },
       });
       if (error) {
         toast.error(friendlyAuthError(error.message));
@@ -362,6 +370,9 @@ function AuthPage() {
                   onClick={() => {
                     setMode(m);
                     setCheckInbox(false);
+                    // Drop any error toast from the other tab so it can't read
+                    // as a signup failure (or vice versa) while the form changes.
+                    toast.dismiss();
                   }}
                   className={cn(
                     "flex-1 rounded-xl px-3 py-1.5 text-xs font-bold transition-all cursor-pointer",

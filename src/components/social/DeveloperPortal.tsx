@@ -51,12 +51,20 @@ export function DeveloperPortal() {
   const handleGenerateKey = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newKeyName.trim()) return;
-    const key = await generateApiKey(newKeyName.trim());
-    if (key?.fullKey) {
-      setCreatedKeySecret(key.fullKey);
-      toast.success("API Key generated! Store it securely.");
+    try {
+      const key = await generateApiKey(newKeyName.trim());
+      if (key?.fullKey) {
+        setCreatedKeySecret(key.fullKey);
+        toast.success("API Key generated! Store it securely.");
+        setNewKeyName("");
+      } else {
+        toast.error("We couldn't create the key. Please try again.");
+      }
+    } catch (err) {
+      // Surface the real reason (Pro plan required, API_KEY_PEPPER unset, rate
+      // limit, etc.) instead of failing silently when the button "does nothing".
+      toast.error(err instanceof Error ? err.message : "Failed to generate API key");
     }
-    setNewKeyName("");
   };
 
   const handleCreateWebhook = (e: React.FormEvent) => {
@@ -72,20 +80,36 @@ export function DeveloperPortal() {
     setIsWebhookModalOpen(false);
   };
 
-  const curlSnippet = `curl -X GET https://spaces.studio/api/v1/posts \\
-  -H "Authorization: Bearer ${apiKeys[0]?.maskedKey || "spc_live_••••"}" \\
-  -H "Content-Type: application/json"`;
+  // Point the quickstart at whichever origin the app is served from, so in
+  // production it renders the real spaces1.com URL instead of a stale example.
+  const apiBase = typeof window !== "undefined" ? window.location.origin : "https://spaces1.com";
+  const keyHint = apiKeys[0]?.fullKey || "sp1_live_YOUR_API_KEY";
 
-  const tsSnippet = `import { SpacesClient } from "@spaces/sdk";
+  const curlSnippet = `# Fetch your latest posts (read scope)
+curl "${apiBase}/api/public/v1/posts?limit=20" \\
+  -H "Authorization: Bearer ${keyHint}" \\
+  -H "Content-Type: application/json"
 
-const spaces = new SpacesClient({
-  apiKey: "${apiKeys[0]?.maskedKey || "spc_live_••••"}"
+# Publish a post (write scope)
+curl -X POST "${apiBase}/api/public/v1/posts" \\
+  -H "Authorization: Bearer ${keyHint}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"content": "Hello from the Spaces1 API!"}'`;
+
+  const tsSnippet = `// Plain REST + Bearer auth — no SDK required.
+const res = await fetch("${apiBase}/api/public/v1/posts?limit=20", {
+  headers: {
+    Authorization: "Bearer ${keyHint}",
+    "Content-Type": "application/json",
+  },
 });
 
-// Fetch latest trending posts
-const { data: posts } = await spaces.posts.list({
-  limit: 20
-});`;
+if (!res.ok) {
+  throw new Error(\`Spaces1 API error \${res.status}\`);
+}
+
+const { data: posts } = await res.json();
+console.log(posts); // [{ id, content, media_url, like_count, ... }]`;
 
   return (
     <div className="space-y-6">

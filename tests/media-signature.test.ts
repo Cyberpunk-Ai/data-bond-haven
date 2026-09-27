@@ -69,6 +69,13 @@ describe("signatureMatches", () => {
 
   it("rejects content types that are not on the allowlist at all", () => {
     expect(signatureMatches("image/svg+xml", bytes(0xff, 0xd8, 0xff))).toBe(false);
-    expect(signatureMatches("application/pdf", bytes(0x25, 0x50, 0x44, 0x46))).toBe(false);
+  });
+
+  it("trusts declared document types (reader forces attachment downloads)", () => {
+    // Documents have no shared magic-byte sniffing and are served with
+    // Content-Disposition: attachment + octet-stream, so declaration is trusted.
+    expect(signatureMatches("application/pdf", bytes(0x25, 0x50, 0x44, 0x46))).toBe(true);
+    expect(signatureMatches("application/octet-stream", asciiPrefix("whatever"))).toBe(true);
+    expect(signatureMatches("text/csv", asciiPrefix("a,b,c"))).toBe(true);
   });
 });

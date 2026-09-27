@@ -88,6 +88,25 @@ export const setAccessLevel = createServerFn({ method: "POST" })
       if (error) throw new Error(error.message);
     }
 
+    // Access changes are the most sensitive thing an admin does, so they belong
+    // in the same audit trail as post deletions and payout decisions.
+    const { data: actor } = await admin
+      .from("profiles")
+      .select("id, display_name, username")
+      .eq("auth_user_id", actorAuthId)
+      .maybeSingle();
+    const { error: auditError } = await admin.from("audit_logs").insert({
+      actor_id: actor?.id ?? null,
+      actor_name: actor?.display_name || actor?.username || "Administrator",
+      actor_role: "admin",
+      action: dbRole ? "access.grant" : "access.revoke",
+      target_type: "user",
+      target_id: target.id,
+      details: `${target.username} set to ${dbRole ?? "user"}`,
+      severity: dbRole === "admin" ? "warning" : "info",
+    });
+    if (auditError) console.error("access audit write failed:", auditError.message);
+
     return { profileId: target.id, username: target.username, role: dbRole ?? "user" };
   });
 

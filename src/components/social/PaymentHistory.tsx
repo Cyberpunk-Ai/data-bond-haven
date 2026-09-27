@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { Receipt } from "lucide-react";
 
 import { listMyPayments } from "@/lib/paystack.functions";
+import { usd } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 
 interface PaymentRow {
@@ -11,7 +12,10 @@ interface PaymentRow {
   plan: string;
   billing_cycle: string;
   amount: number;
+  amount_minor: number | null;
+  majorAmount: number;
   currency: string;
+  quoted_amount_usd: number | null;
   status: string;
   paid_at: string | null;
   created_at: string;
@@ -70,8 +74,8 @@ export function PaymentHistory() {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-3">
-              <span className="text-sm font-black">
-                {row.currency} {(row.amount / 100).toFixed(2)}
+              <span className="text-sm font-black" title={`${row.majorAmount.toFixed(2)} ${row.currency} charged at checkout`}>
+                {usd(row.quoted_amount_usd ?? row.majorAmount)}
               </span>
               <span
                 className={cn(

@@ -8,10 +8,14 @@ import {
   Check,
   ArrowDownRight,
   AlertCircle,
+  Landmark,
+  Plus,
 } from "lucide-react";
 import { useMonetization } from "@/lib/monetization-state";
 import { usePlan } from "@/lib/plan-state";
+import { approxLocal, usd } from "@/lib/formatters";
 import { Avatar } from "@/components/social/Avatar";
+import { PayoutAccountModal } from "@/components/social/PayoutAccountModal";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
@@ -30,20 +34,23 @@ export function MonetizationHub() {
     error,
     totalEarnings,
     pendingBalance,
-    currency,
+    settlement,
     minimumPayout,
+    feePercent,
     tipsReceived,
     payouts,
     settings,
+    payoutDestination,
+    openPayout,
     requestPayout,
     saveTipSettings,
     refresh,
   } = useMonetization();
 
   const [isPayoutModalOpen, setIsPayoutModalOpen] = useState(false);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [payoutProcessing, setPayoutProcessing] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState<string>("");
-  const [withdrawNote, setWithdrawNote] = useState("");
 
   const [minTipDraft, setMinTipDraft] = useState<number>(settings.minimumTip || 1);
   const [tipsEnabledDraft, setTipsEnabledDraft] = useState<boolean>(settings.tipsEnabled ?? true);
@@ -54,8 +61,12 @@ export function MonetizationHub() {
     setTipsEnabledDraft(settings.tipsEnabled ?? true);
   }, [settings.minimumTip, settings.tipsEnabled]);
 
-  const platformFee = isPro ? "0% (Keep 100%)" : "5% platform fee";
-  const pendingRequest = payouts.find((p) => p.status === "pending" || p.status === "reviewing");
+  const platformFee = `${feePercent}% platform fee`;
+  const hasDestination = payoutDestination.configured;
+  const inFlight = !!openPayout;
+  const openAmount = openPayout
+    ? payouts.find((p) => p.id === openPayout.id)?.amount
+    : undefined;
 
   const handlePayoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,15 +78,20 @@ export function MonetizationHub() {
 
     setPayoutProcessing(true);
     try {
-      const record = await requestPayout(amt, withdrawNote.trim() || undefined);
+      const record = await requestPayout(amt);
       setIsPayoutModalOpen(false);
       setWithdrawAmount("");
-      setWithdrawNote("");
       toast.success(
-        `Withdrawal request for ${currency} ${record.amount.toFixed(2)} sent for review.`,
+        `Withdrawal requested — ${usd(record.netUsd ?? record.amount)}${
+          record.feeUsd != null ? ` (after a ${usd(record.feeUsd)} fee)` : ""
+        }${
+          record.settlementCurrency
+            ? ` (${approxLocal(record.settlementAmount, record.settlementCurrency)})`
+            : ""
+        } will reach your account after review.`,
       );
     } catch (err: any) {
-      toast.error(friendlyError(err, "We couldn't send that withdrawal request."));
+      toast.error(friendlyError(err, "We couldn't send that withdrawal."));
     } finally {
       setPayoutProcessing(false);
     }
@@ -117,11 +133,12 @@ export function MonetizationHub() {
               setWithdrawAmount(pendingBalance.toString());
               setIsPayoutModalOpen(true);
             }}
-            disabled={pendingBalance < minimumPayout || !!pendingRequest}
+            disabled={pendingBalance < minimumPayout || !hasDestination || inFlight}
+            title={!hasDestination ? "Add a payout account first" : undefined}
             className="flex min-h-[40px] items-center gap-1.5 rounded-full bg-gradient-to-r from-emerald-600 to-teal-500 px-4 py-2 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all disabled:opacity-50 cursor-pointer"
           >
             <DollarSign className="h-3.5 w-3.5" />
-            <span>Request withdrawal</span>
+            <span>{inFlight ? "Withdrawal in progress" : "Withdraw"}</span>
           </button>
         </div>
       </div>
@@ -142,9 +159,7 @@ export function MonetizationHub() {
             Total earnings
           </span>
           <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-black">
-              {currency} {totalEarnings.toFixed(2)}
-            </span>
+            <span className="text-2xl sm:text-3xl font-black">{usd(totalEarnings)}</span>
             <span className="text-xs font-bold text-emerald-500">All-time</span>
           </div>
           <p className="text-[0.7rem] text-muted-foreground">Every tip you have received</p>
@@ -156,13 +171,15 @@ export function MonetizationHub() {
           </span>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl sm:text-3xl font-black text-emerald-700 dark:text-emerald-300">
-              {currency} {pendingBalance.toFixed(2)}
+              {usd(pendingBalance)}
             </span>
           </div>
           <p className="text-[0.7rem] text-muted-foreground">
-            {pendingRequest
-              ? `A withdrawal of ${currency} ${pendingRequest.amount.toFixed(2)} is waiting for review`
-              : `Smallest withdrawal: ${currency} ${minimumPayout.toFixed(2)}`}
+            {inFlight
+              ? `A withdrawal of ${openAmount != null ? usd(openAmount) : "…"} is being processed`
+              : `Smallest withdrawal: ${usd(minimumPayout)}${
+                  settlement ? ` · paid out in ${settlement.currency}` : ""
+                }`}
           </p>
         </div>
 
@@ -174,27 +191,58 @@ export function MonetizationHub() {
             <span className="text-xl sm:text-2xl font-black text-foreground">{platformFee}</span>
           </div>
           <p className="text-[0.7rem] text-muted-foreground">
-            {isPro ? "Pro 0% fee active" : "Upgrade to Pro for 0% fee"}
+            {isPro ? "Pro rate — lowest fee" : "Upgrade for a lower withdrawal fee"}
           </p>
         </div>
       </div>
 
       <div className="rounded-3xl border border-border/80 bg-card p-5 md:p-6 space-y-4 shadow-soft">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="rounded-full bg-brand/10 p-2.5 text-brand shrink-0">
+              <Landmark className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-black">Payout account</h3>
+              <p className="text-xs text-muted-foreground truncate">
+                {hasDestination
+                  ? `${payoutDestination.bankName ?? "Saved account"} ••••${payoutDestination.last4 ?? ""}`
+                  : "Add the bank or mobile-money account for your withdrawals."}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsAccountModalOpen(true)}
+            className="flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-full bg-brand px-4 py-2 text-xs font-bold text-white shadow-soft hover:bg-brand/90 transition-all cursor-pointer"
+          >
+            {hasDestination ? (
+              <span>Change</span>
+            ) : (
+              <>
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add account</span>
+              </>
+            )}
+          </button>
+        </div>
+
         <div className="flex items-start gap-2 rounded-2xl bg-foreground/5 border border-border/60 p-3.5 text-xs">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
           <p className="text-muted-foreground">
-            For your safety we never ask for or store your bank, mobile money or card details.
-            Request a withdrawal here and our team arranges the payment with you directly.
+            Withdrawals are sent automatically to your payout account. We verify the account with
+            our payment provider once, then store only an encrypted payout token and the last four
+            digits — never the full number, and never any card details.
           </p>
         </div>
+      </div>
 
-        <div className="border-t border-border/60 pt-4 space-y-4">
+      <div className="rounded-3xl border border-border/80 bg-card p-5 md:p-6 space-y-4 shadow-soft">
+        <div className="border-t-0 pt-0 space-y-4">
           <h3 className="text-sm font-black">Tip settings</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-foreground">
-                Minimum tip amount ({currency})
-              </label>
+              <label className="text-xs font-bold text-foreground">Minimum tip amount (USD)</label>
               <input
                 type="number"
                 min="0.5"
@@ -278,7 +326,7 @@ export function MonetizationHub() {
                   </div>
                   <div className="text-right shrink-0">
                     <span className="font-black text-emerald-600 dark:text-emerald-400">
-                      +{currency} {t.amount.toFixed(2)}
+                      +{usd(t.amount)}
                     </span>
                     {t.message && (
                       <p
@@ -335,9 +383,7 @@ export function MonetizationHub() {
                       <p className="text-[10px] text-rose-500">{p.failureReason}</p>
                     )}
                   </div>
-                  <span className="shrink-0 font-black">
-                    {currency} {p.amount.toFixed(2)}
-                  </span>
+                  <span className="shrink-0 font-black">{usd(p.amount)}</span>
                 </div>
               ))
             )}
@@ -349,9 +395,13 @@ export function MonetizationHub() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-xl space-y-5">
             <div>
-              <h3 className="text-lg font-black">Request a withdrawal</h3>
+              <h3 className="text-lg font-black">Withdraw your earnings</h3>
               <p className="text-xs text-muted-foreground">
-                We review requests and arrange payment with you — no account details needed here.
+                Sent automatically to your payout account
+                {hasDestination
+                  ? ` (${payoutDestination.bankName ?? "account"} ••••${payoutDestination.last4 ?? ""})`
+                  : ""}
+                .
               </p>
             </div>
 
@@ -359,14 +409,14 @@ export function MonetizationHub() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Available:</span>
                 <span className="font-black text-emerald-600 dark:text-emerald-400">
-                  {currency} {pendingBalance.toFixed(2)}
+                  {usd(pendingBalance)}
                 </span>
               </div>
             </div>
 
             <form onSubmit={handlePayoutSubmit} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">Amount ({currency})</label>
+                <label className="text-xs font-bold text-foreground">Amount (USD)</label>
                 <input
                   type="number"
                   min={minimumPayout}
@@ -380,19 +430,32 @@ export function MonetizationHub() {
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-foreground">
-                  Anything we should know? (optional)
-                </label>
-                <textarea
-                  value={withdrawNote}
-                  onChange={(e) => setWithdrawNote(e.target.value)}
-                  rows={2}
-                  maxLength={280}
-                  className="w-full rounded-xl bg-card border border-border px-3 py-2.5 text-sm outline-none focus:border-brand"
-                  placeholder="Preferred payment timing, for example"
-                />
-              </div>
+              {(() => {
+                const gross = Math.min(
+                  Math.max(Number(withdrawAmount) || 0, 0),
+                  pendingBalance,
+                );
+                if (!(gross > 0)) return null;
+                const fee = Math.round(gross * (feePercent / 100) * 100) / 100;
+                return (
+                  <div className="space-y-1.5 rounded-2xl bg-foreground/5 border border-border/60 p-3.5 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Platform fee ({feePercent}%)</span>
+                      <span className="font-bold text-rose-500">-{usd(fee)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="font-bold">You receive</span>
+                      <span className="font-black text-emerald-600 dark:text-emerald-400">
+                        {usd(Math.max(gross - fee, 0))}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      The fee is charged only on withdrawal — tips you receive are credited in
+                      full.
+                    </p>
+                  </div>
+                );
+              })()}
 
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
@@ -412,13 +475,20 @@ export function MonetizationHub() {
                   ) : (
                     <Check className="h-3.5 w-3.5" />
                   )}
-                  <span>{payoutProcessing ? "Sending…" : "Send request"}</span>
+                  <span>{payoutProcessing ? "Sending…" : "Withdraw now"}</span>
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      <PayoutAccountModal
+        open={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        subject="me"
+        existing={hasDestination ? payoutDestination : null}
+      />
     </div>
   );
 }

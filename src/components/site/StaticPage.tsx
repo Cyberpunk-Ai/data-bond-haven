@@ -5,10 +5,12 @@ import { appConfig } from "@/lib/config";
 
 const NAV = [
   { to: "/about", label: "About" },
+  { to: "/help", label: "Help" },
   { to: "/guidelines", label: "Guidelines" },
   { to: "/contact", label: "Contact" },
   { to: "/terms", label: "Terms" },
   { to: "/privacy", label: "Privacy" },
+  { to: "/status", label: "Status" },
 ] as const;
 
 export function StaticPage({
@@ -31,7 +33,7 @@ export function StaticPage({
           <Link to="/" className="text-lg font-extrabold tracking-tight">
             {appConfig.brand.name}
           </Link>
-          <nav className="hidden gap-6 text-sm text-muted-foreground sm:flex">
+          <nav className="hidden gap-5 text-sm text-muted-foreground md:flex">
             {NAV.map((n) => (
               <Link
                 key={n.to}
@@ -94,7 +96,8 @@ export function SiteFooter() {
       title: "Resources",
       links: [
         { to: "/guidelines", label: "Community guidelines" },
-        { to: "/contact", label: "Help & support" },
+        { to: "/help", label: "Help center" },
+        { to: "/status", label: "System status" },
       ],
     },
     {

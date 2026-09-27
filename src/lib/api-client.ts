@@ -88,6 +88,8 @@ export interface PostsPageOptions {
   userId?: string;
   /** Alias of `userId`, kept for call sites that speak in author terms. */
   authorId?: string;
+  /** Restrict to posts published on behalf of one team workspace. */
+  workspaceId?: string;
   tag?: string;
   before?: string;
   /** Opaque `(score, id)` cursor for the ranked "For you" feed. */
@@ -95,6 +97,8 @@ export interface PostsPageOptions {
   following?: boolean;
   bookmarked?: boolean;
   filter?: "foryou" | "following" | "latest";
+  /** Manual refresh: bypass the ranker's frozen epoch and re-rank with live time. */
+  refresh?: boolean;
 }
 
 export interface PostsPage {
@@ -120,6 +124,7 @@ export async function getPostsPage(options: PostsPageOptions = {}): Promise<Post
         data: {
           limit: Math.min(options.limit ?? appConfig.feed.pageSize, appConfig.feed.maxPageSize),
           cursor: options.cursor,
+          refresh: options.refresh,
         },
       });
       const ranked = (res?.posts ?? []).map((row: any) => rowToPost(row));
@@ -143,6 +148,7 @@ export async function getPostsPage(options: PostsPageOptions = {}): Promise<Post
     .order("created_at", { ascending: false })
     .limit(limit);
   if (options.userId) query = query.eq("user_id", options.userId);
+  if (options.workspaceId) query = query.eq("workspace_id", options.workspaceId);
   if (options.before) query = query.lt("created_at", options.before);
   // `tags` is a jsonb array column. PostgREST's `cs` (contains) operator needs
   // a valid JSON value on the right-hand side, so pass a JSON-array string
@@ -277,17 +283,39 @@ async function hydrateWorkspaces(posts: Post[]) {
   if (ids.length === 0) return;
   const missing = ids.filter((id) => !workspaceCache.has(id));
   if (missing.length) {
-    const { data } = await db
+    // Read the *public* identity through the SECURITY DEFINER function rather
+    // than the `workspaces` table: that table is only visible to the owner and
+    // its members, so a plain SELECT would drop the brand for everyone else and
+    // a team post would misleadingly render under the individual author. The
+    // function exposes name/logo/avatar to anyone who can already see the post.
+    const { data: rows } = await db
       .from("workspaces")
       .select("id, name, logo_emoji, avatar_url")
       .in("id", missing);
-    for (const w of (data ?? []) as any[]) {
+    const seen = new Set<string>();
+    for (const w of (rows ?? []) as any[]) {
       workspaceCache.set(String(w.id), {
         id: String(w.id),
         name: String(w.name ?? "Workspace"),
         logoEmoji: String(w.logo_emoji ?? "✨"),
         avatarUrl: w.avatar_url ?? null,
       });
+      seen.add(String(w.id));
+    }
+    // Fall back to the public-profile RPC for teams this viewer can't read
+    // directly (i.e. teams they aren't a member of).
+    for (const id of missing) {
+      if (seen.has(id)) continue;
+      const { data } = await db.rpc("get_workspace_profile", { _workspace_id: id });
+      const w = (Array.isArray(data) ? data[0] : data) as any;
+      if (w) {
+        workspaceCache.set(String(w.id), {
+          id: String(w.id),
+          name: String(w.name ?? "Workspace"),
+          logoEmoji: String(w.logo_emoji ?? "✨"),
+          avatarUrl: w.avatar_url ?? null,
+        });
+      }
     }
   }
   for (const p of posts) {
@@ -394,18 +422,141 @@ async function toggleRelation(table: string, postId: string, event: string, coun
   return result;
 }
 
+/**
+ * Ids of every workspace the viewer belongs to (owned or active membership).
+ * Cached per session because engagement hydration runs on every feed page and
+ * membership changes are rare — the workspace desk re-hydrates on demand.
+ */
+let wsIdsCache: { userId: string; ids: string[] } | null = null;
+async function myWorkspaceIds(userId: string): Promise<string[]> {
+  if (wsIdsCache?.userId === userId) return wsIdsCache.ids;
+  const [{ data: memberRows }, { data: ownedRows }] = await Promise.all([
+    db
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", userId)
+      .eq("status", "active"),
+    db.from("workspaces").select("id").eq("owner_id", userId),
+  ]);
+  const ids = [
+    ...new Set([
+      ...((memberRows ?? []) as any[]).map((r) => String(r.workspace_id)),
+      ...((ownedRows ?? []) as any[]).map((r) => String(r.id)),
+    ]),
+  ].filter(isDbId);
+  wsIdsCache = { userId, ids };
+  return ids;
+}
+
 export async function toggleLikePost(postId: string) {
   const { active, count } = await toggleRelation("likes", postId, "post_like_updated", "likeCount");
   return { liked: active, likeCount: count, likesCount: count };
 }
 
-export async function toggleRepostPost(postId: string) {
-  const { active, count } = await toggleRelation(
-    "reposts",
-    postId,
-    "post_repost_updated",
-    "repostCount",
+/**
+ * Repost with either your own name or an active team's. The row remembers which
+ * identity acted (`workspace_id`), the DB keeps one repost per (post, person)
+ * personally and one per (post, team), and RLS only lets Owners/Admins/Editors
+ * repost for a team. Undoing prefers the team row when posting as a team, then
+ * falls back to the personal row so a member can always take it back.
+ */
+export async function toggleRepostPost(postId: string, workspaceId?: string | null) {
+  if (!workspaceId) {
+    const userId = me();
+    if (!isDbId(userId)) throw new Error("Sign in to interact with posts");
+    if (!isDbId(postId)) throw new Error("This is sample content and can't be saved.");
+
+    // Personal rows are exactly the ones without a workspace identity.
+    const { data: existing, error: readError } = await db
+      .from("reposts")
+      .select("post_id")
+      .eq("post_id", postId)
+      .eq("user_id", userId)
+      .is("workspace_id", null)
+      .maybeSingle();
+    if (readError) throw new Error(readError.message);
+
+    const active = !existing;
+    if (existing) {
+      const { error } = await db
+        .from("reposts")
+        .delete()
+        .eq("post_id", postId)
+        .eq("user_id", userId)
+        .is("workspace_id", null);
+      if (error) throw new Error(error.message);
+    } else {
+      const { error } = await db.from("reposts").insert({ post_id: postId, user_id: userId });
+      if (error && error.code !== "23505") throw new Error(error.message);
+    }
+
+    const { count: exactCount } = await db
+      .from("reposts")
+      .select("post_id", { count: "exact", head: true })
+      .eq("post_id", postId);
+    const count = exactCount ?? (active ? 1 : 0);
+    emitRealtime("post_repost_updated", { id: postId, postId, repostCount: count, active });
+    return { reposted: active, repostCount: count };
+  }
+
+  const userId = me();
+  if (!isDbId(userId)) throw new Error("Sign in to repost");
+  if (!isDbId(postId)) throw new Error("This is sample content and can't be reposted.");
+
+  const { data: teamRow } = await db
+    .from("reposts")
+    .select("post_id")
+    .eq("post_id", postId)
+    .eq("workspace_id", workspaceId)
+    .maybeSingle();
+
+  if (teamRow) {
+    const { error } = await db
+      .from("reposts")
+      .delete()
+      .eq("post_id", postId)
+      .eq("workspace_id", workspaceId);
+    if (error) throw new Error(error.message);
+  } else {
+    const { data: personalRow } = await db
+      .from("reposts")
+      .select("post_id")
+      .eq("post_id", postId)
+      .eq("user_id", userId)
+      .is("workspace_id", null)
+      .maybeSingle();
+    if (personalRow) {
+      const { error } = await db
+        .from("reposts")
+        .delete()
+        .eq("post_id", postId)
+        .eq("user_id", userId)
+        .is("workspace_id", null);
+      if (error) throw new Error(error.message);
+    } else {
+      const { error } = await db
+        .from("reposts")
+        .insert({ post_id: postId, user_id: userId, workspace_id: workspaceId });
+      // 23505 = the team already reposted this post; the state hydration below
+      // still resolves the button to "reposted", so swallow it quietly.
+      if (error && error.code !== "23505") throw new Error(error.message);
+    }
+  }
+
+  const [{ count: exactCount }, wsIds] = await Promise.all([
+    db.from("reposts").select("post_id", { count: "exact", head: true }).eq("post_id", postId),
+    myWorkspaceIds(userId),
+  ]);
+  const { data: rows } = await db
+    .from("reposts")
+    .select("user_id, workspace_id")
+    .eq("post_id", postId);
+  const active = ((rows ?? []) as any[]).some(
+    (r) => r.user_id === userId || (r.workspace_id && wsIds.includes(String(r.workspace_id))),
   );
+  const count = exactCount ?? 0;
+
+  emitRealtime("post_repost_updated", { id: postId, postId, repostCount: count, active });
   return { reposted: active, repostCount: count };
 }
 
@@ -418,13 +569,48 @@ export async function getMyEngagement(postIds: string[]) {
   const userId = me();
   const realIds = dbIds(postIds);
   if (!isDbId(userId) || realIds.length === 0) return { liked: [], reposted: [], bookmarked: [] };
-  const [likes, reposts, bookmarks] = await Promise.all([
+  // "Reposted" covers any identity the viewer acts through: their own row or a
+  // row belonging to one of their teams (the team reposts once, for everyone).
+  const [likes, reposts, bookmarks, teamReposts] = await Promise.all([
     db.from("likes").select("post_id").eq("user_id", userId).in("post_id", realIds),
-    db.from("reposts").select("post_id").eq("user_id", userId).in("post_id", realIds),
+    db
+      .from("reposts")
+      .select("post_id")
+      .eq("user_id", userId)
+      .is("workspace_id", null)
+      .in("post_id", realIds),
     db.from("bookmarks").select("post_id").eq("user_id", userId).in("post_id", realIds),
+    myWorkspaceIds(userId).then((wsIds) =>
+      wsIds.length
+        ? db.from("reposts").select("post_id").in("workspace_id", wsIds).in("post_id", realIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ),
   ]);
   const pick = (r: any) => ((r.data ?? []) as any[]).map((x) => String(x.post_id));
-  return { liked: pick(likes), reposted: pick(reposts), bookmarked: pick(bookmarks) };
+  const teamIds = ((teamReposts.data ?? []) as any[]).map((x) => String(x.post_id));
+  return {
+    liked: pick(likes),
+    reposted: Array.from(new Set([...pick(reposts), ...teamIds])),
+    bookmarked: pick(bookmarks),
+  };
+}
+
+/** Posts this team has reposted, newest repost first — the profile's Reposts tab. */
+export async function getWorkspaceReposts(workspaceId: string, limit = 50): Promise<Post[]> {
+  if (!isDbId(workspaceId)) return [];
+  const { data } = await db
+    .from("reposts")
+    .select("created_at, posts(*)")
+    .eq("workspace_id", workspaceId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  const posts = ((data ?? []) as any[])
+    .map((row) => (row.posts && !row.posts.hidden ? rowToPost(row.posts) : null))
+    .filter(Boolean) as Post[];
+  await hydrateAuthors(posts.map((p) => p.user_id));
+  await hydrateWorkspaces(posts);
+  await hydrateEngagement(posts);
+  return posts;
 }
 
 export async function addPostComment(
@@ -543,12 +729,13 @@ export async function recordPostImpression(postId: string) {
   const userId = me();
   const viewer = isDbId(userId) ? userId : null;
   try {
-    // A signed-in person counts once per post; the unique index enforces it.
-    // A repeat view is rejected by the unique index; that is expected, not a bug.
-    const { error } = await db
-      .from("post_impressions")
-      .insert({ post_id: postId, user_id: viewer });
-    if (error && error.code !== "23505") throw error;
+    // A signed-in person counts once per post. Upsert with ignore-duplicates
+    // turns the repeat view into a silent no-op at the API layer (a plain
+    // insert would surface a noisy 409/23505 round-trip every scroll-past).
+    await db.from("post_impressions").upsert(
+      { post_id: postId, user_id: viewer },
+      { onConflict: "post_id,user_id", ignoreDuplicates: true },
+    );
   } catch {
     /* impressions are best-effort */
   }
@@ -589,7 +776,14 @@ function rowToStory(row: any): Story {
 
 export async function getStories(): Promise<Story[]> {
   try {
-    const { data } = await db.from("stories").select("*").order("created_at", { ascending: false });
+    // Stories live for 24 hours. Filter server-side on `expires_at` so expired
+    // stories never load into the rail, regardless of how long a row lingers
+    // before the nightly cleanup removes it.
+    const { data } = await db
+      .from("stories")
+      .select("*")
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false });
     const stories = (data ?? []).map(rowToStory);
     if (stories.length > 0) {
       await hydrateAuthors(stories.map((s: Story) => s.user_id));
@@ -822,11 +1016,17 @@ export async function uploadMedia(
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData?.session?.access_token;
     if (token) {
+      // Media must keep its real MIME so the reader can render it inline; every
+      // other file is sent as a generic document (application/octet-stream) so a
+      // browser-inferred code/text MIME can never be rejected, and the reader
+      // safely serves it back as a download.
+      const isMedia = /^(image|video|audio)\//.test(file.type);
+      const contentType = isMedia ? file.type || "application/octet-stream" : "application/octet-stream";
       const res = await fetch(`/api/uploads/?folder=${encodeURIComponent(folder)}`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${token}`,
-          "content-type": file.type || "application/octet-stream",
+          "content-type": contentType,
         },
         body: file,
       });
@@ -1148,6 +1348,13 @@ export async function reportSpaceRecordingBytes(spaceId: string, bytes: number) 
 
 /** Host-only: finish a recording, attaching the uploaded replay URL. */
 export async function finalizeSpaceRecording(spaceId: string, recordingUrl: string) {
+  // Only a media-proxy URL is a real replay: it is what the ACL check in
+  // /api/public/media/$ resolves `spaces.recording_url` against, and an inline
+  // data: blob would ship base64 through every spaces query (the column has a
+  // CHECK constraint enforcing this too).
+  if (!recordingUrl || !recordingUrl.startsWith("/api/public/media/")) {
+    throw new Error("The recording was not stored. Please try recording again.");
+  }
   const { error } = await db
     .from("spaces")
     .update({ is_recording: false, recorded: true, recording_url: recordingUrl })
@@ -1161,7 +1368,7 @@ export async function finalizeSpaceRecording(spaceId: string, recordingUrl: stri
 /** Records a real, de-duplicated replay view for the signed-in listener (no fake counts). */
 export async function recordSpaceReplayView(spaceId: string) {
   const userId = me();
-  if (!isDbId(userId)) return { ok: false };
+  if (!isDbId(userId)) return { ok: false, replayCount: null as number | null };
   try {
     await db
       .from("space_replay_views")
@@ -1172,7 +1379,15 @@ export async function recordSpaceReplayView(spaceId: string) {
   } catch {
     /* best effort */
   }
-  return { ok: true };
+  // The AFTER INSERT trigger maintains spaces.replay_count; read the live value
+  // back so the modal can show the true count instead of the stale list one.
+  try {
+    const { data } = await db.from("spaces").select("replay_count").eq("id", spaceId).maybeSingle();
+    const count = Number(data?.replay_count);
+    return { ok: true, replayCount: Number.isFinite(count) ? count : null };
+  } catch {
+    return { ok: true, replayCount: null as number | null };
+  }
 }
 
 export async function terminateSpaceAdmin(spaceId: string, _actorId?: string) {
@@ -1323,19 +1538,25 @@ export async function sendMessage(
   // Repeated identical messages must all send — there is no dedupe by
   // content. A client-generated id lets the sender reconcile its optimistic
   // bubble with the persisted row without guessing from message text.
+  // messages.id is a UUID column, so only honour a well-formed client id; a
+  // non-UUID sentinel would otherwise fail the insert with
+  // `invalid input syntax for type uuid`, so we let the DB assign the id.
+  const isUuid =
+    typeof clientId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId);
   const insertRow: Record<string, unknown> = {
     conversation_id: conversationId,
     sender_id: senderId,
     body,
     media_url: mediaUrl ?? null,
   };
-  if (clientId) insertRow.id = clientId;
+  if (isUuid) insertRow.id = clientId;
 
   const { data, error } = await db.from("messages").insert(insertRow).select("*").single();
   if (error) {
     // Retrying a message that actually landed (network dropped the response)
     // hits the client id's primary key — treat it as sent, not failed.
-    if (clientId && error.code === "23505") {
+    if (isUuid && error.code === "23505") {
       const { data: row } = await db.from("messages").select("*").eq("id", clientId).maybeSingle();
       if (row) {
         emitRealtime("message:created", row);
@@ -1696,16 +1917,16 @@ export async function updateUserAdmin(
 }
 
 export async function getAdminPosts(filters: { query?: string } = {}) {
-  const { data } = await db
+  // Narrow server-side: the console used to pull 200 rows and filter them in
+  // JS on every keystroke.
+  let builder = db
     .from("posts")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(200);
-  let posts = (data ?? []).map((row: any) => rowToPost(row));
-  if (filters.query) {
-    const needle = filters.query.toLowerCase();
-    posts = posts.filter((p: Post) => p.content.toLowerCase().includes(needle));
-  }
+  if (filters.query) builder = builder.ilike("content", `%${filters.query}%`);
+  const { data } = await builder;
+  const posts = (data ?? []).map((row: any) => rowToPost(row));
   await hydrateAuthors(posts.map((p: Post) => p.user_id));
   return posts;
 }
@@ -1755,7 +1976,18 @@ export async function getAdminSettings(): Promise<SystemSettings> {
   const { data } = await db.from("system_settings").select("*").limit(1).maybeSingle();
   if (!data) return DEFAULT_SETTINGS;
   const { id: _id, updated_at: _u, ...rest } = data as Record<string, unknown>;
-  return { ...DEFAULT_SETTINGS, ...(rest as Partial<SystemSettings>) };
+  const storedBanner =
+    rest.announcement_banner && typeof rest.announcement_banner === "object"
+      ? (rest.announcement_banner as Partial<SystemSettings["announcement_banner"]>)
+      : {};
+  return {
+    ...DEFAULT_SETTINGS,
+    ...(rest as Partial<SystemSettings>),
+    // Deep-merge the banner: older rows store only { message, link }, and a
+    // shallow spread would hand the admin tab a banner missing active/type/
+    // dismissible — the save-time zod check then rejected every publish.
+    announcement_banner: { ...DEFAULT_SETTINGS.announcement_banner, ...storedBanner },
+  };
 }
 
 export async function getPublicSettings(): Promise<SystemSettings> {
@@ -1840,6 +2072,40 @@ export async function getAdminOverview(): Promise<AdminOverviewData> {
     recent_activity = [];
   }
 
+  // Tipping activity for the overview (staff-guarded inside the DB functions;
+  // non-staff callers and failures simply leave the section empty).
+  let tipStats: { count: number; amount: number; currency: string } = {
+    count: 0,
+    amount: 0,
+    currency: "NGN",
+  };
+  let recentTips: AdminOverviewData["recent_tips"] = [];
+  try {
+    const [{ data: statsRow }, { data: tipsRows }] = await Promise.all([
+      await db.rpc("admin_tip_stats"),
+      await db.rpc("admin_recent_tips", { _limit: 6 }),
+    ]);
+    const s = (statsRow ?? [])[0] as any;
+    if (s) {
+      tipStats = {
+        count: Number(s.count ?? 0),
+        amount: Number(s.amount ?? 0),
+        currency: String(s.currency ?? "NGN"),
+      };
+    }
+    recentTips = ((tipsRows ?? []) as any[]).map((t) => ({
+      id: String(t.id),
+      tipper: String(t.tipper ?? "Member"),
+      recipient: String(t.recipient ?? "Member"),
+      amount: Number(t.amount ?? 0),
+      currency: String(t.currency ?? "NGN"),
+      message: String(t.message ?? ""),
+      created_at: String(t.created_at),
+    }));
+  } catch (err) {
+    console.warn("Tip stats unavailable:", err);
+  }
+
   return {
     stats: {
       total_users: counts.profiles ?? 0,
@@ -1855,6 +2121,9 @@ export async function getAdminOverview(): Promise<AdminOverviewData> {
       pending_reports_count: reports.length,
       suspended_users_count: suspended ?? 0,
       verified_creators_count: verified ?? 0,
+      total_tips_count: tipStats.count,
+      total_tips_amount: tipStats.amount,
+      tips_currency: tipStats.currency,
       system_health: {
         status: "operational",
         uptime_seconds: Math.floor(process_uptime()),
@@ -1879,6 +2148,7 @@ export async function getAdminOverview(): Promise<AdminOverviewData> {
     }),
     recent_activity,
     recent_reports: reports.slice(0, 5),
+    recent_tips: recentTips,
   };
 }
 
@@ -2121,9 +2391,47 @@ export async function sendDirectMessage(
   return sendMessage(recipientOrConversationId, body, mediaUrl ?? null);
 }
 
-/** Record impressions for a batch of posts (viewport analytics). */
+/**
+ * Record impressions for a batch of posts (viewport analytics).
+ * Batched deliberately: one page of the feed is 15–30 posts, and the old
+ * per-post fan-out cost two round-trips each. Now a scroll costs at most
+ * three queries regardless of page size — the difference between a healthy
+ * API and a self-inflicted DDoS once concurrent viewers scale.
+ */
 export async function recordPostImpressions(postIds: string[]) {
-  await Promise.all(postIds.map((id) => recordPostImpression(id).catch(() => null)));
+  const ids = Array.from(new Set(dbIds(postIds)));
+  if (ids.length === 0) return { ok: true };
+  const userId = me();
+  const viewer = isDbId(userId) ? userId : null;
+  try {
+    let fresh = ids;
+    if (viewer) {
+      // Signed-in users count once per post (partial unique index); skip the
+      // already-seen rows so one repeat view can't abort the whole batch.
+      const { data: seen } = await db
+        .from("post_impressions")
+        .select("post_id")
+        .eq("user_id", viewer)
+        .in("post_id", ids);
+      const seenSet = new Set((seen ?? []).map((r: any) => r.post_id));
+      fresh = ids.filter((id) => !seenSet.has(id));
+    }
+    if (fresh.length > 0) {
+      // ignore-duplicates upsert: a concurrent duplicate loses the race
+      // silently instead of aborting the batch with a 409/23505.
+      await db.from("post_impressions").upsert(
+        fresh.map((post_id) => ({ post_id, user_id: viewer })),
+        { onConflict: "post_id,user_id", ignoreDuplicates: true },
+      );
+    }
+  } catch {
+    /* impressions are best-effort */
+  }
+  // Tallied counts come off the posts rows (impression rows are staff-only).
+  const { data: postRows } = await db.from("posts").select("id,view_count").in("id", ids);
+  for (const row of postRows ?? []) {
+    emitRealtime("post_view_updated", { postId: row.id, viewCount: row.view_count });
+  }
   return { ok: true };
 }
 
@@ -2214,15 +2522,19 @@ const EMPTY_ANALYTICS: CreatorAnalytics = {
 };
 
 /**
- * Real creator analytics for the signed-in profile.
+ * Real creator analytics for the signed-in profile — or, when `workspaceId`
+ * is given, for a team's published posts (the owner-gated team Analytics tab).
  * Everything below is derived from posts, impressions, engagement rows,
  * follows and tips — there is no sample or placeholder data.
  */
 export async function getCreatorAnalytics(
   timeframe: "7d" | "30d" = "7d",
+  options: { workspaceId?: string } = {},
 ): Promise<CreatorAnalytics> {
   const userId = me();
   if (!isDbId(userId)) return EMPTY_ANALYTICS;
+
+  const workspaceId = options.workspaceId && isDbId(options.workspaceId) ? options.workspaceId : null;
 
   const days = timeframe === "7d" ? 7 : 30;
   const since = new Date(Date.now() - days * 86400000);
@@ -2231,7 +2543,8 @@ export async function getCreatorAnalytics(
   const { data: postRows } = await db
     .from("posts")
     .select("id,content,created_at,view_count,like_count,comment_count,repost_count")
-    .eq("user_id", userId)
+    .eq(workspaceId ? "workspace_id" : "user_id", workspaceId ?? userId)
+    .eq("hidden", false)
     .order("created_at", { ascending: false })
     .limit(500);
 
@@ -2255,13 +2568,23 @@ export async function getCreatorAnalytics(
           .gte("created_at", sinceIso)
           .limit(5000)
       : Promise.resolve({ data: [] as any[] }),
-    db.from("follows").select("follower_id").eq("target_id", userId).limit(5000),
-    db
-      .from("tips")
-      .select("id,amount,currency,message,created_at,from_user_id")
-      .eq("to_user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(200),
+    // Teams have no follow graph yet — audience stats stay personal.
+    workspaceId
+      ? Promise.resolve({ data: [] as any[] })
+      : db.from("follows").select("follower_id").eq("target_id", userId).limit(5000),
+    workspaceId
+      ? db
+          .from("tips")
+          .select("id,amount,currency,message,created_at,from_user_id")
+          .eq("to_workspace_id", workspaceId)
+          .order("created_at", { ascending: false })
+          .limit(200)
+      : db
+          .from("tips")
+          .select("id,amount,currency,message,created_at,from_user_id")
+          .eq("to_user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(200),
   ]);
 
   const impressions = (impressionsRes.data ?? []) as any[];

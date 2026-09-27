@@ -1097,15 +1097,22 @@ function Footer() {
 function Index() {
   const { isLoggedIn, loading } = useAuth();
   const navigate = useNavigate();
+  // The server can never know if the visitor is signed in, so SSR always
+  // streams the marketing page. Gating the render on `loading` here threw the
+  // whole tree away on the client (hydration mismatch → zero benefit from SSR
+  // plus a visible flash). Instead the page renders immediately and signed-in
+  // people get a spinner only once the redirect actually starts.
+  const [redirecting, setRedirecting] = useState(false);
 
   // Signed-in people belong in the app, not on the marketing page.
   useEffect(() => {
     if (!loading && isLoggedIn) {
+      setRedirecting(true);
       void navigate({ to: "/feed", replace: true });
     }
   }, [loading, isLoggedIn, navigate]);
 
-  if (loading || isLoggedIn) {
+  if (redirecting) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <span className="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />

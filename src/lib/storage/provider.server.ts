@@ -49,7 +49,7 @@ export function mediaKeyFromUrl(url: string | null | undefined): string | null {
 }
 
 /** Content types the app is willing to store, mapped to a "kind" for size limits. */
-export const ALLOWED_CONTENT_TYPES: Record<string, "image" | "video" | "audio"> = {
+export const ALLOWED_CONTENT_TYPES: Record<string, "image" | "video" | "audio" | "document"> = {
   "image/jpeg": "image",
   "image/png": "image",
   "image/gif": "image",
@@ -62,17 +62,29 @@ export const ALLOWED_CONTENT_TYPES: Record<string, "image" | "video" | "audio"> 
   "audio/wav": "audio",
   "audio/webm": "audio",
   "audio/mp4": "audio",
+  // Documents — always served back as inert downloads by the media reader.
+  "application/pdf": "document",
+  "text/plain": "document",
+  "text/csv": "document",
+  "application/json": "document",
+  "application/msword": "document",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "document",
+  "application/zip": "document",
+  "application/octet-stream": "document",
 };
 
 /** Per-kind size caps in bytes, read lazily so an env change takes effect
  * without a cold restart (previously computed once at module load). */
-function sizeLimitsBytes(): Record<"image" | "video" | "audio", number> {
+function sizeLimitsBytes(): Record<"image" | "video" | "audio" | "document", number> {
   const mb = (key: string, fallback: number) =>
     (Number(process.env[key] || fallback) || fallback) * 1024 * 1024;
   return {
     image: mb("MEDIA_MAX_IMAGE_MB", 25),
     video: mb("MEDIA_MAX_VIDEO_MB", 100),
     audio: mb("MEDIA_MAX_AUDIO_MB", 100),
+    document: mb("MEDIA_MAX_DOC_MB", 25),
   };
 }
 

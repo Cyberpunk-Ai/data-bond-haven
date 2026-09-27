@@ -39,6 +39,25 @@ export function EditProfileModal({
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
+  // Re-seed the fields every time the modal opens (and if the underlying
+  // profile identity changes while open). The parent keeps this component
+  // mounted, so the useState initializer above runs exactly once — against a
+  // still-"guest" profile on a cold load — which used to leave the form
+  // prefilled with "Guest"/"guest" and risk saving over the real handle.
+  useEffect(() => {
+    if (!isOpen) return;
+    setForm({
+      display_name: base.display_name,
+      username: base.username,
+      bio: base.bio,
+      location: base.location,
+      website: base.website,
+      avatar_url: base.avatar_url,
+    });
+    setUsernameState("idle");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, base.id]);
+
   // Live availability check for the handle (only meaningful when it changed).
   const normalizedUsername = normalizeUsername(form.username);
   const usernameChanged = normalizedUsername !== normalizeUsername(base.username);

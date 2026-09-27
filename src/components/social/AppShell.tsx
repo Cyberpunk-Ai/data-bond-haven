@@ -42,7 +42,7 @@ import { PLAN_DETAILS } from "@/lib/plans";
 import { useUnreadCounts } from "@/lib/unread-state";
 import { useTheme, ACCENT_PALETTES, type ThemeAccent } from "@/lib/theme-state";
 import { UpgradeModal } from "@/components/social/UpgradeModal";
-import { cn } from "@/lib/utils";
+import { cn, getScrollY, onAppScroll } from "@/lib/utils";
 
 // The admin console is reached only by going to /admin directly, and access is
 // decided there by the account's real assigned role on the server.
@@ -202,7 +202,12 @@ function Sidebar({
       </Link>
 
       {/* Upgrade Callout Card for Free Users */}
-      {currentPlan === "free" ? (
+      {!mounted ? (
+        /* SSR paints the default "free" tier while the client already knows the
+           real plan — render a neutral placeholder until mount so the trees
+           match and React doesn't flag a hydration mismatch. */
+        <div className="mt-4 h-24 rounded-2xl border border-border/40 bg-foreground/[0.03] animate-pulse" />
+      ) : currentPlan === "free" ? (
         <div className="mt-4 rounded-2xl border border-brand/20 bg-gradient-to-br from-brand/10 via-brand-pink/5 to-purple-600/10 p-3.5 text-xs shadow-xs">
           <div className="flex items-center gap-1.5 font-extrabold text-brand">
             <Sparkles className="h-4 w-4" /> Upgrade to Plus
@@ -310,6 +315,7 @@ function Sidebar({
 function WorkspaceSwitcher({ mounted = true }: { mounted?: boolean }) {
   const { workspaces, activeWsId, isPersonal, setActiveWsId } = useWorkspace();
   if (!workspaces.length) return null;
+  const activeWs = isPersonal ? undefined : workspaces.find((w) => w.id === activeWsId);
   return (
     <div className="mt-3 px-1">
       <label className="mb-1 block text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
@@ -339,6 +345,15 @@ function WorkspaceSwitcher({ mounted = true }: { mounted?: boolean }) {
           </option>
         ))}
       </select>
+      {activeWs && (
+        <Link
+          to="/workspace/$id"
+          params={{ id: activeWs.id }}
+          className="mt-1.5 inline-flex items-center gap-1 text-[0.7rem] font-bold text-brand hover:underline"
+        >
+          View {activeWs.name}'s profile
+        </Link>
+      )}
     </div>
   );
 }
@@ -365,7 +380,7 @@ export function AppShell({
 
   useEffect(() => {
     const handleScroll = () => {
-      const currentY = window.scrollY;
+      const currentY = getScrollY();
       if (currentY < 100) {
         setIsFabVisible(true);
       } else if (currentY > lastScrollY.current + 12) {
@@ -376,8 +391,7 @@ export function AppShell({
       lastScrollY.current = currentY;
     };
 
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
+    return onAppScroll(handleScroll);
   }, []);
 
   const mobileItems: NavItem[] = [
@@ -498,7 +512,7 @@ export function AppShell({
           <Sidebar unreadMessages={unreadMessages} unreadNotifications={unreadNotifications} />
         </aside>
 
-        <main className="min-w-0 flex-1 py-4 sm:py-6 lg:h-full lg:overflow-y-auto custom-scrollbar lg:pr-1.5">
+        <main id="app-main" className="min-w-0 flex-1 py-4 sm:py-6 lg:h-full lg:overflow-y-auto custom-scrollbar lg:pr-1.5">
           <AnnouncementBanner />
           {children}
         </main>

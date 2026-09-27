@@ -1,15 +1,13 @@
 import { useCurrentUserId } from "@/hooks/useCurrentUserId";
 import { useMounted } from "@/hooks/use-mounted";
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { Sparkles, RefreshCw, Loader2, Plus, Sparkle, ArrowUp, Compass } from "lucide-react";
 import { AppShell, Panel } from "@/components/social/AppShell";
 import { Composer } from "@/components/social/Composer";
 import { PostCard } from "@/components/social/PostCard";
 import { DefaultRail } from "@/components/social/RightRail";
 import { Avatar } from "@/components/social/Avatar";
-import { StoryModal } from "@/components/social/StoryModal";
-import { StoryCreatorModal } from "@/components/social/StoryCreatorModal";
 import { FeedSkeleton } from "@/components/social/PostSkeleton";
 import { getCachedFeedData, triggerFeedPreload } from "@/lib/feed-cache";
 import type { Post, Profile, Story } from "@/lib/types";
@@ -17,8 +15,17 @@ import { currentUser, getProfile } from "@/lib/profile-service";
 import { getPostsPage, getStories } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
 import { useAuth } from "@/lib/auth-state";
-import { cn } from "@/lib/utils";
+import { cn, getScrollY, scrollToTop, onAppScroll } from "@/lib/utils";
 import { toast } from "sonner";
+
+// Story modals are only worth their (large) JS on screen: code-split them out
+// of the feed's first-paint chunk and mount them lazily when opened.
+const StoryModal = lazy(() =>
+  import("@/components/social/StoryModal").then((m) => ({ default: m.StoryModal })),
+);
+const StoryCreatorModal = lazy(() =>
+  import("@/components/social/StoryCreatorModal").then((m) => ({ default: m.StoryCreatorModal })),
+);
 
 export const Route = createFileRoute("/feed")({
   validateSearch: (search: Record<string, unknown>): { compose?: string } => ({
@@ -288,7 +295,7 @@ function FeedPage() {
     let ticking = false;
     const update = () => {
       ticking = false;
-      const y = window.scrollY;
+      const y = getScrollY();
       if (y < 50) {
         setIsHeaderVisible(true);
       } else {
@@ -304,8 +311,9 @@ function FeedPage() {
         requestAnimationFrame(update);
       }
     };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    // Listen on the element that actually scrolls: the window on mobile, the
+    // AppShell <main> container on lg+ (window scroll never fires there).
+    return onAppScroll(onScroll);
   }, []);
 
   // Auto-focus composer if search param contains compose
@@ -328,12 +336,16 @@ function FeedPage() {
   const [viewerStoryIndex, setViewerStoryIndex] = useState<number | null>(null);
   const [isCreatorOpen, setIsCreatorOpen] = useState(false);
 
-  async function fetchFeed(silent = false) {
+  async function fetchFeed(silent = false, refresh = false) {
     const reqId = ++feedReqId.current;
     if (!silent) setLoading(true);
     try {
       const filterKey = tab === "Following" ? "following" : tab === "Latest" ? "latest" : "foryou";
-      const page = await getPostsPage({ filter: filterKey, limit: FEED_PRELOAD_COUNT });
+      const page = await getPostsPage({
+        filter: filterKey,
+        limit: FEED_PRELOAD_COUNT,
+        refresh,
+      });
       // Ignore responses from a superseded request (user switched tabs).
       if (reqId !== feedReqId.current) return;
       if (Array.isArray(page.posts)) {
@@ -407,7 +419,7 @@ function FeedPage() {
         event.post || (event.type === "new_post" ? event.data || (event.id ? event : null) : null);
       if (event.type === "new_post" && post && post.id) {
         // If user is at the very top of the page, insert immediately
-        if (window.scrollY < 200) {
+        if (getScrollY() < 200) {
           setPosts((prev) => {
             if (prev.some((p) => p.id === post.id)) return prev;
             return [post, ...prev];
@@ -476,7 +488,7 @@ function FeedPage() {
     if (pendingIncomingPosts.length > 0) {
       setPosts((prev) => [...pendingIncomingPosts, ...prev]);
       setPendingIncomingPosts([]);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      scrollToTop();
     }
   }
 
@@ -515,8 +527,11 @@ function FeedPage() {
             <div className="flex items-center gap-1 pr-1">
               <button
                 onClick={() => {
-                  fetchFeed();
+                  // Manual refresh: re-rank with the live clock (never the
+                  // frozen epoch page) and bring the viewer back to the top.
+                  fetchFeed(false, true);
                   fetchStories();
+                  scrollToTop();
                   toast.success("Feed refreshed");
                 }}
                 disabled={loading}
@@ -596,22 +611,30 @@ function FeedPage() {
         )}
       </div>
 
-      {/* Story Viewer Modal */}
-      <StoryModal
-        stories={stories}
-        initialIndex={viewerStoryIndex ?? 0}
-        isOpen={viewerStoryIndex !== null}
-        onClose={() => setViewerStoryIndex(null)}
-        onStoryDeleted={handleStoryDeleted}
-        onStoryLikeToggled={handleStoryLikeToggled}
-      />
+      {/* Story Viewer Modal (lazy: never parsed until a story is opened) */}
+      {viewerStoryIndex !== null && (
+        <Suspense fallback={null}>
+          <StoryModal
+            stories={stories}
+            initialIndex={viewerStoryIndex ?? 0}
+            isOpen
+            onClose={() => setViewerStoryIndex(null)}
+            onStoryDeleted={handleStoryDeleted}
+            onStoryLikeToggled={handleStoryLikeToggled}
+          />
+        </Suspense>
+      )}
 
       {/* Story Creator Modal */}
-      <StoryCreatorModal
-        isOpen={isCreatorOpen}
-        onClose={() => setIsCreatorOpen(false)}
-        onStoryCreated={handleStoryCreated}
-      />
+      {isCreatorOpen && (
+        <Suspense fallback={null}>
+          <StoryCreatorModal
+            isOpen
+            onClose={() => setIsCreatorOpen(false)}
+            onStoryCreated={handleStoryCreated}
+          />
+        </Suspense>
+      )}
     </AppShell>
   );
 }

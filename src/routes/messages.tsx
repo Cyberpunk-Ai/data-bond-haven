@@ -62,6 +62,7 @@ import { decrementUnreadMessages } from "@/lib/unread-state";
 import { useAuth } from "@/lib/auth-state";
 import { useRealtime, emitRealtime } from "@/lib/realtime";
 import { cn, optimizeImageUrl } from "@/lib/utils";
+import { useAuthorizedMediaUrl } from "@/lib/media-access";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
 
@@ -118,6 +119,16 @@ function dayLabel(iso: string) {
     day: "numeric",
     ...(d.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }),
   });
+}
+
+/** A file queued in the composer, uploaded only when the user presses Send. */
+interface PendingAttachment {
+  id: string;
+  file: File;
+  name: string;
+  sizeLabel: string;
+  isMedia: boolean;
+  previewUrl: string;
 }
 
 /** Attachments read as a friendly label in the chat list, never a raw link. */
@@ -262,8 +273,11 @@ function attachmentKind(body: string): "image" | "video" | "audio" | "pdf" | "do
 
 function SafeVideoAttachment({ src }: { src: string }) {
   const [hasError, setHasError] = useState(false);
+  // Private (messages/) media cannot carry a bearer header on a subresource
+  // load, so play through the signed media-token URL, not the raw path.
+  const { src: playable, error } = useAuthorizedMediaUrl(src);
 
-  if (hasError) {
+  if (hasError || error || !playable) {
     return (
       <div className="flex h-32 w-56 flex-col items-center justify-center bg-neutral-950/60 p-4 text-center text-xs text-white/70 font-medium rounded-lg border border-white/5 gap-1.5 select-none">
         <span className="text-[10px] uppercase font-bold text-rose-400 tracking-wider">
@@ -278,7 +292,7 @@ function SafeVideoAttachment({ src }: { src: string }) {
 
   return (
     <video
-      src={src}
+      src={playable}
       controls
       playsInline
       preload="metadata"
@@ -288,10 +302,30 @@ function SafeVideoAttachment({ src }: { src: string }) {
   );
 }
 
+/** <img> that can render private media: resolves a signed URL first. */
+function AuthorizedImg({
+  src,
+  alt,
+  className,
+  loading,
+  onClick,
+}: {
+  src: string;
+  alt?: string;
+  className?: string;
+  loading?: "lazy" | "eager";
+  onClick?: React.MouseEventHandler<HTMLImageElement>;
+}) {
+  const { src: resolved, error } = useAuthorizedMediaUrl(src);
+  if (error || !resolved) return null;
+  return <img src={resolved} alt={alt} loading={loading} className={className} onClick={onClick} />;
+}
+
 function SafeAudioAttachment({ src }: { src: string }) {
   const [hasError, setHasError] = useState(false);
+  const { src: playable, error } = useAuthorizedMediaUrl(src);
 
-  if (hasError) {
+  if (hasError || error || !playable) {
     return (
       <div className="flex items-center gap-2 bg-neutral-950/60 py-2 px-3 text-xs text-white/70 rounded-lg border border-white/5 select-none w-56">
         <span className="h-2 w-2 rounded-full bg-rose-500 animate-pulse shrink-0" />
@@ -304,7 +338,7 @@ function SafeAudioAttachment({ src }: { src: string }) {
 
   return (
     <audio
-      src={src}
+      src={playable}
       controls
       preload="metadata"
       onError={() => setHasError(true)}
@@ -340,6 +374,10 @@ function DocumentCardAttachment({ body, isMine }: { body: string; isMine: boolea
   if (dotIdx > 0) {
     ext = fileName.slice(dotIdx + 1).toLowerCase();
   }
+
+  // Downloads navigate, so they cannot attach a bearer header either; use the
+  // signed URL for private objects and the raw URL for everything else.
+  const { src: downloadUrl } = useAuthorizedMediaUrl(fileUrl);
 
   const isPdf = ext === "pdf" || value.toLowerCase().includes(".pdf");
   const isCode = ["js", "ts", "py", "json", "html", "css", "cpp", "java", "sh", "md"].includes(ext);
@@ -398,7 +436,7 @@ function DocumentCardAttachment({ body, isMine }: { body: string; isMine: boolea
 
       <div className="flex items-center gap-1 shrink-0">
         <a
-          href={fileUrl}
+          href={downloadUrl || fileUrl}
           target="_blank"
           rel="noopener noreferrer"
           download={fileName}
@@ -428,11 +466,12 @@ function VoiceNotePlayer({ body, isMine }: { body: string; isMine: boolean }) {
   // Extract optional recorded audio url: [url]
   const matchUrl = body.match(/\[(.*?)\]/);
   const audioUrl = matchUrl ? matchUrl[1] : null;
+  const { src: playableUrl } = useAuthorizedMediaUrl(audioUrl);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    if (audioUrl) {
-      const audio = new Audio(audioUrl);
+    if (playableUrl) {
+      const audio = new Audio(playableUrl);
       audioRef.current = audio;
 
       audio.onended = () => {
@@ -452,7 +491,7 @@ function VoiceNotePlayer({ body, isMine }: { body: string; isMine: boolean }) {
       };
     }
     return undefined;
-  }, [audioUrl]);
+  }, [playableUrl]);
 
   useEffect(() => {
     if (audioUrl) return; // Managed by audioRef timeupdate
@@ -624,6 +663,39 @@ function MessagesPage() {
   // Attachment Popover and Lightbox state
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+
+  // Staged attachments: selecting a file ONLY queues it here with a local
+  // preview; nothing is uploaded or sent until the user presses Send. This
+  // replaces the old behaviour where picking a media file dispatched it
+  // immediately (and where documents silently failed against the upload
+  // allowlist).
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  function stageFiles(files: File[]) {
+    if (files.length === 0) return;
+    const next: PendingAttachment[] = files.map((file, i) => {
+      const ext = file.name.split(".").pop()?.toLowerCase() || "";
+      const isMedia =
+        /^(image|video|audio)\//.test(file.type) ||
+        ["png", "jpg", "jpeg", "webp", "gif", "avif", "mp4", "webm", "mov", "mp3", "wav", "ogg", "m4a"].includes(ext);
+      const previewUrl = /^(image|video)\//.test(file.type) ? URL.createObjectURL(file) : "";
+      return {
+        id: `att_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 7)}`,
+        file,
+        name: file.name,
+        sizeLabel: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
+        isMedia,
+        previewUrl,
+      };
+    });
+    setPendingAttachments((prev) => [...prev, ...next]);
+  }
+  function dropAttachment(id: string) {
+    setPendingAttachments((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((p) => p.id !== id);
+    });
+  }
 
   const [candidateUsers, setCandidateUsers] = useState<Profile[]>([]);
 
@@ -979,29 +1051,68 @@ function MessagesPage() {
   }
 
   async function send() {
+    if (sending) return;
     const body = draft.trim();
-    if (!body || sending) return;
+    const staged = pendingAttachments;
+    if (!body && staged.length === 0) return;
 
     setSending(true);
-    const tempId = crypto.randomUUID();
-    const newMsg: Message = {
-      id: tempId,
-      conversation_id: activeId,
-      sender_id: currentUserId,
-      body,
-      created_at: new Date().toISOString(),
-    };
-
-    setAll((prev) => [...prev, newMsg]);
-    setDraft("");
+    // Clear the composer up front so a second press can never double-send the
+    // same queue; on failure we roll back only the text draft, never uploads.
+    setPendingAttachments([]);
+    if (body) setDraft("");
 
     try {
-      await persistMessage(body, tempId);
-    } catch (err: any) {
-      // Never pretend an unsent message was delivered.
-      setAll((prev) => prev.filter((m) => m.id !== tempId));
-      setDraft(body);
-      toast.error(friendlyError(err, "Message could not be sent"));
+      // 1. The caption / text message first, if there is one.
+      if (body) {
+        const tempId = crypto.randomUUID();
+        const newMsg: Message = {
+          id: tempId,
+          conversation_id: activeId,
+          sender_id: currentUserId,
+          body,
+          created_at: new Date().toISOString(),
+        };
+        setAll((prev) => [...prev, newMsg]);
+        try {
+          await persistMessage(body, tempId);
+        } catch (err: any) {
+          // Never pretend an unsent message was delivered.
+          setAll((prev) => prev.filter((m) => m.id !== tempId));
+          setDraft(body);
+          toast.error(friendlyError(err, "Message could not be sent"));
+        }
+      }
+
+      // 2. Then each staged file — uploaded on demand and sent in order, so a
+      //    photo/video renders inline and any other file becomes a download card.
+      for (const att of staged) {
+        // messages.id is a UUID column and sendMessage writes this client id
+        // straight into it, so the optimistic id must be a real UUID (a
+        // `temp_file_…` string previously failed with `invalid input syntax for
+        // type uuid`). att.id stays the toast/handle id.
+        const tempId = crypto.randomUUID();
+        try {
+          toast.loading(`Uploading ${att.name} (${att.sizeLabel})…`, { id: att.id });
+          const res = await uploadMedia(att.file, "messages");
+          toast.success(`Sent ${att.name}`, { id: att.id });
+          const bodyString = att.isMedia ? res.url : `📄 Document: [${att.name}] [${res.url}]`;
+          const newMsg: Message = {
+            id: tempId,
+            conversation_id: activeId,
+            sender_id: currentUserId,
+            body: bodyString,
+            created_at: new Date().toISOString(),
+          };
+          setAll((prev) => [...prev, newMsg]);
+          await persistMessage(bodyString, tempId);
+        } catch (err: any) {
+          toast.error(friendlyError(err, `Could not send ${att.name}`), { id: att.id });
+          setAll((prev) => prev.filter((m) => m.id !== tempId));
+        } finally {
+          if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+        }
+      }
     } finally {
       setSending(false);
     }
@@ -1137,7 +1248,10 @@ function MessagesPage() {
           type: "audio/webm",
         }) as File;
 
-        const tempId = `temp_voice_${Date.now()}`;
+        // Must be a real UUID: sendMessage writes this optimistic id straight
+        // into the messages.id (uuid) column, so `temp_voice_…` used to fail the
+        // same way file attachments did.
+        const tempId = crypto.randomUUID();
         const tempLocalUrl = URL.createObjectURL(audioBlob);
         const tempBody = `🎙️ Voice Note (${duration}s) [${tempLocalUrl}]`;
 
@@ -1170,54 +1284,10 @@ function MessagesPage() {
     });
   };
 
-  async function handleFileAttach(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const tempId = `temp_file_${Date.now()}_${i}`;
-      const ext = file.name.split(".").pop()?.toLowerCase() || "";
-      const isMedia = [
-        "png",
-        "jpg",
-        "jpeg",
-        "webp",
-        "gif",
-        "avif",
-        "svg",
-        "mp4",
-        "webm",
-        "mov",
-        "mp3",
-        "wav",
-        "ogg",
-        "m4a",
-      ].includes(ext);
-
-      try {
-        const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
-        toast.loading(`Uploading ${file.name} (${sizeMb} MB)...`, { id: `msg-upload-${i}` });
-        const res = await uploadMedia(file, "messages");
-        toast.success(`Sent ${file.name}`, { id: `msg-upload-${i}` });
-
-        const bodyString = isMedia ? res.url : `📄 Document: [${file.name}] [${res.url}]`;
-
-        const newMsg: Message = {
-          id: tempId,
-          conversation_id: activeId,
-          sender_id: currentUserId,
-          body: bodyString,
-          created_at: new Date().toISOString(),
-        };
-        setAll((prev) => [...prev, newMsg]);
-        await persistMessage(bodyString, tempId);
-      } catch (err: any) {
-        console.error("Attachment upload failed:", err);
-        setAll((prev) => prev.filter((m) => m.id !== tempId));
-        toast.error(friendlyError(err, `Could not send ${file.name}`), { id: `msg-upload-${i}` });
-      }
-    }
+  // Selecting a file only STAGES it in the composer (preview + name); the
+  // bytes are uploaded and the message sent when the user presses Send.
+  function handleFileAttach(e: React.ChangeEvent<HTMLInputElement>) {
+    stageFiles(Array.from(e.target.files || []));
     e.target.value = "";
   }
 
@@ -1308,6 +1378,17 @@ function MessagesPage() {
                 {list.map((c) => {
                   const p = getProfile(c.participant_id);
                   const isActive = c.id === activeId;
+                  const kind = attachmentKind(c.preview);
+                  const PreviewIcon =
+                    kind === "image"
+                      ? ImageIcon
+                      : kind === "video"
+                        ? Film
+                        : kind === "audio"
+                          ? Music
+                          : kind
+                            ? FileText
+                            : null;
                   return (
                     <button
                       key={c.id}
@@ -1338,8 +1419,11 @@ function MessagesPage() {
                           />
                         </span>
                         <span className="mt-0.5 flex items-center gap-2">
-                          <span className="line-clamp-1 flex-1 text-xs text-muted-foreground">
-                            {c.preview}
+                          <span className="line-clamp-1 flex-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                            {PreviewIcon && (
+                              <PreviewIcon className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                            )}
+                            <span className="truncate">{previewLabel(c.preview)}</span>
                           </span>
                           {c.unread > 0 && (
                             <span className="grid h-5 min-w-5 place-items-center rounded-full bg-gradient-to-r from-brand to-brand-pink px-1.5 text-[0.65rem] font-bold text-white">
@@ -1383,7 +1467,7 @@ function MessagesPage() {
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-3 border-b border-border/60 p-4">
+              <div className="flex items-center gap-2 border-b border-border/60 p-3 sm:gap-3 sm:p-4">
                 <button
                   onClick={() => setMobileOpen(false)}
                   aria-label="Back to conversations"
@@ -1572,7 +1656,7 @@ function MessagesPage() {
                                         : "rounded-[20px]",
                                   )}
                                 >
-                                  <img
+                                  <AuthorizedImg
                                     src={optimizeImageUrl(m.body, 600)}
                                     alt="Attachment"
                                     loading="lazy"
@@ -1755,6 +1839,51 @@ function MessagesPage() {
                   className="hidden"
                 />
 
+                {/* Staged attachments preview strip — files wait here until Send */}
+                {pendingAttachments.length > 0 && !isRecording && (
+                  <div className="mb-2 flex gap-2 overflow-x-auto px-0.5 pb-1 pt-1 animate-in fade-in slide-in-from-bottom-2 [scrollbar-width:thin]">
+                    {pendingAttachments.map((att) => (
+                      <div key={att.id} className="relative shrink-0">
+                        <div className="overflow-hidden rounded-xl border border-border/60 bg-muted/40 shadow-xs">
+                          {att.isMedia && att.previewUrl ? (
+                            <img
+                              src={att.previewUrl}
+                              alt={att.name}
+                              className="h-16 w-16 object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-16 w-40 items-center gap-2 px-2.5">
+                              <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand/15 text-brand">
+                                {att.isMedia ? (
+                                  <Music className="h-4 w-4" />
+                                ) : (
+                                  <FileText className="h-4 w-4" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="truncate text-[11px] font-bold leading-tight">
+                                  {att.name}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                                  {att.sizeLabel}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => dropAttachment(att.id)}
+                          aria-label={`Remove ${att.name}`}
+                          className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/70 text-white shadow-sm ring-1 ring-white/30 backdrop-blur-sm transition-colors hover:bg-rose-600 cursor-pointer"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* Attachment Menu Quick Popover */}
                 {showAttachMenu && (
                   <div className="absolute bottom-full left-4 mb-2 z-40 w-56 rounded-2xl border border-border bg-card/95 backdrop-blur-md p-1.5 shadow-xl animate-in fade-in slide-in-from-bottom-2">
@@ -1895,7 +2024,7 @@ function MessagesPage() {
                     </button>
                     <button
                       onClick={send}
-                      disabled={!draft.trim() || sending}
+                      disabled={(!draft.trim() && pendingAttachments.length === 0) || sending}
                       aria-label="Send message"
                       className="grid h-9 w-9 min-w-[36px] place-items-center rounded-full bg-gradient-to-r from-brand to-brand-pink text-white transition-all duration-300 hover:shadow-glow disabled:opacity-40 active:scale-95 shrink-0 cursor-pointer"
                     >
@@ -1996,7 +2125,7 @@ function MessagesPage() {
             >
               <X className="h-6 w-6" />
             </button>
-            <img
+            <AuthorizedImg
               src={lightboxImage}
               alt="Full Preview"
               className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"

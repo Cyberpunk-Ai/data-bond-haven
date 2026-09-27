@@ -1,7 +1,9 @@
 /**
  * Creator earnings state. Everything comes from the backend — balances are
- * derived from real recorded tips and real withdrawal requests. The app never
- * asks for or stores bank or mobile-money details.
+ * derived from real recorded tips and real withdrawal requests. For payouts we
+ * store only an encrypted Paystack recipient token plus a masked hint (bank
+ * name + last four); the raw account number is sent to the provider once and
+ * never persisted here or on any client.
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -36,6 +38,25 @@ export interface MonetizationSettings {
   tipsEnabled: boolean;
 }
 
+/**
+ * The local side of the same ledger. Balances are shown in USD, but the
+ * provider clears withdrawals in the merchant's settlement currency, so the UI
+ * can say "$12.00 (≈ KES 1,560)" instead of surprising anyone at the bank.
+ */
+export interface SettlementInfo {
+  currency: string;
+  pendingBalance: number;
+  rate: number;
+}
+
+/** Masked, UI-safe view of a saved payout account (never the token itself). */
+export interface PayoutDestination {
+  configured: boolean;
+  bankName: string | null;
+  last4: string | null;
+  currency: string | null;
+}
+
 interface MonetizationState {
   loading: boolean;
   error: string | null;
@@ -43,9 +64,14 @@ interface MonetizationState {
   pendingBalance: number;
   currency: string;
   minimumPayout: number;
+  /** Withdrawal-time platform take, as a percent (5 free / 3 plus / 1 pro). */
+  feePercent: number;
+  settlement: SettlementInfo | null;
   tipsReceived: TipRecord[];
   payouts: PayoutRecord[];
   settings: MonetizationSettings;
+  payoutDestination: PayoutDestination;
+  openPayout: { id: string; status: string } | null;
 }
 
 const EMPTY: MonetizationState = {
@@ -53,11 +79,15 @@ const EMPTY: MonetizationState = {
   error: null,
   totalEarnings: 0,
   pendingBalance: 0,
-  currency: "KES",
+  currency: "USD",
   minimumPayout: 10,
+  feePercent: 5,
+  settlement: null,
   tipsReceived: [],
   payouts: [],
   settings: { minimumTip: 1, tipsEnabled: true },
+  payoutDestination: { configured: false, bankName: null, last4: null, currency: null },
+  openPayout: null,
 };
 
 let state: MonetizationState = EMPTY;
@@ -85,6 +115,8 @@ export async function refreshMonetization() {
         pendingBalance: data.pendingBalance,
         currency: data.currency,
         minimumPayout: data.minimumPayout,
+        feePercent: data.feePercent ?? 5,
+        settlement: data.settlement ?? null,
         tipsReceived: data.tips.map((t) => ({
           id: t.id,
           senderName: t.senderName,
@@ -106,6 +138,8 @@ export async function refreshMonetization() {
           minimumTip: data.settings.minimumTip,
           tipsEnabled: data.settings.tipsEnabled,
         },
+        payoutDestination: data.payoutDestination,
+        openPayout: data.openPayout,
       });
     } catch (err: any) {
       publish({
@@ -155,8 +189,8 @@ export function useMonetization() {
   // Tips are created by the payment provider flow (checkout → confirmation),
   // never written directly from the browser.
 
-  const requestPayout = useCallback(async (amount?: number, note?: string) => {
-    const result = await requestPayoutApi({ data: { amount, note } });
+  const requestPayout = useCallback(async (amount?: number, workspaceId?: string | null) => {
+    const result = await requestPayoutApi({ data: { amount, workspaceId: workspaceId ?? null } });
     await refreshMonetization();
     return result;
   }, []);

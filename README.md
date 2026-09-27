@@ -4,7 +4,7 @@ port and clone this repo https://github.com/Cyberpunk-Ai/spaces464.git the we do
 
 This project was built with [Lovable](https://lovable.dev).
 
-**Live app**: https://project-harmony-craft.lovable.app
+**Live app**: https://spaces1.com
 
 ## Build with Lovable
 

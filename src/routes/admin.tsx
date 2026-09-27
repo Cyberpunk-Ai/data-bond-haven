@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState, lazy, Suspense } from "react";
 
 import { AdminAuditLogsTab } from "@/components/admin/AdminAuditLogsTab";
@@ -118,10 +118,27 @@ function AdminPage() {
           {access === "checking" ? "Checking access…" : "Admin access required"}
         </h1>
         {access === "denied" ? (
-          <p className="text-sm text-muted-foreground">
-            This console is limited to Spaces1 administrators and moderators. Sign in with an
-            account that has been given access to continue.
-          </p>
+          <>
+            <p className="text-sm text-muted-foreground">
+              This console is limited to Spaces1 administrators and moderators. Sign in with an
+              account that has been given access to continue.
+            </p>
+            {/* Denied visitors used to land on a dead end with no way out. */}
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
+              <Link
+                to="/auth"
+                className="rounded-full bg-gradient-to-r from-brand to-brand-pink px-5 py-2 text-sm font-bold text-white shadow-sm hover:opacity-95"
+              >
+                Sign in
+              </Link>
+              <Link
+                to="/feed"
+                className="rounded-full border border-border px-5 py-2 text-sm font-semibold text-muted-foreground hover:text-foreground"
+              >
+                Back to the feed
+              </Link>
+            </div>
+          </>
         ) : null}
       </div>
     );

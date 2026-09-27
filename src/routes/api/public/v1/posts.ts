@@ -21,6 +21,7 @@ export const Route = createFileRoute("/api/public/v1/posts")({
         const cors = apiCorsHeaders(request.headers.get("origin"));
         const auth = await authenticateApiRequest(request);
         if ("error" in auth) return auth.error;
+        if (!auth.caller.scopes.includes("read")) return json({ error: "insufficient_scope" }, 403, cors);
         const url = new URL(request.url);
         const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 20, 1), 100);
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

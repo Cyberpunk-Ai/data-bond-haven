@@ -12,6 +12,7 @@ import {
   ShieldAlert,
   Sparkles,
   Zap,
+  HandCoins,
 } from "lucide-react";
 import {
   AreaChart,
@@ -39,7 +40,7 @@ interface AdminOverviewTabProps {
 }
 
 export function AdminOverviewTab({ overview, activeRole, onNavigateTab }: AdminOverviewTabProps) {
-  const { stats, charts, recent_activity, recent_reports } = overview;
+  const { stats, charts, recent_activity, recent_reports, recent_tips } = overview;
   const [chartMetric, setChartMetric] = useState<"impressions" | "engagement">("impressions");
 
   const statCards = [
@@ -109,6 +110,17 @@ export function AdminOverviewTab({ overview, activeRole, onNavigateTab }: AdminO
       borderColor: "border-brand/20",
       change: "+3 this week",
       tab: "users",
+    },
+    {
+      title: "Tipping Activity",
+      value: `${stats.total_tips_count?.toLocaleString() ?? 0} tips`,
+      subtext: `${(stats.tips_currency ?? "NGN")} ${(stats.total_tips_amount ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} sent`,
+      icon: HandCoins,
+      iconColor: "text-amber-600 dark:text-amber-400",
+      bgGradient: "from-amber-500/10 to-yellow-500/10",
+      borderColor: "border-amber-500/20",
+      change: stats.total_tips_count ? "Monetized" : "No tips yet",
+      tab: "withdrawals",
     },
   ];
 
@@ -384,6 +396,55 @@ export function AdminOverviewTab({ overview, activeRole, onNavigateTab }: AdminO
           </div>
         </div>
       </div>
+
+      {/* Tipping feed: newest creator monetization events (staff-only via RPC). */}
+      {(recent_tips?.length ?? 0) > 0 && (
+        <div className="glass-panel rounded-3xl border border-amber-500/20 p-5 shadow-soft">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="text-base font-bold text-foreground flex items-center gap-2">
+                <HandCoins className="h-4 w-4 text-amber-500" />
+                Recent Tipping Activity
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Latest tips sent to creators and team workspaces
+              </p>
+            </div>
+            <button
+              onClick={() => onNavigateTab("withdrawals")}
+              className="text-xs font-bold text-brand hover:underline"
+            >
+              View all payments →
+            </button>
+          </div>
+          <div className="divide-y divide-border/60">
+            {recent_tips!.map((tip) => (
+              <div key={tip.id} className="flex items-center justify-between gap-3 py-2.5">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-500/10">
+                    <HandCoins className="h-4 w-4 text-amber-500" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-bold text-foreground">
+                      {tip.tipper} <span className="text-muted-foreground font-normal">tipped</span>{" "}
+                      {tip.recipient}
+                    </p>
+                    {tip.message && (
+                      <p className="truncate text-[0.7rem] text-muted-foreground">“{tip.message}”</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-3 text-right">
+                  <span className="text-xs font-extrabold text-amber-600 dark:text-amber-400">
+                    {tip.currency} {tip.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </span>
+                  <TimeAgo iso={tip.created_at} className="text-[0.65rem] text-muted-foreground" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Bottom Row: Top Creators & Category Velocity */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

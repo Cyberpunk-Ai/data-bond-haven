@@ -30,7 +30,7 @@ export const appConfig = {
   brand: {
     name: str("VITE_APP_NAME", "Spaces1"),
     tagline: str("VITE_APP_TAGLINE", "Where creators gather, talk and get paid."),
-    supportEmail: str("VITE_SUPPORT_EMAIL", "support@spaces1.app"),
+    supportEmail: str("VITE_SUPPORT_EMAIL", "support@spaces1.com"),
   },
   storage: {
     bucket: str("VITE_MEDIA_BUCKET", "media"),

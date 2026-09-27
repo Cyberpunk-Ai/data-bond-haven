@@ -6,12 +6,13 @@ import { signatureMatches } from "@/lib/media-signature";
 const FOLDERS = new Set(["avatars", "posts", "stories", "media", "messages", "recordings"]);
 
 // Storage visibility per folder, recorded as a database fact in `media_objects`
-// (plan §4.5/§S11). avatars/posts/stories/media are world-readable through the
-// media proxy; messages/recordings are participant-gated.
+// (plan §4.5/§S11). avatars/posts/media are world-readable through the media
+// proxy; stories/messages/recordings are authorized per reader (stories are
+// limited to the author's follow network, mirroring the rows' RLS).
 const VISIBILITY_BY_FOLDER: Record<string, "public" | "authed" | "private"> = {
   avatars: "public",
   posts: "public",
-  stories: "public",
+  stories: "authed",
   media: "public",
   messages: "private",
   recordings: "private",
@@ -38,6 +39,19 @@ const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
   "audio/wav": "wav",
   "audio/webm": "weba",
   "audio/mp4": "m4a",
+  // Documents. Anything the browser could not classify is sent as
+  // application/octet-stream by the client and stored as a generic download;
+  // the recipient's card shows the real filename captured at send time.
+  "application/pdf": "pdf",
+  "text/plain": "txt",
+  "text/csv": "csv",
+  "application/json": "json",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  "application/zip": "zip",
+  "application/octet-stream": "bin",
 };
 
 function json(body: unknown, status = 200) {

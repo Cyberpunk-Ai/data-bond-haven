@@ -18,6 +18,7 @@ import { Route as ContactRouteImport } from './routes/contact'
 import { Route as ExploreRouteImport } from './routes/explore'
 import { Route as FeedRouteImport } from './routes/feed'
 import { Route as GuidelinesRouteImport } from './routes/guidelines'
+import { Route as HelpRouteImport } from './routes/help'
 import { Route as MessagesRouteImport } from './routes/messages'
 import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as PricingRouteImport } from './routes/pricing'
@@ -25,12 +26,18 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SpacesRouteImport } from './routes/spaces'
+import { Route as StatusRouteImport } from './routes/status'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as BillingCallbackRouteImport } from './routes/billing.callback'
+import { Route as OauthCallbackRouteImport } from './routes/oauth.callback'
 import { Route as PostIdRouteImport } from './routes/post.$id'
 import { Route as UUsernameRouteImport } from './routes/u.$username'
+import { Route as WorkspaceIdRouteImport } from './routes/workspace.$id'
+import { Route as ApiMediaTokenRouteImport } from './routes/api/media/token'
+import { Route as ApiPublicHealthRouteImport } from './routes/api/public/health'
 import { Route as ApiUploadsIndexRouteImport } from './routes/api/uploads/index'
 import { Route as ApiPublicCronMediaGcRouteImport } from './routes/api/public/cron/media-gc'
+import { Route as ApiPublicCronStoriesGcRouteImport } from './routes/api/public/cron/stories-gc'
 import { Route as ApiPublicMediaSplatRouteImport } from './routes/api/public/media/$'
 import { Route as ApiPublicPaystackWebhookRouteImport } from './routes/api/public/paystack/webhook'
 import { Route as ApiPublicV1FollowersRouteImport } from './routes/api/public/v1/followers'
@@ -83,6 +90,11 @@ const GuidelinesRoute = GuidelinesRouteImport.update({
   path: '/guidelines',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HelpRoute = HelpRouteImport.update({
+  id: '/help',
+  path: '/help',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MessagesRoute = MessagesRouteImport.update({
   id: '/messages',
   path: '/messages',
@@ -118,6 +130,11 @@ const SpacesRoute = SpacesRouteImport.update({
   path: '/spaces',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StatusRoute = StatusRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
   path: '/terms',
@@ -126,6 +143,11 @@ const TermsRoute = TermsRouteImport.update({
 const BillingCallbackRoute = BillingCallbackRouteImport.update({
   id: '/billing/callback',
   path: '/billing/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthCallbackRoute = OauthCallbackRouteImport.update({
+  id: '/oauth/callback',
+  path: '/oauth/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PostIdRoute = PostIdRouteImport.update({
@@ -138,6 +160,21 @@ const UUsernameRoute = UUsernameRouteImport.update({
   path: '/u/$username',
   getParentRoute: () => rootRouteImport,
 } as any)
+const WorkspaceIdRoute = WorkspaceIdRouteImport.update({
+  id: '/workspace/$id',
+  path: '/workspace/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMediaTokenRoute = ApiMediaTokenRouteImport.update({
+  id: '/api/media/token',
+  path: '/api/media/token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicHealthRoute = ApiPublicHealthRouteImport.update({
+  id: '/api/public/health',
+  path: '/api/public/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiUploadsIndexRoute = ApiUploadsIndexRouteImport.update({
   id: '/api/uploads/',
   path: '/api/uploads/',
@@ -146,6 +183,11 @@ const ApiUploadsIndexRoute = ApiUploadsIndexRouteImport.update({
 const ApiPublicCronMediaGcRoute = ApiPublicCronMediaGcRouteImport.update({
   id: '/api/public/cron/media-gc',
   path: '/api/public/cron/media-gc',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicCronStoriesGcRoute = ApiPublicCronStoriesGcRouteImport.update({
+  id: '/api/public/cron/stories-gc',
+  path: '/api/public/cron/stories-gc',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicMediaSplatRoute = ApiPublicMediaSplatRouteImport.update({
@@ -191,6 +233,7 @@ export interface FileRoutesByFullPath {
   '/explore': typeof ExploreRoute
   '/feed': typeof FeedRoute
   '/guidelines': typeof GuidelinesRoute
+  '/help': typeof HelpRoute
   '/messages': typeof MessagesRoute
   '/notifications': typeof NotificationsRoute
   '/pricing': typeof PricingRoute
@@ -198,12 +241,18 @@ export interface FileRoutesByFullPath {
   '/profile': typeof ProfileRoute
   '/settings': typeof SettingsRoute
   '/spaces': typeof SpacesRoute
+  '/status': typeof StatusRoute
   '/terms': typeof TermsRoute
   '/billing/callback': typeof BillingCallbackRoute
+  '/oauth/callback': typeof OauthCallbackRoute
   '/post/$id': typeof PostIdRoute
   '/u/$username': typeof UUsernameRoute
+  '/workspace/$id': typeof WorkspaceIdRoute
+  '/api/media/token': typeof ApiMediaTokenRoute
+  '/api/public/health': typeof ApiPublicHealthRoute
   '/api/uploads/': typeof ApiUploadsIndexRoute
   '/api/public/cron/media-gc': typeof ApiPublicCronMediaGcRoute
+  '/api/public/cron/stories-gc': typeof ApiPublicCronStoriesGcRoute
   '/api/public/media/$': typeof ApiPublicMediaSplatRoute
   '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
   '/api/public/v1/followers': typeof ApiPublicV1FollowersRoute
@@ -221,6 +270,7 @@ export interface FileRoutesByTo {
   '/explore': typeof ExploreRoute
   '/feed': typeof FeedRoute
   '/guidelines': typeof GuidelinesRoute
+  '/help': typeof HelpRoute
   '/messages': typeof MessagesRoute
   '/notifications': typeof NotificationsRoute
   '/pricing': typeof PricingRoute
@@ -228,12 +278,18 @@ export interface FileRoutesByTo {
   '/profile': typeof ProfileRoute
   '/settings': typeof SettingsRoute
   '/spaces': typeof SpacesRoute
+  '/status': typeof StatusRoute
   '/terms': typeof TermsRoute
   '/billing/callback': typeof BillingCallbackRoute
+  '/oauth/callback': typeof OauthCallbackRoute
   '/post/$id': typeof PostIdRoute
   '/u/$username': typeof UUsernameRoute
+  '/workspace/$id': typeof WorkspaceIdRoute
+  '/api/media/token': typeof ApiMediaTokenRoute
+  '/api/public/health': typeof ApiPublicHealthRoute
   '/api/uploads': typeof ApiUploadsIndexRoute
   '/api/public/cron/media-gc': typeof ApiPublicCronMediaGcRoute
+  '/api/public/cron/stories-gc': typeof ApiPublicCronStoriesGcRoute
   '/api/public/media/$': typeof ApiPublicMediaSplatRoute
   '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
   '/api/public/v1/followers': typeof ApiPublicV1FollowersRoute
@@ -252,6 +308,7 @@ export interface FileRoutesById {
   '/explore': typeof ExploreRoute
   '/feed': typeof FeedRoute
   '/guidelines': typeof GuidelinesRoute
+  '/help': typeof HelpRoute
   '/messages': typeof MessagesRoute
   '/notifications': typeof NotificationsRoute
   '/pricing': typeof PricingRoute
@@ -259,12 +316,18 @@ export interface FileRoutesById {
   '/profile': typeof ProfileRoute
   '/settings': typeof SettingsRoute
   '/spaces': typeof SpacesRoute
+  '/status': typeof StatusRoute
   '/terms': typeof TermsRoute
   '/billing/callback': typeof BillingCallbackRoute
+  '/oauth/callback': typeof OauthCallbackRoute
   '/post/$id': typeof PostIdRoute
   '/u/$username': typeof UUsernameRoute
+  '/workspace/$id': typeof WorkspaceIdRoute
+  '/api/media/token': typeof ApiMediaTokenRoute
+  '/api/public/health': typeof ApiPublicHealthRoute
   '/api/uploads/': typeof ApiUploadsIndexRoute
   '/api/public/cron/media-gc': typeof ApiPublicCronMediaGcRoute
+  '/api/public/cron/stories-gc': typeof ApiPublicCronStoriesGcRoute
   '/api/public/media/$': typeof ApiPublicMediaSplatRoute
   '/api/public/paystack/webhook': typeof ApiPublicPaystackWebhookRoute
   '/api/public/v1/followers': typeof ApiPublicV1FollowersRoute
@@ -284,6 +347,7 @@ export interface FileRouteTypes {
     | '/explore'
     | '/feed'
     | '/guidelines'
+    | '/help'
     | '/messages'
     | '/notifications'
     | '/pricing'
@@ -291,12 +355,18 @@ export interface FileRouteTypes {
     | '/profile'
     | '/settings'
     | '/spaces'
+    | '/status'
     | '/terms'
     | '/billing/callback'
+    | '/oauth/callback'
     | '/post/$id'
     | '/u/$username'
+    | '/workspace/$id'
+    | '/api/media/token'
+    | '/api/public/health'
     | '/api/uploads/'
     | '/api/public/cron/media-gc'
+    | '/api/public/cron/stories-gc'
     | '/api/public/media/$'
     | '/api/public/paystack/webhook'
     | '/api/public/v1/followers'
@@ -314,6 +384,7 @@ export interface FileRouteTypes {
     | '/explore'
     | '/feed'
     | '/guidelines'
+    | '/help'
     | '/messages'
     | '/notifications'
     | '/pricing'
@@ -321,12 +392,18 @@ export interface FileRouteTypes {
     | '/profile'
     | '/settings'
     | '/spaces'
+    | '/status'
     | '/terms'
     | '/billing/callback'
+    | '/oauth/callback'
     | '/post/$id'
     | '/u/$username'
+    | '/workspace/$id'
+    | '/api/media/token'
+    | '/api/public/health'
     | '/api/uploads'
     | '/api/public/cron/media-gc'
+    | '/api/public/cron/stories-gc'
     | '/api/public/media/$'
     | '/api/public/paystack/webhook'
     | '/api/public/v1/followers'
@@ -344,6 +421,7 @@ export interface FileRouteTypes {
     | '/explore'
     | '/feed'
     | '/guidelines'
+    | '/help'
     | '/messages'
     | '/notifications'
     | '/pricing'
@@ -351,12 +429,18 @@ export interface FileRouteTypes {
     | '/profile'
     | '/settings'
     | '/spaces'
+    | '/status'
     | '/terms'
     | '/billing/callback'
+    | '/oauth/callback'
     | '/post/$id'
     | '/u/$username'
+    | '/workspace/$id'
+    | '/api/media/token'
+    | '/api/public/health'
     | '/api/uploads/'
     | '/api/public/cron/media-gc'
+    | '/api/public/cron/stories-gc'
     | '/api/public/media/$'
     | '/api/public/paystack/webhook'
     | '/api/public/v1/followers'
@@ -375,6 +459,7 @@ export interface RootRouteChildren {
   ExploreRoute: typeof ExploreRoute
   FeedRoute: typeof FeedRoute
   GuidelinesRoute: typeof GuidelinesRoute
+  HelpRoute: typeof HelpRoute
   MessagesRoute: typeof MessagesRoute
   NotificationsRoute: typeof NotificationsRoute
   PricingRoute: typeof PricingRoute
@@ -382,12 +467,18 @@ export interface RootRouteChildren {
   ProfileRoute: typeof ProfileRoute
   SettingsRoute: typeof SettingsRoute
   SpacesRoute: typeof SpacesRoute
+  StatusRoute: typeof StatusRoute
   TermsRoute: typeof TermsRoute
   BillingCallbackRoute: typeof BillingCallbackRoute
+  OauthCallbackRoute: typeof OauthCallbackRoute
   PostIdRoute: typeof PostIdRoute
   UUsernameRoute: typeof UUsernameRoute
+  WorkspaceIdRoute: typeof WorkspaceIdRoute
+  ApiMediaTokenRoute: typeof ApiMediaTokenRoute
+  ApiPublicHealthRoute: typeof ApiPublicHealthRoute
   ApiUploadsIndexRoute: typeof ApiUploadsIndexRoute
   ApiPublicCronMediaGcRoute: typeof ApiPublicCronMediaGcRoute
+  ApiPublicCronStoriesGcRoute: typeof ApiPublicCronStoriesGcRoute
   ApiPublicMediaSplatRoute: typeof ApiPublicMediaSplatRoute
   ApiPublicPaystackWebhookRoute: typeof ApiPublicPaystackWebhookRoute
   ApiPublicV1FollowersRoute: typeof ApiPublicV1FollowersRoute
@@ -461,6 +552,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GuidelinesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/help': {
+      id: '/help'
+      path: '/help'
+      fullPath: '/help'
+      preLoaderRoute: typeof HelpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/messages': {
       id: '/messages'
       path: '/messages'
@@ -510,6 +608,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SpacesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/status': {
+      id: '/status'
+      path: '/status'
+      fullPath: '/status'
+      preLoaderRoute: typeof StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/terms': {
       id: '/terms'
       path: '/terms'
@@ -522,6 +627,13 @@ declare module '@tanstack/react-router' {
       path: '/billing/callback'
       fullPath: '/billing/callback'
       preLoaderRoute: typeof BillingCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/callback': {
+      id: '/oauth/callback'
+      path: '/oauth/callback'
+      fullPath: '/oauth/callback'
+      preLoaderRoute: typeof OauthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/post/$id': {
@@ -538,6 +650,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UUsernameRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/workspace/$id': {
+      id: '/workspace/$id'
+      path: '/workspace/$id'
+      fullPath: '/workspace/$id'
+      preLoaderRoute: typeof WorkspaceIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/media/token': {
+      id: '/api/media/token'
+      path: '/api/media/token'
+      fullPath: '/api/media/token'
+      preLoaderRoute: typeof ApiMediaTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/health': {
+      id: '/api/public/health'
+      path: '/api/public/health'
+      fullPath: '/api/public/health'
+      preLoaderRoute: typeof ApiPublicHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/uploads/': {
       id: '/api/uploads/'
       path: '/api/uploads'
@@ -550,6 +683,13 @@ declare module '@tanstack/react-router' {
       path: '/api/public/cron/media-gc'
       fullPath: '/api/public/cron/media-gc'
       preLoaderRoute: typeof ApiPublicCronMediaGcRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/cron/stories-gc': {
+      id: '/api/public/cron/stories-gc'
+      path: '/api/public/cron/stories-gc'
+      fullPath: '/api/public/cron/stories-gc'
+      preLoaderRoute: typeof ApiPublicCronStoriesGcRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/media/$': {
@@ -607,6 +747,7 @@ const rootRouteChildren: RootRouteChildren = {
   ExploreRoute: ExploreRoute,
   FeedRoute: FeedRoute,
   GuidelinesRoute: GuidelinesRoute,
+  HelpRoute: HelpRoute,
   MessagesRoute: MessagesRoute,
   NotificationsRoute: NotificationsRoute,
   PricingRoute: PricingRoute,
@@ -614,12 +755,18 @@ const rootRouteChildren: RootRouteChildren = {
   ProfileRoute: ProfileRoute,
   SettingsRoute: SettingsRoute,
   SpacesRoute: SpacesRoute,
+  StatusRoute: StatusRoute,
   TermsRoute: TermsRoute,
   BillingCallbackRoute: BillingCallbackRoute,
+  OauthCallbackRoute: OauthCallbackRoute,
   PostIdRoute: PostIdRoute,
   UUsernameRoute: UUsernameRoute,
+  WorkspaceIdRoute: WorkspaceIdRoute,
+  ApiMediaTokenRoute: ApiMediaTokenRoute,
+  ApiPublicHealthRoute: ApiPublicHealthRoute,
   ApiUploadsIndexRoute: ApiUploadsIndexRoute,
   ApiPublicCronMediaGcRoute: ApiPublicCronMediaGcRoute,
+  ApiPublicCronStoriesGcRoute: ApiPublicCronStoriesGcRoute,
   ApiPublicMediaSplatRoute: ApiPublicMediaSplatRoute,
   ApiPublicPaystackWebhookRoute: ApiPublicPaystackWebhookRoute,
   ApiPublicV1FollowersRoute: ApiPublicV1FollowersRoute,
