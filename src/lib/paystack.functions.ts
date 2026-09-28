@@ -288,6 +288,7 @@ export const confirmPaystackPayment = createServerFn({ method: "POST" })
       cycle?: BillingCycle;
       amount?: number;
       provider_status?: string;
+      reason?: string;
     };
 
     if (settled.status === "amount_mismatch" || settled.status === "currency_mismatch") {
@@ -295,6 +296,14 @@ export const confirmPaystackPayment = createServerFn({ method: "POST" })
     }
     if (settled.status === "unknown_reference") {
       throw new Error("We couldn't find that payment.");
+    }
+    if (settled.status === "error") {
+      // e.g. a tip row that predates recipient capture — surface the reason
+      // instead of falling through to a false success.
+      console.error("Settlement rejected by database:", settled);
+      throw new Error(
+        "We couldn't credit this payment automatically. Please contact support with the payment reference.",
+      );
     }
     if (settled.status === "not_success") {
       return {
@@ -308,12 +317,23 @@ export const confirmPaystackPayment = createServerFn({ method: "POST" })
 
     const isTip = settled.kind === "tip" || data.reference.startsWith("tip_");
     if (isTip) {
+      // The settle function reports the amount in the settlement currency; the
+      // platform shows USD everywhere, so return the USD figure the supporter
+      // was actually quoted ("Tip of $0.10 sent successfully", not "KES 13").
+      const { data: payRow } = await (
+        await admin()
+      )
+        .from("payments")
+        .select("quoted_amount_usd")
+        .eq("reference", data.reference)
+        .maybeSingle();
+      const usdAmount = Number(payRow?.quoted_amount_usd ?? settled.amount ?? 0);
       return {
         status: "success" as const,
         kind: "tip" as const,
         plan: (settled.plan ?? "plus") as PlanTier,
         cycle: (settled.cycle ?? "monthly") as BillingCycle,
-        amount: Number(settled.amount ?? 0),
+        amount: usdAmount,
       };
     }
     return {

@@ -172,6 +172,7 @@ export interface PostComment {
   content: string;
   created_at: string;
   parent_id?: string | null;
+  edited_at?: string | null;
 }
 
 export type Comment = PostComment;
@@ -268,11 +269,12 @@ export interface Conversation {
 }
 
 export type NotificationType =
-  "like" | "repost" | "comment" | "reply" | "follow" | "mention" | "space" | "tip";
+  "like" | "repost" | "comment" | "reply" | "follow" | "mention" | "space" | "tip" | "payout" | "system" | "story_like" | "message" | "workspace_invite" | "workspace";
 
 export interface Notification {
   id: string;
-  actor_id: string;
+  /** Null for platform notices (payout confirmations, staff/system messages). */
+  actor_id: string | null;
   recipient_id?: string;
   post_id?: string | null;
   type: NotificationType;

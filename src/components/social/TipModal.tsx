@@ -224,7 +224,7 @@ export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalP
             <div className="pt-2">
               <button
                 type="button"
-                disabled={(earnings?.pendingBalance ?? 0) < (earnings?.minimumPayout ?? 10)}
+                disabled={(earnings?.pendingBalance ?? 0) < (earnings?.minimumPayout ?? 1)}
                 onClick={async () => {
                   try {
                     const res = await payout({ data: {} });

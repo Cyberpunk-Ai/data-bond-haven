@@ -27,11 +27,13 @@ import {
   ShieldOff,
   LogOut,
   Circle,
+  Trash2,
+  Download,
 } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { TipModal } from "@/components/social/TipModal";
 import type { Space, Profile } from "@/lib/types";
-import { currentUser, getProfile } from "@/lib/profile-service";
+import { currentUser, getProfile, fetchProfile, useProfile } from "@/lib/profile-service";
 import { useSpaceAudio } from "@/hooks/useSpaceAudio";
 import {
   joinSpace,
@@ -49,6 +51,7 @@ import {
   recordSpaceReplayView,
   setSpaceParticipantMute,
   removeSpaceParticipant,
+  deleteSpaceRecording,
   uploadMedia,
 } from "@/lib/api-client";
 import { appConfig } from "@/lib/config";
@@ -101,6 +104,8 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   const [isRecordingSpace, setIsRecordingSpace] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [showEndConfirmation, setShowEndConfirmation] = useState(false);
+  const [showDeleteRecording, setShowDeleteRecording] = useState(false);
+  const [deletingRecording, setDeletingRecording] = useState(false);
   const [pinnedTopic, setPinnedTopic] = useState<string>(
     "Welcome to the Space! Feel free to ask questions in chat or raise your hand.",
   );
@@ -132,11 +137,17 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   // carries the (stale) number captured when the list rendered.
   const [liveReplayCount, setLiveReplayCount] = useState<number | null>(null);
 
-  const host = getProfile(space.host_id);
+  const { profile: hostProfile } = useProfile(space.host_id);
+  // Use the resolved profile when we have it; otherwise fall back to the cached
+  // placeholder so the header never shows a raw UUID once it loads.
+  const host = hostProfile ?? getProfile(space.host_id);
   const isCurrentUserHost = space.host_id === currentUser.id;
   // An ended room with a saved recording is a replay: play the stored audio
-  // instead of pretending the live stage is still up.
-  const isReplay = !space.live && Boolean(space.recorded && space.recording_url);
+  // instead of pretending the live stage is still up. Recordings belong to the
+  // host alone — nobody else gets a replay view (mirrors the `spaces public
+  // read` RLS and the recordings/ media ACL, which both fail closed for others).
+  const isReplay =
+    !space.live && Boolean(space.recorded && space.recording_url) && isCurrentUserHost;
   const shownReplays = liveReplayCount ?? space.replay_count ?? 0;
 
   // Load the room from the backend: who is here and what has been said.
@@ -159,7 +170,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       try {
         await joinSpace(space.id);
         loaded = await getSpaceRoom(space.id);
-        if (!space.live && (space.recorded || space.recording_url)) {
+        if (isReplay) {
           const rec = await recordSpaceReplayView(space.id).catch(() => null);
           if (rec && typeof rec.replayCount === "number") setLiveReplayCount(rec.replayCount);
         }
@@ -232,6 +243,18 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   // Real-time events
   useRealtime(
     (event) => {
+      // The bus is app-wide; ignore activity events that belong to a different
+      // room so one Space's joins/mutes/hand-raises never mutate this roster.
+      const evSpaceId = event.spaceId || event.data?.spaceId || event.message?.spaceId;
+      if (
+        evSpaceId &&
+        evSpaceId !== space.id &&
+        event.type !== "space:created" &&
+        event.type !== "space:ended" &&
+        event.type !== "space:terminated"
+      ) {
+        return;
+      }
       if (event.type === "space:message" || event.type === "space_chat_message") {
         const msg = event.message || event.data;
         const msgSpace = event.spaceId || msg?.spaceId;
@@ -317,6 +340,44 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
             ),
           );
         }
+      } else if (event.type === "space:joined") {
+        const data = event.data || event;
+        const uid = data?.userId;
+        if (uid && uid !== currentUser.id) {
+          setParticipants((prev) =>
+            prev.some((p) => p.id === uid)
+              ? prev
+              : [
+                  ...prev,
+                  {
+                    id: uid,
+                    role: "listener" as const,
+                    isSpeaking: false,
+                    isMuted: true,
+                    handRaised: false,
+                    display_name: getProfile(uid).display_name,
+                    username: getProfile(uid).username,
+                    avatar_url: getProfile(uid).avatar_url || undefined,
+                  },
+                ],
+          );
+          // Resolve their real profile, then refresh the row (no reload needed).
+          void fetchProfile(uid).then((p) => {
+            if (!p) return;
+            setParticipants((prev) =>
+              prev.map((x) =>
+                x.id === uid
+                  ? {
+                      ...x,
+                      display_name: p.display_name,
+                      username: p.username,
+                      avatar_url: p.avatar_url || undefined,
+                    }
+                  : x,
+              ),
+            );
+          });
+        }
       } else if (event.type === "space:recording") {
         const data = event.data || event;
         if (typeof data.recording === "boolean") {
@@ -327,6 +388,11 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
             toast.info("The host started recording this Space");
           }
         }
+      } else if (event.type === "space:recording-deleted") {
+        // The host wiped the replay (the room-scope guard above already matched
+        // this room): anybody watching it right now has nothing left to play.
+        toast.info("This recording was deleted");
+        onClose();
       } else if (event.type === "space:left" || event.type === "participant_left") {
         const data = event.data || event;
         if (data && data.userId) {
@@ -353,6 +419,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       "space:left",
       "space:tip",
       "space:recording",
+      "space:recording-deleted",
       "space:removed",
     ],
   );
@@ -372,6 +439,22 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       setFloatingReactions((prev) => prev.filter((r) => r.id !== newReaction.id));
     }, 2000);
   };
+
+  /** Host-only: wipe the saved replay (row fields + storage bytes). */
+  async function handleDeleteRecording() {
+    if (deletingRecording) return;
+    setDeletingRecording(true);
+    try {
+      await deleteSpaceRecording(space.id);
+      toast.success("Recording deleted");
+      setShowDeleteRecording(false);
+      onClose();
+    } catch (err: any) {
+      toast.error(friendlyError(err, "Couldn't delete the recording. Please try again."));
+    } finally {
+      setDeletingRecording(false);
+    }
+  }
 
   async function handleToggleMic() {
     const nextMuted = !isMuted;
@@ -687,7 +770,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                 </span>
               ) : (
                 <span className="flex items-center gap-1">
-                  <Headphones className="h-3.5 w-3.5" /> {participants.length + space.listeners} in
+                  <Headphones className="h-3.5 w-3.5" /> {participants.length} in
                   room
                 </span>
               )}
@@ -916,7 +999,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                 {/* Listeners Section */}
                 <div>
                   <h3 className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3 sm:mb-4">
-                    Listeners ({listeners.length + space.listeners})
+                    Listeners ({listeners.length})
                   </h3>
                   <div className="grid grid-cols-3 xs:grid-cols-4 sm:grid-cols-5 gap-2.5 sm:gap-3">
                     {listeners.map((listener, idx) => (
@@ -1178,20 +1261,32 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                   </button>
                 </>
               ) : (
-                <button
-                  onClick={async () => {
-                    try {
-                      await leaveSpace(space.id);
-                    } catch {
-                      /* leaving is best effort */
-                    }
-                    onClose();
-                    toast.info("You left the Space");
-                  }}
-                  className="rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 font-bold px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs transition-all active:scale-95 ml-auto min-h-[38px] sm:min-h-[40px] flex items-center cursor-pointer"
-                >
-                  Leave Quietly
-                </button>
+                <div className="flex items-center gap-2 ml-auto">
+                  {isCurrentUserHost && isReplay && (
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteRecording(true)}
+                      className="rounded-full border border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 font-bold px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Delete Recording</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={async () => {
+                      try {
+                        await leaveSpace(space.id);
+                      } catch {
+                        /* leaving is best effort */
+                      }
+                      onClose();
+                      toast.info("You left the Space");
+                    }}
+                    className="rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 font-bold px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] flex items-center cursor-pointer"
+                  >
+                    Leave Quietly
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -1252,6 +1347,48 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
         </div>
       )}
 
+      {/* Delete Recording Confirmation Dialog */}
+      {showDeleteRecording && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 animate-in fade-in">
+          <div
+            className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 text-rose-500">
+              <span className="p-2.5 rounded-2xl bg-rose-500/15">
+                <Trash2 className="h-6 w-6" />
+              </span>
+              <div>
+                <h3 className="text-base font-black">Delete this recording?</h3>
+                <p className="text-xs text-muted-foreground">This can't be undone.</p>
+              </div>
+            </div>
+            <p className="text-xs text-foreground/80 leading-relaxed">
+              The replay disappears for every listener too, and its audio is permanently removed
+              from storage. The room's chat transcript stays as it is.
+            </p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteRecording(false)}
+                className="flex-1 rounded-2xl border border-border py-2.5 text-xs font-bold hover:bg-muted cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteRecording}
+                disabled={deletingRecording}
+                className="flex-1 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white py-2.5 text-xs font-bold shadow-soft cursor-pointer disabled:opacity-60 flex items-center justify-center gap-1.5"
+              >
+                {deletingRecording && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Delete Recording
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Tip Modal */}
       {tipTargetUser && (
         <TipModal
@@ -1288,8 +1425,38 @@ function ReplayPlayer({ src, durationLabel }: { src: string; durationLabel?: str
   const [duration, setDuration] = useState(0);
   const [rate, setRate] = useState(1);
   const [failed, setFailed] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const { src: playable, loading, error, refresh } = useAuthorizedMediaUrl(src);
   const retriedRef = useRef(false);
+
+  /** Save the recording locally. `playable` is the minted signed URL, so the
+   * fetch rides the same host-only ACL as streaming — no extra grant needed. */
+  async function handleDownload() {
+    if (!playable || downloading) return;
+    setDownloading(true);
+    try {
+      const res = await fetch(playable);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const ext = blob.type.includes("mp4")
+        ? "m4a"
+        : blob.type.includes("ogg")
+          ? "ogg"
+          : "webm";
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = `space-recording-${new Date().toISOString().slice(0, 10)}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
+    } catch {
+      toast.error("Couldn't download the recording. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   // An expired token mid-playback looks like a plain media error: re-mint once
   // automatically before falling back to the visible retry message.
@@ -1320,6 +1487,34 @@ function ReplayPlayer({ src, durationLabel }: { src: string; durationLabel?: str
     }
   }
 
+  // MediaRecorder WebM has no duration cue, so the browser reports Infinity and
+  // the seek bar can't show progress toward the end. Nudge the element to
+  // compute its true length by seeking past the end once, then reset to start.
+  function resolveDuration(el: HTMLAudioElement) {
+    if (Number.isFinite(el.duration) && el.duration > 0) {
+      setDuration(el.duration);
+      return;
+    }
+    const onTime = () => {
+      if (Number.isFinite(el.duration) && el.duration > 0) {
+        setDuration(el.duration);
+        el.removeEventListener("timeupdate", onTime);
+        try {
+          el.currentTime = 0;
+          setTime(0);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    el.addEventListener("timeupdate", onTime);
+    try {
+      el.currentTime = 1e101;
+    } catch {
+      el.removeEventListener("timeupdate", onTime);
+    }
+  }
+
   const seekable = Number.isFinite(duration) && duration > 0;
 
   return (
@@ -1332,7 +1527,11 @@ function ReplayPlayer({ src, durationLabel }: { src: string; durationLabel?: str
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onLoadedMetadata={(e) => resolveDuration(e.currentTarget)}
+        onDurationChange={(e) => {
+          const d = e.currentTarget.duration;
+          if (Number.isFinite(d) && d > 0) setDuration(d);
+        }}
         onError={handleMediaError}
       />
       <div className="flex items-center gap-3">
@@ -1380,6 +1579,20 @@ function ReplayPlayer({ src, durationLabel }: { src: string; durationLabel?: str
           className="shrink-0 rounded-full border border-border bg-card px-2.5 py-1.5 text-[11px] font-bold text-foreground hover:bg-muted transition-colors cursor-pointer tabular-nums"
         >
           {rate}×
+        </button>
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={!playable || downloading}
+          aria-label="Download recording"
+          title="Download recording"
+          className="shrink-0 rounded-full border border-border bg-card p-2 text-foreground hover:bg-muted transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default"
+        >
+          {downloading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4" />
+          )}
         </button>
       </div>
       {(failed || error) && (

@@ -87,10 +87,12 @@ async function isAuthorizedForStoryMedia(
 }
 
 /**
- * A Space recording may only be read by the host, an approved participant, or
- * staff. The recording's URL is stored on `spaces.recording_url`, so the owning
- * Space is resolved from the path and membership checked there rather than
- * trusting the (auth-uid-namespaced) folder segment.
+ * A Space recording may only be read by the host who made it, or staff.
+ * Recordings are the host's property — being in the room (or joining it as a
+ * replay viewer) does not grant access to the bytes. The recording's URL is
+ * stored on `spaces.recording_url`, so the owning Space is resolved from the
+ * path and checked there rather than trusting the (auth-uid-namespaced)
+ * folder segment.
  */
 async function isAuthorizedForRecording(
   path: string,
@@ -101,7 +103,7 @@ async function isAuthorizedForRecording(
 
   const { data: space } = await db
     .from("spaces")
-    .select("id, host_id, space_participants(user_id)")
+    .select("id, host_id")
     .eq("recording_url", mediaUrlFor(path))
     .maybeSingle();
   if (!space) {
@@ -110,8 +112,6 @@ async function isAuthorizedForRecording(
     return false;
   }
   if (space.host_id === profileId) return true;
-  const participants: Array<{ user_id: string }> = space.space_participants ?? [];
-  if (participants.some((p) => p.user_id === profileId)) return true;
 
   const { data: staff } = await db
     .from("user_roles")
@@ -133,10 +133,17 @@ async function isAuthorizedForMessageMedia(
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const db = supabaseAdmin as any;
 
+  // The attachment is usually linked via `messages.media_url`, but older rows
+  // (and any send that only embedded the url inside `body`) leave that column
+  // null. Match the url in `body` too, otherwise the reader falls through to
+  // the folder-owner fallback below — which authorizes only the uploader, so
+  // the other participant could never open a DM image/video/voice note.
+  const url = mediaUrlFor(path);
   const { data: message } = await db
     .from("messages")
     .select("conversation_id, conversations!inner(user_a, user_b)")
-    .eq("media_url", mediaUrlFor(path))
+    .or(`media_url.eq.${url},body.like.*${url}*`)
+    .limit(1)
     .maybeSingle();
   if (!message) {
     // Legacy attachments uploaded before conversation linkage: fall back to

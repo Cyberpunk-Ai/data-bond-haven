@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 
 import { confirmPaystackPayment } from "@/lib/paystack.functions";
+import { usd } from "@/lib/formatters";
 
 export const Route = createFileRoute("/billing/callback")({
   head: () => ({
@@ -46,7 +47,7 @@ function BillingCallback() {
           setState("success");
           setMessage(
             res.kind === "tip"
-              ? `Your $${Number(res.amount ?? 0).toFixed(2)} tip to @${res.recipient} is on its way.`
+              ? `Tip of ${usd(Number(res.amount ?? 0))} sent successfully — the creator was notified.`
               : "Payment confirmed. Your new plan is active.",
           );
           router.invalidate();

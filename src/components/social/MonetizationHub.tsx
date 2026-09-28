@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useMonetization } from "@/lib/monetization-state";
 import { usePlan } from "@/lib/plan-state";
-import { approxLocal, usd } from "@/lib/formatters";
+import { usd } from "@/lib/formatters";
 import { Avatar } from "@/components/social/Avatar";
 import { PayoutAccountModal } from "@/components/social/PayoutAccountModal";
 import { cn } from "@/lib/utils";
@@ -34,7 +34,6 @@ export function MonetizationHub() {
     error,
     totalEarnings,
     pendingBalance,
-    settlement,
     minimumPayout,
     feePercent,
     tipsReceived,
@@ -84,10 +83,6 @@ export function MonetizationHub() {
       toast.success(
         `Withdrawal requested — ${usd(record.netUsd ?? record.amount)}${
           record.feeUsd != null ? ` (after a ${usd(record.feeUsd)} fee)` : ""
-        }${
-          record.settlementCurrency
-            ? ` (${approxLocal(record.settlementAmount, record.settlementCurrency)})`
-            : ""
         } will reach your account after review.`,
       );
     } catch (err: any) {
@@ -177,9 +172,7 @@ export function MonetizationHub() {
           <p className="text-[0.7rem] text-muted-foreground">
             {inFlight
               ? `A withdrawal of ${openAmount != null ? usd(openAmount) : "…"} is being processed`
-              : `Smallest withdrawal: ${usd(minimumPayout)}${
-                  settlement ? ` · paid out in ${settlement.currency}` : ""
-                }`}
+              : `Smallest withdrawal: ${usd(minimumPayout)}`}
           </p>
         </div>
 

@@ -15,7 +15,7 @@ import {
 import { toast } from "sonner";
 
 import { getWorkspaceEarnings, requestPayout } from "@/lib/payouts.functions";
-import { approxLocal, usd } from "@/lib/formatters";
+import { usd } from "@/lib/formatters";
 import { PayoutAccountModal } from "@/components/social/PayoutAccountModal";
 import { Avatar } from "@/components/social/Avatar";
 import { friendlyError } from "@/lib/error-messages";
@@ -141,10 +141,6 @@ export function WorkspaceMonetization({ workspaceId }: { workspaceId: string }) 
       toast.success(
         `Team withdrawal requested — ${usd(res.netUsd ?? res.amount)}${
           res.feeUsd != null ? ` (after a ${usd(res.feeUsd)} fee)` : ""
-        }${
-          res.settlementCurrency
-            ? ` (${approxLocal(res.settlementAmount, res.settlementCurrency)})`
-            : ""
         } will reach the team's account after review.`,
       );
       refresh();

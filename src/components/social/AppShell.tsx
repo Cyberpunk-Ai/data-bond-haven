@@ -40,6 +40,7 @@ import { useAuth } from "@/lib/auth-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { PLAN_DETAILS } from "@/lib/plans";
 import { useUnreadCounts } from "@/lib/unread-state";
+import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import { useTheme, ACCENT_PALETTES, type ThemeAccent } from "@/lib/theme-state";
 import { UpgradeModal } from "@/components/social/UpgradeModal";
 import { cn, getScrollY, onAppScroll } from "@/lib/utils";
@@ -372,6 +373,8 @@ export function AppShell({
   const { user } = useAuth();
   const activeUser = user || currentUser;
   const { notifications: unreadNotifications, messages: unreadMessages } = useUnreadCounts();
+  // Live notification toasts on every page, not just the notifications tab.
+  useNotificationToasts();
   const { isDark, toggleTheme } = useTheme();
 
   // Smart floating compose button visibility on scroll

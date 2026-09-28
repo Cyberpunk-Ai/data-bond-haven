@@ -225,7 +225,7 @@ function Nav() {
               <div className="relative flex items-center space-x-3" ref={dropdownRef}>
                 <Link
                   to="/feed"
-                  className="rounded-full bg-gradient-to-r from-brand via-brand-pink to-brand-orange px-5 py-2 text-sm font-extrabold text-white shadow-soft transition-all duration-300 hover:shadow-glow hover:opacity-95 active:scale-95"
+                  className="rounded-full bg-gradient-to-r from-brand via-brand-pink to-brand-orange px-5 py-2 text-sm font-extrabold text-white dark:text-neutral-900 shadow-soft transition-all duration-300 hover:shadow-glow hover:opacity-95 active:scale-95"
                 >
                   Open App
                 </Link>
@@ -326,7 +326,7 @@ function Nav() {
                 </Link>
                 <Link
                   to="/auth"
-                  className="rounded-full bg-gradient-to-r from-brand via-brand-pink to-brand-orange px-5 py-2 text-sm font-extrabold text-white shadow-soft transition-all hover:opacity-95 active:scale-95"
+                  className="rounded-full bg-gradient-to-r from-brand via-brand-pink to-brand-orange px-5 py-2 text-sm font-extrabold text-white dark:text-neutral-900 shadow-soft transition-all hover:opacity-95 active:scale-95"
                 >
                   Get Started
                 </Link>
@@ -371,7 +371,7 @@ function Nav() {
                 <Link
                   to="/feed"
                   onClick={() => setOpen(false)}
-                  className="mt-3 block rounded-full bg-gradient-to-r from-brand via-brand-pink to-brand-orange py-2.5 text-center text-sm font-extrabold text-white shadow-soft"
+                  className="mt-3 block rounded-full bg-gradient-to-r from-brand via-brand-pink to-brand-orange py-2.5 text-center text-sm font-extrabold text-white dark:text-neutral-900 shadow-soft"
                 >
                   Open Home Feed
                 </Link>
@@ -390,18 +390,18 @@ function Nav() {
             ))}
 
             {isLoggedIn && user ? (
-              <div className="border-t border-gray-100 pt-2 space-y-1">
+              <div className="border-t border-border/60 pt-2 space-y-1">
                 <Link
                   to="/messages"
                   onClick={() => setOpen(false)}
-                  className="block rounded-xl px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                  className="block rounded-xl px-3 py-2 text-sm font-medium text-foreground/80 hover:bg-muted"
                 >
                   Messages
                 </Link>
                 <Link
                   to="/settings"
                   onClick={() => setOpen(false)}
-                  className="block rounded-xl px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                  className="block rounded-xl px-3 py-2 text-sm font-medium text-foreground/80 hover:bg-muted"
                 >
                   Settings
                 </Link>
@@ -411,7 +411,7 @@ function Nav() {
                     logout();
                     setOpen(false);
                   }}
-                  className="block w-full text-left rounded-xl px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50"
+                  className="block w-full text-left rounded-xl px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-500/10"
                 >
                   Log out
                 </button>
@@ -421,14 +421,14 @@ function Nav() {
                 <Link
                   to="/auth"
                   onClick={() => setOpen(false)}
-                  className="block rounded-full bg-gradient-to-r from-brand to-brand-pink px-5 py-2.5 text-center text-sm font-semibold text-white"
+                  className="block rounded-full bg-gradient-to-r from-brand to-brand-pink px-5 py-2.5 text-center text-sm font-semibold text-white dark:text-neutral-900"
                 >
                   Get Started
                 </Link>
                 <Link
                   to="/auth"
                   onClick={() => setOpen(false)}
-                  className="mt-2 block text-center text-sm font-medium text-gray-600 py-1"
+                  className="mt-2 block text-center text-sm font-medium text-muted-foreground py-1"
                 >
                   Already have an account? Log in
                 </Link>
@@ -477,7 +477,7 @@ function PhoneMockup() {
           <Avatar initials="SA" from="from-pink-500" to="to-orange-500" ring={false} />
           <div>
             <p className="text-sm font-bold">Sarah liked your post</p>
-            <p className="text-xs text-gray-500">Just now</p>
+            <p className="text-xs text-muted-foreground">Just now</p>
           </div>
           <Heart className="h-4 w-4 fill-pink-500 text-pink-500" />
         </div>
@@ -498,7 +498,7 @@ function Hero() {
       </div>
       <div className="container relative z-10 mx-auto grid items-center gap-12 px-6 md:grid-cols-2">
         <Reveal className="space-y-8">
-          <div className="glass-panel inline-flex items-center space-x-2 rounded-full px-4 py-1.5 text-xs font-semibold text-violet-700">
+          <div className="glass-panel inline-flex items-center space-x-2 rounded-full px-4 py-1.5 text-xs font-semibold text-brand">
             <span className="h-2 w-2 animate-pulse rounded-full bg-brand" />
             <span>Now with AI-powered feed</span>
           </div>
@@ -506,20 +506,20 @@ function Hero() {
             Where your world <br />
             <span className="gradient-text">comes to life</span>
           </h1>
-          <p className="max-w-lg text-xl text-gray-600">
+          <p className="max-w-lg text-xl text-muted-foreground">
             Connect with friends, share moments, and discover a community that celebrates
             creativity. Built for the way you actually live.
           </p>
           <div className="flex flex-wrap gap-4">
             <Link
               to={isLoggedIn ? "/feed" : "/auth"}
-              className="rounded-full bg-gradient-to-r from-brand to-brand-pink px-8 py-4 text-lg font-bold text-white shadow-soft transition-all duration-300 hover:shadow-glow hover:opacity-95 active:scale-95"
+              className="rounded-full bg-gradient-to-r from-brand to-brand-pink px-8 py-4 text-lg font-bold text-white dark:text-neutral-900 shadow-soft transition-all duration-300 hover:shadow-glow hover:opacity-95 active:scale-95"
             >
               {isLoggedIn ? "Open Your Feed" : "Get Started"}
             </Link>
             <a
               href="#features"
-              className="glass-panel flex items-center gap-2 rounded-full px-8 py-4 text-lg font-bold text-gray-800 transition-colors hover:bg-white active:scale-95"
+              className="glass-panel flex items-center gap-2 rounded-full px-8 py-4 text-lg font-bold text-foreground transition-colors hover:bg-card active:scale-95"
             >
               <Play className="h-4 w-4 fill-current" /> Explore Features
             </a>
@@ -530,8 +530,8 @@ function Hero() {
                 <Avatar key={a.initials} {...a} />
               ))}
             </div>
-            <p className="text-sm text-gray-500">
-              Loved by <strong className="text-gray-900">5K+</strong> creators
+            <p className="text-sm text-muted-foreground">
+              Loved by <strong className="text-foreground">5K+</strong> creators
             </p>
           </div>
         </Reveal>
@@ -548,14 +548,14 @@ function Hero() {
 function LogoCloud() {
   const logos = ["Nimbus", "Vertex", "Atlas", "Helix", "Cobalt"];
   return (
-    <section className="border-y border-gray-200 bg-white/50 py-12">
+    <section className="border-y border-border bg-muted/30 py-12">
       <div className="container mx-auto px-6">
-        <p className="mb-8 text-center text-sm uppercase tracking-widest text-gray-400">
+        <p className="mb-8 text-center text-sm uppercase tracking-widest text-muted-foreground">
           Trusted by teams worldwide
         </p>
         <div className="flex flex-wrap items-center justify-center gap-x-16 gap-y-8 opacity-60 grayscale transition-all duration-500 hover:grayscale-0">
           {logos.map((l) => (
-            <span key={l} className="text-2xl font-bold text-gray-400">
+            <span key={l} className="text-2xl font-bold text-muted-foreground/70">
               {l}
             </span>
           ))}
@@ -578,7 +578,7 @@ function Features() {
           <h2 className="mb-6 text-4xl font-bold sm:text-5xl">
             Everything you need to <span className="gradient-text">stay connected</span>
           </h2>
-          <p className="text-xl text-gray-600">
+          <p className="text-xl text-muted-foreground">
             Powerful tools designed to help you express yourself, build relationships, and grow your
             audience.
           </p>
@@ -590,12 +590,12 @@ function Features() {
                 <div className={`${iconBox} from-violet-500 to-pink-500`}>
                   <Sparkles className="h-6 w-6" />
                 </div>
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-400">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                   Smart Feed
                 </span>
               </div>
               <h3 className="mb-4 text-3xl font-bold">An algorithm that actually gets you</h3>
-              <p className="text-lg text-gray-600">
+              <p className="text-lg text-muted-foreground">
                 Our AI learns what you love and surfaces content from people and topics that matter
                 to you — no doomscrolling required.
               </p>
@@ -607,7 +607,7 @@ function Features() {
                 <Video className="h-6 w-6" />
               </div>
               <h3 className="mb-4 text-2xl font-bold">Posts &amp; Stories</h3>
-              <p className="text-gray-600">
+              <p className="text-muted-foreground">
                 Share fleeting moments or polished short-form video with cinematic editing tools
                 built right in.
               </p>
@@ -619,7 +619,7 @@ function Features() {
                 <Users className="h-6 w-6" />
               </div>
               <h3 className="mb-4 text-2xl font-bold">Communities</h3>
-              <p className="text-gray-600">
+              <p className="text-muted-foreground">
                 Find your tribe. Join groups around your hobbies, interests, and passions.
               </p>
             </div>
@@ -630,12 +630,12 @@ function Features() {
                 <div className={`${iconBox} from-emerald-500 to-teal-500`}>
                   <MessagesSquare className="h-6 w-6" />
                 </div>
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-400">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                   Real-time
                 </span>
               </div>
               <h3 className="mb-4 text-3xl font-bold">Chat, call, and gather in one place</h3>
-              <p className="text-lg text-gray-600">
+              <p className="text-lg text-muted-foreground">
                 End-to-end encrypted messaging, voice notes, and live video rooms make it easy to
                 stay close to the people who matter.
               </p>
@@ -652,13 +652,13 @@ function Features() {
             },
             {
               icon: LineChart,
-              color: "text-pink-600",
+              color: "text-pink-600 dark:text-pink-400",
               title: "Creator tools",
               body: "Analytics, monetization, and scheduling built for people who turn passion into income.",
             },
             {
               icon: Globe,
-              color: "text-blue-600",
+              color: "text-blue-600 dark:text-blue-400",
               title: "Global reach",
               body: "Auto-translate and cross-cultural discovery connect you with creators anywhere.",
             },
@@ -667,7 +667,7 @@ function Features() {
               <div className="glass-panel h-full rounded-3xl p-8 shadow-soft transition-all duration-500 hover:shadow-lift">
                 <f.icon className={`mb-6 h-8 w-8 ${f.color}`} />
                 <h4 className="mb-3 text-xl font-bold">{f.title}</h4>
-                <p className="text-gray-600">{f.body}</p>
+                <p className="text-muted-foreground">{f.body}</p>
               </div>
             </Reveal>
           ))}
@@ -691,21 +691,21 @@ function Community() {
     { name: "Indie Makers", members: "47k", icon: Radio, grad: "from-orange-500 to-red-500" },
   ];
   return (
-    <section id="community" className="scroll-mt-24 bg-white/60 py-32">
+    <section id="community" className="scroll-mt-24 bg-muted/30 py-32">
       <div className="container mx-auto grid items-center gap-20 px-6 md:grid-cols-2">
         <Reveal className="order-2 md:order-1">
           <div className="glass-panel inline-block rotate-[-5deg] rounded-[2.5rem] p-4 shadow-lift transition-transform duration-500 hover:rotate-0">
-            <div className="w-full max-w-sm space-y-4 rounded-[2rem] bg-white p-6">
+            <div className="w-full max-w-sm space-y-4 rounded-[2rem] bg-card p-6">
               <div className="flex items-center justify-between">
                 <p className="font-bold">Spaces near you</p>
-                <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold text-violet-700">
+                <span className="rounded-full bg-brand/15 px-3 py-1 text-xs font-bold text-brand">
                   Live
                 </span>
               </div>
               {spaces.map((s) => (
                 <div
                   key={s.name}
-                  className="flex items-center justify-between rounded-2xl border border-gray-100 p-4 transition-colors hover:bg-gray-50"
+                  className="flex items-center justify-between rounded-2xl border border-border p-4 transition-colors hover:bg-muted"
                 >
                   <div className="flex items-center gap-3">
                     <span
@@ -715,10 +715,10 @@ function Community() {
                     </span>
                     <div>
                       <p className="text-sm font-bold">{s.name}</p>
-                      <p className="text-xs text-gray-500">{s.members} members</p>
+                      <p className="text-xs text-muted-foreground">{s.members} members</p>
                     </div>
                   </div>
-                  <button className="rounded-full border border-gray-200 px-4 py-1.5 text-xs font-bold transition-colors hover:border-brand hover:text-brand">
+                  <button className="rounded-full border border-border px-4 py-1.5 text-xs font-bold transition-colors hover:border-brand hover:text-brand">
                     Join
                   </button>
                 </div>
@@ -731,18 +731,18 @@ function Community() {
           <h2 className="text-4xl font-bold sm:text-5xl">
             Find your people in <span className="gradient-text">Spaces1</span>
           </h2>
-          <p className="text-xl text-gray-600">
+          <p className="text-xl text-muted-foreground">
             Topic-based communities with live audio rooms, events, and shared collections. Drop in,
             listen, or take the stage.
           </p>
-          <ul className="space-y-4 text-gray-700">
+          <ul className="space-y-4 text-muted-foreground">
             {[
               "Live audio rooms with up to 10k listeners",
               "Community events and shared calendars",
               "Moderation tools that keep things kind",
             ].map((t) => (
               <li key={t} className="flex items-center gap-3">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-100">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand/10">
                   <Check className="h-3.5 w-3.5 text-brand" />
                 </span>
                 {t}
@@ -772,18 +772,18 @@ function Creators() {
           <h2 className="text-4xl font-bold sm:text-5xl">
             Turn your passion into a <span className="gradient-text">paycheck</span>
           </h2>
-          <p className="text-xl text-gray-600">
+          <p className="text-xl text-muted-foreground">
             Subscriptions, tips, and brand deals — with analytics that show exactly what resonates.
             Keep up to 95% of what you earn.
           </p>
           <div className="grid grid-cols-2 gap-6">
             <div className="glass-panel rounded-3xl p-6 shadow-soft">
               <p className="text-3xl font-extrabold gradient-text">95%</p>
-              <p className="mt-1 text-sm text-gray-500">Revenue share to creators</p>
+              <p className="mt-1 text-sm text-muted-foreground">Revenue share to creators</p>
             </div>
             <div className="glass-panel rounded-3xl p-6 shadow-soft">
               <p className="text-3xl font-extrabold gradient-text">$15K</p>
-              <p className="mt-1 text-sm text-gray-500">Paid to date</p>
+              <p className="mt-1 text-sm text-muted-foreground">Paid to date</p>
             </div>
           </div>
         </Reveal>
@@ -799,7 +799,7 @@ function Creators() {
                 />
               ))}
             </div>
-            <div className="mt-4 flex justify-between text-xs text-gray-400">
+            <div className="mt-4 flex justify-between text-xs text-muted-foreground">
               <span>Jan</span>
               <span>Mar</span>
               <span>May</span>
@@ -845,7 +845,7 @@ function Testimonials() {
           <h2 className="mb-6 text-4xl font-bold sm:text-5xl">
             Loved by <span className="gradient-text">creators</span> everywhere
           </h2>
-          <p className="text-xl text-gray-600">
+          <p className="text-xl text-muted-foreground">
             Hear from the creators and communities building their lives on Spaces1.
           </p>
         </Reveal>
@@ -858,12 +858,12 @@ function Testimonials() {
                     <Star key={s} className="h-4 w-4 fill-yellow-400 text-yellow-400" />
                   ))}
                 </div>
-                <blockquote className="mb-6 text-gray-700">"{t.quote}"</blockquote>
+                <blockquote className="mb-6 text-card-foreground">"{t.quote}"</blockquote>
                 <figcaption className="flex items-center gap-3">
                   <Avatar {...t.avatar} size="w-12 h-12 text-sm" ring={false} />
                   <div>
                     <p className="font-bold">{t.name}</p>
-                    <p className="text-sm text-gray-500">{t.handle}</p>
+                    <p className="text-sm text-muted-foreground">{t.handle}</p>
                   </div>
                 </figcaption>
               </figure>
@@ -885,7 +885,7 @@ function Stats() {
     { value: 15, suffix: "K+", label: "Daily Creator Payouts", prefix: "$" },
   ];
   return (
-    <section className="border-y border-gray-200 py-24">
+    <section className="border-y border-border py-24">
       <div className="container mx-auto px-6">
         <div className="grid grid-cols-2 gap-12 text-center md:grid-cols-4">
           {stats.map((s) => (
@@ -896,7 +896,7 @@ function Stats() {
                   <CountUp to={s.value} suffix={s.suffix} />
                 </span>
               </p>
-              <p className="text-sm uppercase tracking-widest text-gray-500">{s.label}</p>
+              <p className="text-sm uppercase tracking-widest text-muted-foreground">{s.label}</p>
             </div>
           ))}
         </div>
@@ -917,7 +917,7 @@ function Pricing() {
       monthly: 0,
       features: ["Unlimited posts & stories", "Join communities", "Basic analytics"],
       cta: "Get Started",
-      style: "border border-gray-200 hover:bg-gray-50",
+      style: "border border-border hover:bg-muted",
       popular: false,
     },
     {
@@ -931,7 +931,7 @@ function Pricing() {
         "Custom branding",
       ],
       cta: "Get Started",
-      style: "border border-violet-200 text-violet-700 hover:bg-violet-50",
+      style: "border border-brand/40 text-brand hover:bg-brand/5",
       popular: true,
     },
     {
@@ -940,30 +940,30 @@ function Pricing() {
       monthly: 29,
       features: ["Everything in Plus", "Team workspaces", "Priority support", "API access"],
       cta: "Contact Sales",
-      style: "border border-gray-200 hover:bg-gray-50",
+      style: "border border-border hover:bg-muted",
       popular: false,
     },
   ];
   return (
-    <section id="pricing" className="scroll-mt-24 bg-white/60 py-32">
+    <section id="pricing" className="scroll-mt-24 bg-muted/30 py-32">
       <div className="container mx-auto px-6">
         <Reveal className="mx-auto mb-12 max-w-3xl text-center">
           <h2 className="mb-6 text-4xl font-bold sm:text-5xl">
             Simple, <span className="gradient-text">fair</span> pricing
           </h2>
-          <p className="text-xl text-gray-600">
+          <p className="text-xl text-muted-foreground">
             Start free. Upgrade when you're ready to go further.
           </p>
         </Reveal>
         <div className="mb-16 flex items-center justify-center gap-4">
-          <span className={`text-sm font-semibold ${!annual ? "text-gray-900" : "text-gray-500"}`}>
+          <span className={`text-sm font-semibold ${!annual ? "text-foreground" : "text-muted-foreground"}`}>
             Monthly
           </span>
           <button
             onClick={() => setAnnual(!annual)}
             aria-label="Toggle annual billing"
             className={`relative h-7 w-12 rounded-full transition-colors ${
-              annual ? "bg-brand" : "bg-gray-300"
+              annual ? "bg-brand" : "bg-muted-foreground/30"
             }`}
           >
             <span
@@ -972,9 +972,9 @@ function Pricing() {
               }`}
             />
           </button>
-          <span className={`text-sm font-semibold ${annual ? "text-gray-900" : "text-gray-500"}`}>
+          <span className={`text-sm font-semibold ${annual ? "text-foreground" : "text-muted-foreground"}`}>
             Annual
-            <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-bold text-violet-700">
+            <span className="ml-2 rounded-full bg-brand/15 px-2 py-0.5 text-xs font-bold text-brand">
               Save 20%
             </span>
           </span>
@@ -990,19 +990,19 @@ function Pricing() {
                   }`}
                 >
                   {p.popular && (
-                    <span className="absolute -top-4 left-1/2 -translate-x-1/2 rounded-full bg-gradient-to-r from-brand to-brand-pink px-4 py-1 text-xs font-bold uppercase tracking-wider text-white">
+                    <span className="absolute -top-4 left-1/2 -translate-x-1/2 rounded-full bg-gradient-to-r from-brand to-brand-pink px-4 py-1 text-xs font-bold uppercase tracking-wider text-white dark:text-neutral-900">
                       Most popular
                     </span>
                   )}
                   <h3 className="mb-2 text-xl font-bold">{p.name}</h3>
-                  <p className="mb-6 text-gray-500">{p.tagline}</p>
+                  <p className="mb-6 text-muted-foreground">{p.tagline}</p>
                   <p className="mb-8 text-5xl font-extrabold">
                     ${price}
-                    <span className="text-lg font-medium text-gray-400">
+                    <span className="text-lg font-medium text-muted-foreground">
                       /mo{annual && price > 0 ? ", billed annually" : ""}
                     </span>
                   </p>
-                  <ul className="mb-10 flex-1 space-y-3 text-gray-700">
+                  <ul className="mb-10 flex-1 space-y-3 text-muted-foreground">
                     {p.features.map((f) => (
                       <li key={f} className="flex items-center gap-3">
                         <Check className="h-4 w-4 shrink-0 text-brand" /> {f}

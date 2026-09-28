@@ -8,6 +8,8 @@ import {
   AtSign,
   Radio,
   DollarSign,
+  Banknote,
+  Info,
   CheckCheck,
   BellOff,
   Loader2,
@@ -44,6 +46,7 @@ import {
   markNotificationRead,
   markAllNotificationsRead,
   deleteNotification,
+  hydrateAuthors,
 } from "@/lib/api-client";
 import { clearAllUnreadNotifications, decrementUnreadNotifications } from "@/lib/unread-state";
 import { useRealtime } from "@/lib/realtime";
@@ -76,6 +79,12 @@ const meta: Record<Notification["type"], { icon: typeof Heart; tint: string }> =
   ...({
     workspace_invite: { icon: UserPlus, tint: "from-emerald-500 to-teal-500" },
     workspace: { icon: UserPlus, tint: "from-emerald-500 to-teal-500" },
+    // Server-side money and staff notices arrive without an actor — give them
+    // their own icons instead of falling back to the "like" heart.
+    payout: { icon: Banknote, tint: "from-emerald-500 to-teal-500" },
+    system: { icon: Info, tint: "from-slate-500 to-zinc-500" },
+    story_like: { icon: Heart, tint: "from-rose-500 to-pink-500" },
+    message: { icon: MessageCircle, tint: "from-sky-500 to-cyan-500" },
   } as any),
   follow: { icon: UserPlus, tint: "from-violet-500 to-fuchsia-500" },
   comment: { icon: MessageCircle, tint: "from-sky-500 to-cyan-500" },
@@ -85,6 +94,8 @@ const meta: Record<Notification["type"], { icon: typeof Heart; tint: string }> =
   space: { icon: Radio, tint: "from-indigo-500 to-violet-500" },
   tip: { icon: DollarSign, tint: "from-amber-500 to-orange-500" },
 };
+
+const fallbackMeta = { icon: BellOff, tint: "from-slate-500 to-zinc-500" };
 
 const filters = ["All", "Mentions", "Follows", "Likes", "Tips", "Spaces"] as const;
 
@@ -106,21 +117,47 @@ function NotificationsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Realtime hook for incoming notifications
+  // Belt to the realtime braces: if the tab was hidden while the socket was
+  // down, re-pull the persistent timeline the moment it is visible again.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      getNotifications()
+        .then((data) => {
+          if (Array.isArray(data)) setItems(data);
+        })
+        .catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
+  // Realtime: new notifications drop straight into the timeline, and reads
+  // performed on another device mark the row read here too. The toast is
+  // raised globally by the AppShell, so this page only mutates the list.
   useRealtime(
     (event) => {
+      if (event.type === "notification_read" && event.id) {
+        setItems((prev) =>
+          prev.map((n) => (n.id === event.id ? { ...n, read: true } : n)),
+        );
+        return;
+      }
       const notif =
         event.notification ||
         (event.type === "notification" ? event.data || (event.id ? event : null) : null);
       if (notif && notif.id) {
-        setItems((prev) => {
-          if (prev.some((n) => n.id === notif.id)) return prev;
-          return [notif, ...prev];
+        // Resolve the actor before rendering so the name/avatar are populated on
+        // the first paint of the live row (the DB feed delivers the raw row).
+        void hydrateAuthors([notif.actor_id]).finally(() => {
+          setItems((prev) => {
+            if (prev.some((n) => n.id === notif.id)) return prev;
+            return [notif, ...prev];
+          });
         });
-        if (notif.body) toast.info(notif.body);
       }
     },
-    ["notification", "like", "repost", "follow", "space_tip"],
+    ["notification", "notification_read"],
   );
 
   async function handleMarkAllRead() {
@@ -154,10 +191,11 @@ function NotificationsPage() {
       void navigate({ to: "/settings", search: { section: "workspaces" } as any });
       return;
     }
-    if (n.type === "tip") {
+    if (n.type === "tip" || (n.type as string) === "payout") {
       void navigate({ to: "/settings", search: { section: "monetization" } });
       return;
     }
+    if ((n.type as string) === "system") return; // notice only — marking it read is the action
     // Likes/comments/reposts/mentions point at the post itself when we know it.
     if (n.post_id && ["like", "comment", "reply", "repost", "mention"].includes(n.type)) {
       void navigate({ to: "/post/$id", params: { id: n.post_id } });
@@ -185,10 +223,10 @@ function NotificationsPage() {
 
   const visible = items.filter((n) => {
     if (filter === "All") return true;
-    if (filter === "Mentions") return n.type === "mention" || n.type === "comment";
+    if (filter === "Mentions") return n.type === "mention" || n.type === "comment" || n.type === "reply";
     if (filter === "Follows") return n.type === "follow";
-    if (filter === "Likes") return n.type === "like" || n.type === "repost";
-    if (filter === "Tips") return n.type === "tip";
+    if (filter === "Likes") return n.type === "like" || n.type === "repost" || n.type === "story_like";
+    if (filter === "Tips") return n.type === "tip" || n.type === "payout";
     if (filter === "Spaces") return n.type === "space";
     return true;
   });
@@ -234,7 +272,7 @@ function NotificationsPage() {
           <div className="space-y-3">
             {visible.map((n, i) => {
               const actor = getProfile(n.actor_id);
-              const { icon: Icon, tint } = meta[n.type] || meta.like;
+              const { icon: Icon, tint } = meta[n.type] || fallbackMeta;
               return (
                 <div
                   key={n.id}
@@ -260,12 +298,19 @@ function NotificationsPage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
-                      <Avatar
-                        name={actor.display_name}
-                        src={actor.avatar_url}
-                        className="h-6 w-6 text-[0.6rem]"
-                      />
-                      <span className="truncate text-sm font-bold">{actor.display_name}</span>
+                      {n.actor_id ? (
+                        <>
+                          <Avatar
+                            name={actor.display_name}
+                            src={actor.avatar_url}
+                            className="h-6 w-6 text-[0.6rem]"
+                          />
+                          <span className="truncate text-sm font-bold">{actor.display_name}</span>
+                        </>
+                      ) : (
+                        // Payout / system notices come from the platform, not a person.
+                        <span className="text-sm font-bold">Spaces1</span>
+                      )}
                       <TimeAgo
                         iso={n.created_at}
                         className="shrink-0 text-xs text-muted-foreground"

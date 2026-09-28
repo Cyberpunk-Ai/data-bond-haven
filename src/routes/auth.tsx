@@ -5,7 +5,7 @@ import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
-import { setLoggedOut, useAuth } from "@/lib/auth-state";
+import { setLoggedOut, useAuth, consumeRestrictedReason } from "@/lib/auth-state";
 import { friendlyError } from "@/lib/error-messages";
 import { cn } from "@/lib/utils";
 
@@ -86,6 +86,12 @@ function AuthPage() {
       if (event === "PASSWORD_RECOVERY") setRecovering(true);
     });
     return () => data.subscription.unsubscribe();
+  }, []);
+
+  // If an admin ban signed us out mid-session, explain why on this screen.
+  useEffect(() => {
+    const reason = consumeRestrictedReason();
+    if (reason) toast.error(reason, { duration: 8000 });
   }, []);
 
   async function handleGoogle() {

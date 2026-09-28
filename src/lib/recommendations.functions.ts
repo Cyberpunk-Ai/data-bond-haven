@@ -36,6 +36,22 @@ function decodeCursor(cursor?: string | null): { rank: number; id: string } | nu
   return null;
 }
 
+/**
+ * Deterministic per-key jitter in [0,1). Used for discovery: mixing the
+ * viewer id into the seed means two users with similar-but-different histories
+ * get genuinely different tails of content, while the same (viewer, post,
+ * epoch) triple always hashes identically — so a page never reshuffles itself
+ * mid-scroll and the ranker stays reproducible (and debuggable) per epoch.
+ */
+function jitter01(key: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h / 4294967296;
+}
+
 export const getForYouPosts = createServerFn({ method: "GET" })
   .inputValidator((data: unknown) => {
     const d = (data ?? {}) as { limit?: number; cursor?: string; refresh?: boolean };
@@ -168,9 +184,15 @@ export const getForYouPosts = createServerFn({ method: "GET" })
 
     const personalised = engagedIds.length > 0 || firstDegree.size > 0 || preferredTags.size > 0;
     if (!personalised) {
-      const sorted = rows.sort(
-        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-      );
+      // Brand-new viewer: still recency-led, but nudged ±6h by a per-user
+      // hash so two fresh accounts don't stare at an identical feed, and
+      // everyone keeps seeing mostly-new content. Deterministic within the
+      // 10-minute epoch, so pagination is stable.
+      const newBucket = Math.floor(Date.now() / (10 * 60_000));
+      const adjusted = (r: any) =>
+        new Date(r.created_at).getTime() +
+        (jitter01(`${myId}:${r.id}:${newBucket}`) - 0.5) * 12 * 3_600_000;
+      const sorted = rows.sort((a, b) => adjusted(b) - adjusted(a));
       const cursor = decodeCursor(data.cursor);
       const startIdx = cursor ? sorted.findIndex((r) => r.id === cursor.id) + 1 : 0;
       const page = sorted.slice(startIdx, startIdx + data.limit);
@@ -262,7 +284,25 @@ export const getForYouPosts = createServerFn({ method: "GET" })
         const seenTimes = impressionCount.get(row.id) ?? 0;
         const seenPenalty = seenTimes > 0 && !engagedWeight.has(row.id) ? -1.5 * seenTimes : 0;
 
-        const base = authorScore + tagScore + relationship + quality;
+        // Discovery nudge: content completely outside this viewer's known
+        // world (unfollowed, never-engaged author AND no affinity tags) gets a
+        // small per-(viewer, post, epoch) bonus — up to +1.4, bounded so it
+        // can never out-rank genuinely relevant posts. Because the seed
+        // carries the viewer id, different users explore different corners of
+        // the same pool instead of everyone converging on one global ranking;
+        // because it is multiplied through the decay term, only fresh unknowns
+        // get the lift, which is what "discover new things" should mean.
+        const tagsArr = (row.tags ?? []) as string[];
+        const outsideKnownWorld =
+          !firstDegree.has(row.user_id) &&
+          !secondDegree.has(row.user_id) &&
+          !authorAffinity.has(row.user_id) &&
+          !tagsArr.some((tag) => tagAffinity.has(tag));
+        const discovery = outsideKnownWorld
+          ? jitter01(`${myId}:${row.id}:${epoch}`) * 1.4
+          : 0;
+
+        const base = authorScore + tagScore + relationship + quality + discovery;
         // Paid team workspaces boost by the workspace (or its owner's) plan;
         // personal posts boost by the author's plan.
         const reachBoost = row.workspace_id

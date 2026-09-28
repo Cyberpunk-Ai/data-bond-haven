@@ -46,6 +46,23 @@ function me() {
   return currentUserId || currentUser.id;
 }
 
+/**
+ * True only when there is a live authenticated session — an access token the
+ * REST client will actually attach as a bearer. The post_impressions INSERT
+ * policy is `to authenticated` and anon writes are revoked, so a cached profile
+ * id with an expired/absent token would send the POST under the anon role and
+ * 403. Gate the best-effort impression write on the session itself, not merely
+ * on having a profile id sitting in memory.
+ */
+async function hasAuthSession(): Promise<boolean> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    return Boolean(data.session?.access_token);
+  } catch {
+    return false;
+  }
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -268,7 +285,7 @@ async function hydrateEngagement(posts: Post[]) {
   }
 }
 
-async function hydrateAuthors(ids: string[]) {
+export async function hydrateAuthors(ids: string[]) {
   const unique = Array.from(new Set(dbIds(ids)));
   if (unique.length === 0) return;
   const { data } = await db.from("profiles").select("*").in("id", unique);
@@ -658,6 +675,59 @@ export async function addPostComment(
   return { comment, commentCount: count };
 }
 
+/** Owner-only edit (RLS: "comments owner update"); stamps edited_at like editPost does. */
+export async function editPostComment(commentId: string, content: string): Promise<PostComment> {
+  const userId = me();
+  if (!isDbId(userId)) throw new Error("Sign in to edit comments");
+  if (!isDbId(commentId)) throw new Error("That comment isn't real yet.");
+  const trimmed = content.trim();
+  if (!trimmed) throw new Error("Comment can't be empty.");
+
+  const editedAt = nowIso();
+  const { data, error } = await db
+    .from("comments")
+    .update({ content: trimmed, edited_at: editedAt })
+    .eq("id", commentId)
+    .eq("user_id", userId)
+    .select("*")
+    .maybeSingle();
+  // Empty result means RLS filtered it (not our row) — never claim success.
+  if (error) throw new Error(error.message || "Could not edit your comment");
+  if (!data) throw new Error("You can only edit your own comments.");
+
+  emitRealtime("comment_updated", {
+    commentId,
+    postId: data.post_id,
+    content: trimmed,
+    editedAt,
+  });
+  return data as PostComment;
+}
+
+/**
+ * Owner delete (RLS: "comments owner delete"). replies cascade in the DB
+ * (parent_id on delete cascade) and posts.comment_count is fixed by the
+ * t_comments_after trigger, so the client only mirrors the list locally.
+ */
+export async function deletePostComment(commentId: string, postId: string) {
+  const userId = me();
+  if (!isDbId(userId)) throw new Error("Sign in to delete comments");
+  if (!isDbId(commentId)) throw new Error("That comment isn't real yet.");
+
+  const { error } = await db
+    .from("comments")
+    .delete()
+    .eq("id", commentId)
+    .eq("user_id", userId);
+  if (error) {
+    // Surface the failure (e.g. RLS denial for someone else's comment)
+    // instead of reporting a delete that never happened.
+    throw new Error(error.message || "Could not delete your comment");
+  }
+  emitRealtime("comment_deleted", { commentId, postId });
+  return { ok: true };
+}
+
 export async function getPostComments(postId: string): Promise<PostComment[]> {
   try {
     const { data } = await db
@@ -728,16 +798,21 @@ export async function recordPostImpression(postId: string) {
   if (!isDbId(postId)) return { viewCount: 0 };
   const userId = me();
   const viewer = isDbId(userId) ? userId : null;
-  try {
-    // A signed-in person counts once per post. Upsert with ignore-duplicates
-    // turns the repeat view into a silent no-op at the API layer (a plain
-    // insert would surface a noisy 409/23505 round-trip every scroll-past).
-    await db.from("post_impressions").upsert(
-      { post_id: postId, user_id: viewer },
-      { onConflict: "post_id,user_id", ignoreDuplicates: true },
-    );
-  } catch {
-    /* impressions are best-effort */
+  // Impressions have no anonymous write path (the INSERT policy is
+  // `to authenticated`), so a signed-out visitor — or a stale cached profile
+  // with an expired token — firing the upsert only produces a 403 round-trip.
+  // Skip the write unless there is both a profile id and a live session; the
+  // tallied view count below still comes off the post row.
+  if (viewer && (await hasAuthSession())) {
+    try {
+      // Recorded server-side with the service-role client (bypasses the
+      // `owns_profile` RLS check that used to 403 while scrolling). Repeat
+      // views are deduped by the (post_id,user_id) unique index.
+      const { recordImpressions } = await import("@/lib/impressions.functions");
+      await recordImpressions({ data: { postIds: [postId] } });
+    } catch {
+      /* impressions are best-effort */
+    }
   }
   // Impression rows are admin-only to read, so take the tallied count off the post.
   const { data: postRow } = await db
@@ -1365,6 +1440,32 @@ export async function finalizeSpaceRecording(spaceId: string, recordingUrl: stri
   return { ok: true };
 }
 
+/** Host-only: delete a saved replay. The row is read first (host-scoped) so we
+ * know which object to reclaim before clearing it; `deleteMyMedia` verifies the
+ * storage object's `media_objects` ownership row against the caller, and a
+ * failure there is non-fatal — the nightly media GC sweeps the orphan. */
+export async function deleteSpaceRecording(spaceId: string) {
+  const { data: existing, error: readErr } = await db
+    .from("spaces")
+    .select("recording_url")
+    .eq("id", spaceId)
+    .eq("host_id", me())
+    .maybeSingle();
+  if (readErr) throw readErr;
+  if (!existing) throw new Error("Only the host can delete this recording.");
+  const { error } = await db
+    .from("spaces")
+    .update({ recording_url: null, recorded: false, is_recording: false, replay_count: 0 })
+    .eq("id", spaceId)
+    .eq("host_id", me());
+  if (error) throw error;
+  if (existing.recording_url) {
+    void deleteMyMedia({ data: { urls: [existing.recording_url] } }).catch(() => {});
+  }
+  emitRealtime("space:recording-deleted", { spaceId });
+  return { ok: true };
+}
+
 /** Records a real, de-duplicated replay view for the signed-in listener (no fake counts). */
 export async function recordSpaceReplayView(spaceId: string) {
   const userId = me();
@@ -1409,18 +1510,23 @@ export async function getConversations(): Promise<Conversation[]> {
       .order("updated_at", { ascending: false });
     const rows = (data ?? []) as any[];
     if (rows.length > 0) {
-      await hydrateAuthors(rows.flatMap((r) => [r.user_a, r.user_b]));
-      const { data: unreadRows } = await db
-        .from("messages")
-        .select("conversation_id")
-        .is("read_at", null)
-        .neq("sender_id", userId)
-        .in(
-          "conversation_id",
-          rows.map((r) => r.id),
-        );
+      // Hydrating the people behind each thread and tallying unread messages are
+      // independent, so run them concurrently — this round-trip gates how fast
+      // the conversation list paints on open.
+      const [, unreadRows] = await Promise.all([
+        hydrateAuthors(rows.flatMap((r) => [r.user_a, r.user_b])),
+        db
+          .from("messages")
+          .select("conversation_id")
+          .is("read_at", null)
+          .neq("sender_id", userId)
+          .in(
+            "conversation_id",
+            rows.map((r) => r.id),
+          ),
+      ]);
       const unreadByConversation = new Map<string, number>();
-      for (const row of (unreadRows ?? []) as any[]) {
+      for (const row of ((unreadRows?.data ?? []) as any[])) {
         const key = String(row.conversation_id);
         unreadByConversation.set(key, (unreadByConversation.get(key) ?? 0) + 1);
       }
@@ -1665,7 +1771,8 @@ export async function getNotifications(): Promise<Notification[]> {
   }
   const rows = (data ?? []) as Notification[];
   // Load the people behind each notification so names and avatars render.
-  await hydrateAuthors(rows.map((n) => n.actor_id));
+  // Platform notices (payout/system) have no actor and are skipped.
+  await hydrateAuthors(rows.map((n) => n.actor_id).filter((x): x is string => !!x));
   return rows;
 }
 
@@ -2403,29 +2510,19 @@ export async function recordPostImpressions(postIds: string[]) {
   if (ids.length === 0) return { ok: true };
   const userId = me();
   const viewer = isDbId(userId) ? userId : null;
-  try {
-    let fresh = ids;
-    if (viewer) {
-      // Signed-in users count once per post (partial unique index); skip the
-      // already-seen rows so one repeat view can't abort the whole batch.
-      const { data: seen } = await db
-        .from("post_impressions")
-        .select("post_id")
-        .eq("user_id", viewer)
-        .in("post_id", ids);
-      const seenSet = new Set((seen ?? []).map((r: any) => r.post_id));
-      fresh = ids.filter((id) => !seenSet.has(id));
+  // Impressions are recorded server-side with the service-role client, which
+  // bypasses the `owns_profile` RLS check that used to 403 on every scroll.
+  // Skipped unless there is a signed-in profile with a live session, so guests
+  // never reach it (no anonymous inflation); the unique (post_id,user_id) index
+  // dedupes repeat views and the posts after-insert trigger keeps view_count
+  // accurate.
+  if (viewer && (await hasAuthSession())) {
+    try {
+      const { recordImpressions } = await import("@/lib/impressions.functions");
+      await recordImpressions({ data: { postIds: ids } });
+    } catch {
+      /* impressions are best-effort */
     }
-    if (fresh.length > 0) {
-      // ignore-duplicates upsert: a concurrent duplicate loses the race
-      // silently instead of aborting the batch with a 409/23505.
-      await db.from("post_impressions").upsert(
-        fresh.map((post_id) => ({ post_id, user_id: viewer })),
-        { onConflict: "post_id,user_id", ignoreDuplicates: true },
-      );
-    }
-  } catch {
-    /* impressions are best-effort */
   }
   // Tallied counts come off the posts rows (impression rows are staff-only).
   const { data: postRows } = await db.from("posts").select("id,view_count").in("id", ids);

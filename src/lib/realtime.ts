@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { supabase } from "@/integrations/supabase/client";
+import { currentUserId } from "@/lib/profile-service";
 
 export type RealtimeHandlers = Record<string, (payload: any) => void>;
 
@@ -131,6 +132,32 @@ function ensureDbFeed() {
           spaceId: row.space_id,
           message: { id: row.id, userId: row.user_id, body: row.body, spaceId: row.space_id },
         });
+      },
+    )
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "notifications" },
+      (p: any) => {
+        const row = p.new;
+        // A notification is addressed to exactly one recipient; access rules keep
+        // other readers from receiving the row, but guard here too so a stray
+        // broadcast can never light up someone else's bell.
+        if (row?.id && row.recipient_id === currentUserId) {
+          dispatchLocal("notification", { notification: row, ...row });
+        }
+      },
+    )
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "notifications" },
+      (p: any) => {
+        // Read-state is persistent (a DB column): when another device marks a
+        // notification read, mirrors update live instead of showing a stale
+        // unread ring until the next full reload.
+        const row = p.new;
+        if (row?.id && row.recipient_id === currentUserId && row.read) {
+          dispatchLocal("notification_read", { notification: row, ...row });
+        }
       },
     )
     .subscribe();

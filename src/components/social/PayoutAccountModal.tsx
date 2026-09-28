@@ -4,7 +4,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { X, Landmark, Smartphone, ShieldCheck, Loader2, Check } from "lucide-react";
 import { toast } from "sonner";
 
-import { savePayoutDestination, listPayoutBanks } from "@/lib/payouts.functions";
+import { savePayoutDestination } from "@/lib/payouts.functions";
 import { friendlyError } from "@/lib/error-messages";
 import { cn } from "@/lib/utils";
 
@@ -23,24 +23,10 @@ interface PayoutAccountModalProps {
 type DestType = "nuban" | "mobile_money";
 
 /**
- * The bank field is a free-type combobox: the provider's worldwide directory
- * powers type-ahead, but anything can be typed — supporters bank from Lagos to
- * Manila. Whatever arrives is mapped to a provider code server side and then
- * validated by the provider itself (`/bank/resolve`) before it is ever stored.
- */
-function bankMatches(query: string, banks: { code: string; name: string; country: string }[]) {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
-  return banks
-    .filter((b) => b.name.toLowerCase().includes(q) || b.code.toLowerCase() === q)
-    .slice(0, 8);
-}
-
-/**
- * Collects a payout account and trades it for an encrypted Paystack recipient
- * token. The account number is forwarded to the provider exactly once (server
- * side) and never returned to this component — we only learn back the masked
- * bank name + last four, which is what we render on success.
+ * The bank field is plain free text — there is no provider-curated list.
+ * Whatever the person types is mapped to a provider code server side and then
+ * validated by the provider itself (`/bank/resolve`) before it is ever stored,
+ * so a typo can't become a payout destination.
  */
 export function PayoutAccountModal({
   open,
@@ -51,33 +37,19 @@ export function PayoutAccountModal({
   onSaved,
 }: PayoutAccountModalProps) {
   const saveDestination = useServerFn(savePayoutDestination);
-  const loadBanks = useServerFn(listPayoutBanks);
 
   const [type, setType] = useState<DestType>("nuban");
-  const [bankQuery, setBankQuery] = useState("");
-  const [bankCode, setBankCode] = useState("");
-  const [bankMatchesUi, setBankMatchesUi] = useState<
-    { code: string; name: string; country: string }[]
-  >([]);
+  const [bankName, setBankName] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
   const [accountName, setAccountName] = useState("");
-  const [banks, setBanks] = useState<{ code: string; name: string; country: string }[]>([]);
-  const [loadingBanks, setLoadingBanks] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setBankQuery("");
-    setBankCode("");
-    setBankMatchesUi([]);
+    setBankName("");
     setAccountNumber("");
     setAccountName("");
-    setLoadingBanks(true);
-    loadBanks({})
-      .then((res) => setBanks(Array.isArray(res) ? res : []))
-      .catch(() => setBanks([]))
-      .finally(() => setLoadingBanks(false));
-  }, [open, loadBanks]);
+  }, [open]);
 
   if (!open) return null;
   if (typeof document === "undefined") return null;
@@ -87,9 +59,13 @@ export function PayoutAccountModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const num = accountNumber.replace(/\s+/g, "");
-    const finalBank = (bankCode || bankQuery).trim();
+    const finalBank = bankName.trim();
     if (!finalBank) {
-      toast.error(isTeam ? "Choose the team's bank or provider." : "Choose your bank or provider.");
+      toast.error(
+        isTeam
+          ? "Enter the team's bank or mobile-money provider."
+          : "Enter your bank or mobile-money provider.",
+      );
       return;
     }
     if (!/^\+?[A-Za-z0-9]{6,20}$/.test(num)) {
@@ -191,57 +167,23 @@ export function PayoutAccountModal({
 
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              {type === "nuban" ? "Bank" : "Mobile money provider"}
+              {type === "nuban" ? "Bank name" : "Mobile money provider"}
             </label>
-            <div className="relative">
-              <input
-                type="text"
-                value={bankQuery}
-                onChange={(e) => {
-                  setBankQuery(e.target.value);
-                  setBankCode("");
-                  setBankMatchesUi(bankMatches(e.target.value, banks));
-                }}
-                placeholder={
-                  loadingBanks
-                    ? "Loading providers…"
-                    : type === "nuban"
-                      ? "Type your bank's name, e.g. Equity Bank"
-                      : "Type your provider, e.g. M-PESA"
-                }
-                className="w-full rounded-xl bg-card border border-border px-3 py-2.5 text-sm outline-none focus:border-brand"
-              />
-              {bankQuery && !bankCode && bankMatchesUi.length > 0 && (
-                <div className="absolute inset-x-0 top-full z-10 mt-1 max-h-52 overflow-y-auto rounded-xl border border-border bg-card shadow-xl [scrollbar-width:thin]">
-                  {bankMatchesUi.map((b) => (
-                    <button
-                      key={`${b.code}-${b.name}`}
-                      type="button"
-                      onClick={() => {
-                        setBankCode(b.code);
-                        setBankQuery(b.country ? `${b.name} (${b.country})` : b.name);
-                        setBankMatchesUi([]);
-                      }}
-                      className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-muted/50 transition-colors cursor-pointer"
-                    >
-                      <span className="truncate font-semibold">{b.name}</span>
-                      <span className="shrink-0 text-[10px] text-muted-foreground uppercase">
-                        {b.country || b.code}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            {bankCode && (
-              <p className="flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                <Check className="h-3 w-3" /> Verified provider code {bankCode} — we'll double-check
-                the account with the bank before saving.
-              </p>
-            )}
+            <input
+              type="text"
+              autoComplete="off"
+              value={bankName}
+              onChange={(e) => setBankName(e.target.value)}
+              placeholder={
+                type === "nuban"
+                  ? "Your bank's name, e.g. Equity Bank"
+                  : "Your provider, e.g. M-PESA"
+              }
+              className="w-full rounded-xl bg-card border border-border px-3 py-2.5 text-sm outline-none focus:border-brand"
+            />
             <p className="text-[10px] text-muted-foreground">
-              Can't find yours? Type the exact bank or mobile-money provider name — our payment
-              provider verifies it before anything is saved.
+              Type the exact bank or mobile-money provider name from your statement — our payment
+              provider verifies the account before anything is saved.
             </p>
           </div>
 

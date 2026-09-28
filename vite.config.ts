@@ -69,7 +69,12 @@ export default defineConfig(({ command, mode }) => {
       },
     }),
     // Nitro runs only for production builds; dev SSR is served by Vite.
-    ...(command === "build" ? [nitro({ defaultPreset: "cloudflare-module" })] : []),
+    // Default to a portable Node server so `npm run build && npm start`
+    // yields a standalone `.output/server/index.mjs` that runs anywhere Node
+    // does (Docker, VPS, Render, Railway, Lovable, ...). Deploy targets that
+    // need a different runtime override it via env, e.g.
+    //   NITRO_PRESET=cloudflare-module npm run build
+    ...(command === "build" ? [nitro({ defaultPreset: "node-server" })] : []),
     viteReact(),
   ],
   };

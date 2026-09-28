@@ -88,13 +88,17 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
                 updated_at: new Date().toISOString(),
               })
               .eq("transfer_code", tx.transfer_code)
-              .select("user_id, amount, currency, workspace_id")
+              .select("user_id, amount, amount_usd, currency, workspace_id")
               .maybeSingle();
-
+            
             // Tell the creator/owner the outcome (personal or team withdrawal).
             // A no-op for already-resolved rows since `updated` is null then.
             if (updated && (status === "paid" || status === "failed")) {
-              const amount = `${updated.currency ?? ""} ${Number(updated.amount ?? 0).toFixed(2)}`.trim();
+              // USD is what every screen and notification on the platform speaks.
+              const amount =
+                updated.amount_usd != null
+                  ? `$${Number(updated.amount_usd).toFixed(2)}`
+                  : `${updated.currency ?? ""} ${Number(updated.amount ?? 0).toFixed(2)}`.trim();
               await admin.from("notifications").insert({
                 recipient_id: updated.user_id,
                 actor_id: null,

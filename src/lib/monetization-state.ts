@@ -80,7 +80,7 @@ const EMPTY: MonetizationState = {
   totalEarnings: 0,
   pendingBalance: 0,
   currency: "USD",
-  minimumPayout: 10,
+  minimumPayout: 1,
   feePercent: 5,
   settlement: null,
   tipsReceived: [],

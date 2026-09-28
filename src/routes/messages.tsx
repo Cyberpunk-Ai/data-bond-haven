@@ -133,15 +133,32 @@ interface PendingAttachment {
 
 /** Attachments read as a friendly label in the chat list, never a raw link. */
 function previewLabel(preview: string) {
+  // Voice notes never render as "🎙️ Voice Note (7s) [/api/public/media/...]" —
+  // collapse the stored markup to a short, human label so the conversation rail
+  // shows an icon + text instead of leaking the raw media path.
+  if (isVoiceNoteBody(preview)) return "🎙️ Voice message";
   const kind = attachmentKind(preview);
   if (kind === "image") return "📷 Photo";
   if (kind === "video") return "🎬 Video";
   if (kind === "audio") return "🎧 Audio";
   if (kind === "pdf") return "📄 PDF Document";
-  if (kind === "document") return "📎 File Attachment";
+  if (kind === "document") return documentLabelName(preview);
   if (preview.startsWith("📄") || preview.startsWith("📎")) return "📎 Document";
   if (/^https?:\/\/|^\/api\/public\/media\//.test(preview)) return "📎 Attachment";
   return preview;
+}
+
+/** Voice-note bodies are stored as `🎙️ Voice Note (Ns) [url]`. */
+function isVoiceNoteBody(body: string) {
+  const value = (body || "").trim();
+  return value.startsWith("🎙️") || /\bVoice Note\b/i.test(value);
+}
+
+/** Recover the sender's filename from a tagged document body, else a generic label. */
+function documentLabelName(preview: string) {
+  const tagged = (preview || "").trim().match(/^(?:📄|📎)\s*(.*?):\s*\[(.*?)\]/);
+  const name = tagged?.[2]?.trim();
+  return name ? `📎 ${name}` : "📎 File Attachment";
 }
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/g;
@@ -252,6 +269,7 @@ function attachmentKind(body: string): "image" | "video" | "audio" | "pdf" | "do
   if (value.startsWith("data:audio")) return "audio";
   if (value.startsWith("data:application/pdf")) return "pdf";
   if (value.startsWith("data:application")) return "document";
+  if (value.startsWith("🎙️") || /\bVoice Note\b/i.test(value)) return "audio";
   if (value.startsWith("📄") || value.startsWith("📎")) return "document";
 
   if (!value.startsWith("http") && !value.startsWith("/")) return null;
@@ -1105,7 +1123,7 @@ function MessagesPage() {
             created_at: new Date().toISOString(),
           };
           setAll((prev) => [...prev, newMsg]);
-          await persistMessage(bodyString, tempId);
+          await persistMessage(bodyString, tempId, res.url);
         } catch (err: any) {
           toast.error(friendlyError(err, `Could not send ${att.name}`), { id: att.id });
           setAll((prev) => prev.filter((m) => m.id !== tempId));
@@ -1271,7 +1289,7 @@ function MessagesPage() {
           toast.success("Voice note uploaded", { id: "voice-upload" });
 
           const realBody = `🎙️ Voice Note (${duration}s) [${res.url}]`;
-          await persistMessage(realBody, tempId);
+          await persistMessage(realBody, tempId, res.url);
         } catch (err) {
           console.error("Voice note upload failed:", err);
           setAll((prev) => prev.filter((m) => m.id !== tempId));

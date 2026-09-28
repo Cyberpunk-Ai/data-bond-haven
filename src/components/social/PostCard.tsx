@@ -27,6 +27,7 @@ import {
   ThumbsDown,
   ExternalLink,
   CornerDownLeft,
+  Pencil,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -51,6 +52,8 @@ import {
   recordPostImpression,
   addPostComment,
   getPostComments,
+  editPostComment,
+  deletePostComment,
   deletePost,
   votePoll,
   sendFeedFeedback,
@@ -394,6 +397,31 @@ function PostCardBase({
           if (prev.some((c) => c.id === event.data.id)) return prev;
           return [...prev, event.data];
         });
+      } else if (event.event === "comment_updated" && event.postId === post.id) {
+        setCommentsList((prev) =>
+          prev.map((c) =>
+            c.id === event.commentId
+              ? { ...c, content: event.content ?? c.content, edited_at: event.editedAt ?? c.edited_at }
+              : c,
+          ),
+        );
+      } else if (event.event === "comment_deleted" && event.postId === post.id) {
+        // Replies cascade in the DB at every depth — mirror that here by
+        // removing the whole subtree beneath the deleted comment.
+        setCommentsList((prev) => {
+          const removed = new Set<string>([event.commentId]);
+          let grew = true;
+          while (grew) {
+            grew = false;
+            for (const c of prev) {
+              if (c.parent_id && removed.has(c.parent_id) && !removed.has(c.id)) {
+                removed.add(c.id);
+                grew = true;
+              }
+            }
+          }
+          return prev.filter((c) => !removed.has(c.id));
+        });
       }
     },
     ["post_like_updated", "post_repost_updated", "post_view_updated", "poll_updated", "post_updated"],
@@ -408,6 +436,10 @@ function PostCardBase({
   const [commentDraft, setCommentDraft] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
   const [replyTarget, setReplyTarget] = useState<{ id: string; name: string } | null>(null);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [commentEditDraft, setCommentEditDraft] = useState("");
+  const [savingCommentEdit, setSavingCommentEdit] = useState(false);
+  const [confirmDeleteCommentId, setConfirmDeleteCommentId] = useState<string | null>(null);
   const commentInputRef = useRef<HTMLInputElement | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [showImagePreview, setShowImagePreview] = useState(false);
@@ -594,6 +626,54 @@ function PostCardBase({
     }
   }
 
+  function startCommentEdit(c: Comment) {
+    setEditingCommentId(c.id);
+    setCommentEditDraft(c.content);
+  }
+
+  async function handleSaveCommentEdit(c: Comment) {
+    const trimmed = commentEditDraft.trim();
+    if (!trimmed) {
+      toast.error("Comment can't be empty");
+      return;
+    }
+    if (trimmed === c.content) {
+      setEditingCommentId(null);
+      return;
+    }
+    setSavingCommentEdit(true);
+    try {
+      await editPostComment(c.id, trimmed);
+      // The comment_updated realtime event (also fired locally) updates the row.
+      setEditingCommentId(null);
+      toast.success("Comment updated");
+    } catch (err) {
+      toast.error(friendlyError(err, "Couldn't edit your comment"));
+    } finally {
+      setSavingCommentEdit(false);
+    }
+  }
+
+  async function handleDeleteComment(c: Comment) {
+    // Two-tap confirm so an accidental click can't wipe a thread instantly.
+    if (confirmDeleteCommentId !== c.id) {
+      setConfirmDeleteCommentId(c.id);
+      window.setTimeout(
+        () => setConfirmDeleteCommentId((cur) => (cur === c.id ? null : cur)),
+        4000,
+      );
+      return;
+    }
+    setConfirmDeleteCommentId(null);
+    try {
+      await deletePostComment(c.id, post.id);
+      // The comment_deleted realtime event removes the subtree from the list.
+      toast.success("Comment deleted");
+    } catch (err) {
+      toast.error(friendlyError(err, "Couldn't delete your comment"));
+    }
+  }
+
   // Group stored replies under their top-level parent so the UI shows a single
   // level of threading (a reply to a reply still renders beneath the root).
   function renderCommentThreads() {
@@ -623,6 +703,7 @@ function PostCardBase({
 
     const renderRow = (c: Comment, isReply: boolean) => {
       const cAuthor = getProfile(c.user_id);
+      const isMyComment = c.user_id === currentUser.id;
       return (
         <div
           key={c.id}
@@ -654,23 +735,88 @@ function PostCardBase({
                   size="xs"
                 />
               </Link>
-              <TimeAgo iso={c.created_at} className="text-[10px] text-muted-foreground" />
+              <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+                <TimeAgo iso={c.created_at} />
+                {c.edited_at && <span className="italic">· Edited</span>}
+              </span>
             </div>
-            <div className="mt-1 text-foreground/90 leading-relaxed">
-              <ClampText text={c.content} lines={4} limit={240} render={renderContentWithLinks} />
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setReplyTarget((prev) =>
-                  prev?.id === c.id ? null : { id: c.id, name: cAuthor.username },
-                );
-                commentInputRef.current?.focus();
-              }}
-              className="mt-1.5 inline-flex items-center gap-1 text-[0.7rem] font-bold text-muted-foreground hover:text-brand transition-colors cursor-pointer"
-            >
-              <CornerDownLeft className="h-3 w-3" /> Reply
-            </button>
+            {editingCommentId === c.id ? (
+              <div className="mt-1.5 space-y-2">
+                <textarea
+                  value={commentEditDraft}
+                  onChange={(e) => setCommentEditDraft(e.target.value)}
+                  rows={2}
+                  maxLength={240}
+                  className="w-full rounded-xl border border-border bg-background/60 p-2 text-xs leading-relaxed outline-none focus:ring-2 focus:ring-brand/30 resize-y"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={savingCommentEdit}
+                    onClick={() => void handleSaveCommentEdit(c)}
+                    className="rounded-full bg-gradient-to-r from-brand to-brand-pink px-3 py-1 text-[0.7rem] font-bold text-white shadow-soft disabled:opacity-60 cursor-pointer"
+                  >
+                    {savingCommentEdit ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingCommentId(null)}
+                    className="rounded-full px-3 py-1 text-[0.7rem] font-bold text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="mt-1 text-foreground/90 leading-relaxed">
+                  <ClampText
+                    text={c.content}
+                    lines={4}
+                    limit={240}
+                    render={renderContentWithLinks}
+                  />
+                </div>
+                <div className="mt-1.5 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReplyTarget((prev) =>
+                        prev?.id === c.id ? null : { id: c.id, name: cAuthor.username },
+                      );
+                      commentInputRef.current?.focus();
+                    }}
+                    className="inline-flex items-center gap-1 text-[0.7rem] font-bold text-muted-foreground hover:text-brand transition-colors cursor-pointer"
+                  >
+                    <CornerDownLeft className="h-3 w-3" /> Reply
+                  </button>
+                  {isMyComment && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => startCommentEdit(c)}
+                        className="inline-flex items-center gap-1 text-[0.7rem] font-bold text-muted-foreground hover:text-brand transition-colors cursor-pointer"
+                      >
+                        <Pencil className="h-3 w-3" /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteComment(c)}
+                        className={cn(
+                          "inline-flex items-center gap-1 text-[0.7rem] font-bold transition-colors cursor-pointer",
+                          confirmDeleteCommentId === c.id
+                            ? "text-rose-500"
+                            : "text-muted-foreground hover:text-rose-500",
+                        )}
+                      >
+                        <Trash2 className="h-3 w-3" />{" "}
+                        {confirmDeleteCommentId === c.id ? "Confirm?" : "Delete"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       );

@@ -7,8 +7,19 @@ import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@supabase/supabase-js";
 
 function publicClient() {
-  const url = process.env["SUPABASE_URL"];
-  const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
+  // These are public, read-only lookups that need only the anon/publishable key.
+  // Prefer the server env, but fall back to the value Vite inlines into the
+  // bundle (VITE_*) so a runtime that doesn't export SUPABASE_* (e.g. the
+  // `npm start` node-server, which reads neither .env nor .dev.vars) still works
+  // instead of throwing "Backend is not configured".
+  const url =
+    process.env["SUPABASE_URL"] ??
+    process.env["VITE_SUPABASE_URL"] ??
+    (import.meta.env?.VITE_SUPABASE_URL as string | undefined);
+  const key =
+    process.env["SUPABASE_PUBLISHABLE_KEY"] ??
+    process.env["VITE_SUPABASE_PUBLISHABLE_KEY"] ??
+    (import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined);
   if (!url || !key) throw new Error("Backend is not configured");
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },

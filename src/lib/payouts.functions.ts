@@ -27,10 +27,11 @@ async function admin() {
 
 /**
  * Smallest withdrawal we accept, in USD — the currency every balance on the
- * platform is advertised in. The provider clears the transfer in the settlement
+ * platform is advertised in. Kept low ($1) so creators can cash out small
+ * amounts any time. The provider clears the transfer in the settlement
  * currency, so `requestPayout` converts this floor with `PAYSTACK_USD_RATE`.
  */
-export const MINIMUM_PAYOUT = 10;
+export const MINIMUM_PAYOUT = 1;
 
 /**
  * The platform's take, charged ONCE when a creator withdraws (never per tip):
@@ -49,15 +50,6 @@ async function withdrawalFeeBps(profileId: string): Promise<number> {
     return FALLBACK_FEE_BPS;
   }
 }
-
-/** Settlement currency -> Paystack country code, for scoping the bank list. */
-const CURRENCY_COUNTRY: Record<string, string> = {
-  NGN: "NG",
-  GHS: "GH",
-  ZAR: "ZA",
-  KES: "KE",
-  XOF: "CI",
-};
 
 async function payoutCurrency() {
   const { env } = await import("@/lib/env.server");
@@ -514,7 +506,7 @@ export const savePayoutDestination = createServerFn({ method: "POST" })
       if (data.type !== "mobile_money") {
         throw new Error(
           /invalid_bank_code|bank_code/i.test(message)
-            ? "We couldn't recognise that bank. Start typing its name and pick the matching one from the list."
+            ? "We couldn't match that bank with the payment provider. Enter the exact bank name from your statement."
             : message || "The payment provider could not verify that account. Please check the details and try again.",
         );
       }
@@ -617,30 +609,6 @@ export const savePayoutDestination = createServerFn({ method: "POST" })
     }
 
     return { bankName, last4, currency, accountName: holderName };
-  });
-
-/**
- * The provider's bank + mobile-money directory, proxied so the secret key never
- * reaches the browser. Every country is included — creators cash out from all
- * over the world — with the settlement country listed first. Returns [] on any
- * failure (test / key without the banks scope), in which case the UI still lets
- * the person type a code and Paystack's own resolve validates it.
- */
-export const listPayoutBanks = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
-  .handler(async () => {
-    const currency = await payoutCurrency();
-    const country = CURRENCY_COUNTRY[currency] ?? "";
-    try {
-      const banks = await providerBanks();
-      const rank = (b: { country: string }) => (country && b.country === country ? 0 : 1);
-      return [...banks]
-        .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
-        .slice(0, 1200);
-    } catch (err) {
-      console.error("listPayoutBanks failed:", err);
-      return [];
-    }
   });
 
 /** Masked payout destination for the current user or a team they own. */

@@ -78,6 +78,16 @@ export const moderateUser = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const staff = await assertStaff(context);
 
+    // Locking yourself out would strand the console (no other admin may be
+    // around to undo it), so a staff member can't ban/suspend their own account.
+    if (
+      (data.status === "banned" || data.status === "suspended") &&
+      staff.actorId &&
+      data.profileId === staff.actorId
+    ) {
+      throw new Error("You can't suspend or ban your own account.");
+    }
+
     const patch: {
       status?: string;
       warning_count?: number;
@@ -104,6 +114,53 @@ export const moderateUser = createServerFn({ method: "POST" })
       .maybeSingle();
     if (error) throw new Error(error.message);
     if (!updated) throw new Error("That member no longer exists.");
+
+    // A status change is only useful if it actually reaches the person it's
+    // about: tell them in-app (a notification the recipient's realtime bell
+    // picks up instantly) and, for a ban/suspension, cut their auth session off
+    // server-side so they can't keep acting on a stale token.
+    if (data.status !== undefined) {
+      const messageByStatus: Record<string, string> = {
+        banned:
+          "Your account has been banned for violating the Spaces1 Community Guidelines. You can no longer post, comment or message.",
+        suspended:
+          "Your account has been temporarily suspended. Some actions are restricted until it is restored.",
+        active: "Your account has been restored to good standing. Welcome back to Spaces1.",
+        flagged:
+          "Your account has been flagged for review. Please double-check the Community Guidelines.",
+      };
+      await staff.admin.from("notifications").insert({
+        recipient_id: data.profileId,
+        actor_id: staff.actorId,
+        type: "system",
+        body: messageByStatus[data.status] ?? `Your account status is now ${data.status}.`,
+      });
+
+      // Enforce the ban/suspension at the auth layer too, not just the profile
+      // row: RLS already blocks writes for non-active members, but revoking the
+      // login (and, for bans, the sign-in itself) makes the change take effect
+      // for the intended user immediately rather than on their next token bump.
+      const restricted = data.status === "banned" || data.status === "suspended";
+      const { data: targetProfile } = await staff.admin
+        .from("profiles")
+        .select("auth_user_id")
+        .eq("id", data.profileId)
+        .maybeSingle();
+      if (targetProfile?.auth_user_id) {
+        try {
+          await staff.admin.auth.admin.updateUserById(targetProfile.auth_user_id as string, {
+            app_metadata: restricted
+              ? { access_status: data.status, restricted_at: new Date().toISOString() }
+              : { access_status: "active" },
+            ...(data.status === "banned" ? { ban_duration: "876000h" } : {}),
+          });
+        } catch (err) {
+          // Session revocation is best-effort; the notification + profile flag
+          // already landed and RLS keeps the account read-only regardless.
+          console.error("moderation: auth session revoke failed:", err);
+        }
+      }
+    }
 
     // A plan granted from the console is a real, comped subscription.
     if (data.plan !== undefined) {

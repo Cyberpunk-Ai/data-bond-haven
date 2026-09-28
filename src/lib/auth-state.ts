@@ -19,6 +19,28 @@ let lastLoadAt = 0;
 let inFlight: Promise<void> | null = null;
 const AUTH_LOAD_TTL_MS = 15_000;
 
+const RESTRICTION_KEY = "spaces:restricted_reason";
+
+/** Persist a lock-out reason so the auth screen can explain a ban after sign-out. */
+function setRestrictedReason(reason: string) {
+  try {
+    sessionStorage.setItem(RESTRICTION_KEY, reason);
+  } catch {
+    /* non-browser */
+  }
+}
+
+/** Read and clear any stored lock-out reason (shown once on the auth screen). */
+export function consumeRestrictedReason(): string | null {
+  try {
+    const value = sessionStorage.getItem(RESTRICTION_KEY);
+    if (value) sessionStorage.removeItem(RESTRICTION_KEY);
+    return value;
+  } catch {
+    return null;
+  }
+}
+
 function loadSessionProfileOnce(): Promise<void> {
   if (inFlight) return inFlight;
   inFlight = loadSessionProfile().finally(() => {
@@ -56,6 +78,22 @@ async function loadSessionProfile() {
       if (row) {
         const profile = rowToProfile(row as Record<string, unknown>);
         profile.email = authUser.email ?? undefined;
+
+        // An admin ban must actually lock the affected member out, not just flag
+        // the row: their next session check signs them straight back out and we
+        // stash a reason the auth screen can surface. Suspensions stay signed-in
+        // (the in-app notification tells them) but are write-blocked by RLS.
+        if (profile.status === "banned") {
+          setRestrictedReason(
+            "Your account has been banned for violating the Spaces1 Community Guidelines.",
+          );
+          try {
+            void supabase.auth.signOut();
+          } catch {}
+          setCurrentUser(null);
+          return;
+        }
+
         setCurrentUser(profile);
         return;
       }

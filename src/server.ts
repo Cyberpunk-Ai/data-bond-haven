@@ -1,5 +1,13 @@
 import "./lib/error-capture";
 
+// Mirror .env / .dev.vars into process.env before anything reads server env.
+// The standalone node-server (`npm start`) otherwise boots with no Supabase
+// credentials, which breaks the media proxy (404 images) and every
+// service-role call. Real shell env always wins, so this is a no-op in prod.
+import { loadRuntimeEnv } from "./lib/runtime-env.server";
+
+loadRuntimeEnv();
+
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 import { withSecurityHeaders } from "./lib/security-headers.server";

@@ -19,7 +19,15 @@ function isProduction(): boolean {
 
 /** Host (without protocol) of the Supabase project, for connect-src. */
 function supabaseHost(): string | null {
-  const url = process.env["SUPABASE_URL"] ?? process.env["VITE_SUPABASE_URL"] ?? "";
+  // Prefer the runtime env, but fall back to the value Vite inlined into the
+  // server bundle at build time (import.meta.env.VITE_*). Without that, a
+  // production run that doesn't export SUPABASE_URL would emit a connect-src
+  // missing the Supabase host and the browser would block all data calls.
+  const url =
+    process.env["SUPABASE_URL"] ??
+    process.env["VITE_SUPABASE_URL"] ??
+    (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ??
+    "";
   try {
     return url ? new URL(url).host : null;
   } catch {
@@ -39,10 +47,14 @@ function buildCsp(enforce: boolean): string {
     .filter(Boolean)
     .join(" ");
 
-  // In dev, Vite/Start inject inline scripts and open a websocket HMR channel.
-  const scriptSrc = isProduction()
-    ? "'self' 'wasm-unsafe-eval'"
-    : "'self' 'unsafe-inline' 'wasm-unsafe-eval'";
+  // TanStack Start's SSR injects inline bootstrap scripts (the stream barrier
+  // and scroll-restoration) that carry no nonce/hash, and the scroll payload is
+  // request-specific so it can't be pre-hashed. A no-inline script-src therefore
+  // blocks hydration and blanks the whole app in production, so we must allow
+  // inline scripts. Modern browsers ignore 'unsafe-inline' the moment any
+  // nonce/hash is present, so this only takes effect for the current
+  // nonce-less setup and does not weaken a future nonce rollout.
+  const scriptSrc = "'self' 'unsafe-inline' 'wasm-unsafe-eval'";
 
   return [
     `default-src 'self'`,

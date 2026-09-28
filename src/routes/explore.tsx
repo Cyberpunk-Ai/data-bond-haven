@@ -25,6 +25,7 @@ import { compact } from "@/lib/formatters";
 import { currentUser, profileRegistry, getProfile } from "@/lib/profile-service";
 import type { Post, Profile, Topic, TrendingTag } from "@/lib/types";
 import { getPosts, getUsers, globalSearch, getTopics, getTrendingTags } from "@/lib/api-client";
+import { getWhoToFollow } from "@/lib/recommendations.functions";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/explore")({
@@ -91,20 +92,40 @@ function ExplorePage() {
     }
   }, [search.tag, search.q, search.tab]);
 
+  // Signed-in visitors get the personalised "who to follow" ranker (same
+  // affinity/graph/interest signals that drive the For-you feed); guests and
+  // any ranker failure fall back to the plain creator directory.
+  function loadPeople(isActive?: () => boolean) {
+    const ok = () => !isActive || isActive();
+    const apply = (profiles: Profile[]) =>
+      ok() && setMatchedPeople(profiles.filter((p) => p.id && p.id !== currentUser.id));
+    const fallback = () =>
+      getUsers()
+        .then((res) => res?.profiles?.length > 0 && apply(res.profiles))
+        .catch(() => {});
+    if (currentUser.id && currentUser.id !== "guest") {
+      getWhoToFollow({ data: { limit: 20 } })
+        .then((res) => {
+          const list = ((res?.profiles ?? []) as Profile[]).filter((p) => p?.id);
+          if (list.length) apply(list);
+          else fallback();
+        })
+        .catch(fallback);
+      return;
+    }
+    fallback();
+  }
+
   useEffect(() => {
-    getPosts()
+    // Wide pool so the "Top" ranking has real trending candidates instead of
+    // just the newest page the feed already shows.
+    getPosts({ limit: 100 })
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) setAllPosts(data);
       })
       .catch(() => {});
 
-    getUsers()
-      .then((res) => {
-        if (res?.profiles && res.profiles.length > 0) {
-          setMatchedPeople(res.profiles.filter((p) => p.id && p.id !== currentUser.id));
-        }
-      })
-      .catch(() => {});
+    loadPeople();
 
     getTopics()
       .then((res) => {
@@ -154,7 +175,7 @@ function ExplorePage() {
     // No query: load the selected tag's posts from the server (so clicking a
     // trend/topic opens the relevant results, not just the cached feed), or the
     // full feed when nothing is selected.
-    getPosts(selectedTag ? { tag: selectedTag, limit: 50 } : {})
+    getPosts(selectedTag ? { tag: selectedTag, limit: 100 } : { limit: 100 })
       .then((data) => {
         if (active && Array.isArray(data)) setAllPosts(data);
       })
@@ -162,13 +183,7 @@ function ExplorePage() {
       .finally(() => {
         if (active) setLoading(false);
       });
-    getUsers()
-      .then((res) => {
-        if (active && res?.profiles && res.profiles.length > 0) {
-          setMatchedPeople(res.profiles.filter((p) => p.id && p.id !== currentUser.id));
-        }
-      })
-      .catch(() => {});
+    loadPeople(() => active);
     return () => {
       active = false;
     };
@@ -214,7 +229,19 @@ function ExplorePage() {
   }, [allPosts, selectedTag, searchQuery, filter]);
 
   const sortedTopPosts = useMemo(() => {
-    return [...filteredPosts].sort((a, b) => (b.likeCount || 0) - (a.likeCount || 0));
+    // Hot board: weighted engagement cooled by age, so "Top" surfaces what is
+    // trending now instead of mirroring the newest page or raw like totals
+    // (a 3-week-old post with 500 likes loses to today's 80-like breakout).
+    const now = Date.now();
+    const hotScore = (p: Post) => {
+      const ageHours = Math.max(0.25, (now - new Date(p.created_at).getTime()) / 3_600_000);
+      const engagement =
+        (p.likeCount ?? 0) * 3 + (p.commentCount ?? 0) * 4 + (p.repostCount ?? 0) * 5;
+      return (engagement + 5) / Math.pow(ageHours, 0.6);
+    };
+    return [...filteredPosts].sort(
+      (a, b) => hotScore(b) - hotScore(a) || (b.likeCount ?? 0) - (a.likeCount ?? 0),
+    );
   }, [filteredPosts]);
 
   const mediaPosts = useMemo(() => {

@@ -12,6 +12,7 @@ import {
   Loader2,
   Sparkles,
   Check,
+  Trash2,
 } from "lucide-react";
 import { AppShell, Panel, PageHeader } from "@/components/social/AppShell";
 import { RailFooter } from "@/components/social/RightRail";
@@ -52,9 +53,9 @@ function SpacesSkeleton() {
     </div>
   );
 }
-import { getProfile } from "@/lib/profile-service";
+import { getProfile, useProfile, currentUser } from "@/lib/profile-service";
 import type { Space } from "@/lib/types";
-import { getSpaces, createSpace } from "@/lib/api-client";
+import { getSpaces, createSpace, deleteSpaceRecording } from "@/lib/api-client";
 import { getRecommendedSpaces } from "@/lib/recommendations.functions";
 import { useRealtime } from "@/lib/realtime";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
@@ -97,15 +98,20 @@ function SpaceCard({
   onJoin,
   onRemind,
   isReminded,
+  onDeleteRecording,
 }: {
   space: Space;
   index: number;
   onJoin: (space: Space) => void;
   onRemind: (spaceId: string) => void;
   isReminded: boolean;
+  onDeleteRecording: (space: Space) => void;
   [key: string]: any;
 }) {
-  const host = getProfile(space.host_id);
+  const { profile: hostProfile } = useProfile(space.host_id);
+  // Resolve the host's real name/avatar instead of showing the raw UUID that an
+  // uncached getProfile() fallback returns for a fresh visitor.
+  const host = hostProfile ?? getProfile(space.host_id);
   const guests = useMemo(() => {
     const seen = new Set<string>();
     return (space.participants || [])
@@ -118,7 +124,11 @@ function SpaceCard({
       .map((p) => getProfile(p.id));
   }, [space.participants, space.host_id]);
 
-  const isRecorded = Boolean(space.recorded);
+  // Mirror the Recorded-tab rule: a room is only a replay once a real
+  // recording URL was saved alongside the flag — and recordings belong to the
+  // host alone, so only they ever see (or re-enter) the replay.
+  const isRecorded = Boolean(space.recorded && space.recording_url && space.host_id === currentUser.id);
+  const isMine = space.host_id === currentUser.id;
 
   return (
     <article
@@ -206,36 +216,48 @@ function SpaceCard({
                 ? `${compact(space.replay_count ?? 0)} replays`
                 : "Reminder available"}
           </p>
-          <button
-            onClick={() => (space.live || isRecorded ? onJoin(space) : onRemind(space.id))}
-            className={cn(
-              "flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-bold transition-all duration-300 active:scale-95 cursor-pointer",
-              space.live
-                ? "bg-gradient-to-r from-brand to-brand-pink text-white hover:shadow-glow"
+          <div className="flex items-center gap-2">
+            {isRecorded && isMine && (
+              <button
+                onClick={() => onDeleteRecording(space)}
+                title="Delete recording"
+                className="flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-2.5 text-xs font-bold text-muted-foreground transition-all hover:border-rose-500/40 hover:bg-rose-500/10 hover:text-rose-500 active:scale-95 cursor-pointer"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span className="hidden sm:inline">Delete</span>
+              </button>
+            )}
+            <button
+              onClick={() => (space.live || isRecorded ? onJoin(space) : onRemind(space.id))}
+              className={cn(
+                "flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-bold transition-all duration-300 active:scale-95 cursor-pointer",
+                space.live
+                  ? "bg-gradient-to-r from-brand to-brand-pink text-white hover:shadow-glow"
+                  : isRecorded
+                    ? "bg-purple-600 text-white hover:bg-purple-700 shadow-soft"
+                    : isReminded
+                      ? "bg-emerald-500/15 text-emerald-600 font-bold"
+                      : "bg-foreground/5 text-foreground hover:bg-foreground/10",
+              )}
+            >
+              {space.live ? (
+                <Play className="h-4 w-4 fill-current" />
+              ) : isRecorded ? (
+                <Play className="h-4 w-4 fill-current" />
+              ) : isReminded ? (
+                <Check className="h-4 w-4" />
+              ) : (
+                <Calendar className="h-4 w-4" />
+              )}
+              {space.live
+                ? "Join Space"
                 : isRecorded
-                  ? "bg-purple-600 text-white hover:bg-purple-700 shadow-soft"
+                  ? "Listen Replay"
                   : isReminded
-                    ? "bg-emerald-500/15 text-emerald-600 font-bold"
-                    : "bg-foreground/5 text-foreground hover:bg-foreground/10",
-            )}
-          >
-            {space.live ? (
-              <Play className="h-4 w-4 fill-current" />
-            ) : isRecorded ? (
-              <Play className="h-4 w-4 fill-current" />
-            ) : isReminded ? (
-              <Check className="h-4 w-4" />
-            ) : (
-              <Calendar className="h-4 w-4" />
-            )}
-            {space.live
-              ? "Join Space"
-              : isRecorded
-                ? "Listen Replay"
-                : isReminded
-                  ? "Reminder Set"
-                  : "Remind me"}
-          </button>
+                    ? "Reminder Set"
+                    : "Remind me"}
+            </button>
+          </div>
         </div>
       </div>
     </article>
@@ -254,6 +276,9 @@ function SpacesPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [reminders, setReminders] = useState<Record<string, boolean>>({});
   const [searchQuery, setSearchQuery] = useState("");
+  // Host deleting a saved replay (recording) — confirm first, then reclaim.
+  const [deleteTarget, setDeleteTarget] = useState<Space | null>(null);
+  const [deletingRecording, setDeletingRecording] = useState(false);
 
   // Create Space Form State
   const [scheduleMode, setScheduleMode] = useState<"live" | "scheduled">("live");
@@ -325,9 +350,26 @@ function SpacesPage() {
         setAllSpaces((prev) =>
           prev.map((s) => (s.id === event.spaceId ? { ...s, listeners: event.listeners } : s)),
         );
+      } else if (event.type === "space:recording") {
+        // finalizeSpaceRecording announces the saved replay URL: the room
+        // becomes replayable live, no reload needed.
+        const data = event.data || event;
+        const sid = event.spaceId || data?.spaceId;
+        if (sid && data?.recordingUrl) {
+          setAllSpaces((prev) =>
+            prev.map((s) =>
+              s.id === sid
+                ? { ...s, recorded: true, recording_url: data.recordingUrl, is_recording: false }
+                : s,
+            ),
+          );
+        }
+      } else if (event.type === "space:recording-deleted") {
+        const sid = event.spaceId || event.data?.spaceId;
+        if (sid) applyRecordingDeleted(sid);
       }
     },
-    ["space:created", "space:ended", "space:listeners"],
+    ["space:created", "space:ended", "space:listeners", "space:recording", "space:recording-deleted"],
   );
 
   // Auto-open space if spaceId is provided in URL
@@ -350,6 +392,33 @@ function SpacesPage() {
       );
       return { ...prev, [spaceId]: next };
     });
+  }
+
+  /** Drop a room's replay from the list state and close any open modal on it. */
+  function applyRecordingDeleted(spaceId: string) {
+    setAllSpaces((prev) =>
+      prev.map((s) =>
+        s.id === spaceId
+          ? { ...s, recorded: false, recording_url: undefined, is_recording: false, replay_count: 0 }
+          : s,
+      ),
+    );
+    setActiveSpace((cur) => (cur && cur.id === spaceId ? null : cur));
+  }
+
+  async function confirmDeleteRecording() {
+    if (!deleteTarget || deletingRecording) return;
+    setDeletingRecording(true);
+    try {
+      await deleteSpaceRecording(deleteTarget.id);
+      applyRecordingDeleted(deleteTarget.id);
+      toast.success("Recording deleted");
+      setDeleteTarget(null);
+    } catch (err: any) {
+      toast.error(friendlyError(err, "Couldn't delete the recording. Please try again."));
+    } finally {
+      setDeletingRecording(false);
+    }
   }
 
   async function handleCreateSpace(e: React.FormEvent) {
@@ -405,9 +474,11 @@ function SpacesPage() {
   // A Space is a replay only once a recording has actually been saved to
   // storage (`recorded` + a real `recording_url`). Ending a never-recorded room
   // must not create a dead "Listen Replay" entry, and a scheduled room that
-  // hasn't gone live belongs in Upcoming — not Recorded.
+  // hasn't gone live belongs in Upcoming — not Recorded. Recordings are the
+  // host's property: other users never see them (mirrors the `spaces public
+  // read` RLS and the recordings/ media ACL).
   const isRecordedSpace = (s: (typeof allSpaces)[number]) =>
-    Boolean(s.recorded && s.recording_url);
+    Boolean(s.recorded && s.recording_url && s.host_id === currentUser.id);
   // A scheduled room is "Upcoming" only while its start time is still ahead of
   // now; once it is past due and never went live it has no tab.
   const isUpcomingSpace = (s: (typeof allSpaces)[number]) => {
@@ -526,6 +597,7 @@ function SpacesPage() {
                   onJoin={(sp) => setActiveSpace(sp)}
                   onRemind={handleRemind}
                   isReminded={Boolean(reminders[s.id])}
+                  onDeleteRecording={(sp) => setDeleteTarget(sp)}
                 />
               ))}
 
@@ -549,6 +621,48 @@ function SpacesPage() {
         isOpen={Boolean(activeSpace)}
         onClose={() => setActiveSpace(null)}
       />
+
+      {/* Delete Recording Confirmation Dialog */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div
+            className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 text-rose-500">
+              <span className="p-2.5 rounded-2xl bg-rose-500/15">
+                <Trash2 className="h-6 w-6" />
+              </span>
+              <div>
+                <h3 className="text-base font-black">Delete this recording?</h3>
+                <p className="text-xs text-muted-foreground">This can't be undone.</p>
+              </div>
+            </div>
+            <p className="text-xs text-foreground/80 leading-relaxed">
+              The replay of “{deleteTarget.title}” will be removed for you and every listener. The
+              room's chat transcript stays as it is.
+            </p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="flex-1 rounded-2xl border border-border py-2.5 text-xs font-bold hover:bg-muted cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteRecording}
+                disabled={deletingRecording}
+                className="flex-1 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white py-2.5 text-xs font-bold shadow-soft cursor-pointer disabled:opacity-60 flex items-center justify-center gap-1.5"
+              >
+                {deletingRecording && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Delete Recording
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Space Dialog */}
       {showCreateModal && (

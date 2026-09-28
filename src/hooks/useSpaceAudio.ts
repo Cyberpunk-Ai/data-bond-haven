@@ -64,26 +64,56 @@ export function useSpaceAudio(opts: {
   // --- Room recording: mixes local + remote audio into one file. Host-only,
   // enforced by the caller; this just does the capture/upload-ready blob work.
   const recorder = useRef<MediaRecorder | null>(null);
-  const recordCtx = useRef<AudioContext | null>(null);
   const recordChunks = useRef<Blob[]>([]);
   const recordBytesRef = useRef(0);
   const recordMaxBytesRef = useRef(0);
   const recordResolve = useRef<((blob: Blob) => void) | null>(null);
   const onRecordOverLimit = useRef<(() => void) | null>(null);
+  // One persistent mixer for the room recording. It lives for the whole session
+  // so a peer who joins AFTER recording started is still captured: the local mic
+  // and every remote stream are tapped into the same MediaStreamDestination, and
+  // MediaRecorder records that live, continuously-growing mixed stream.
+  const mixCtx = useRef<AudioContext | null>(null);
+  const mixDest = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const mixed = useRef<Set<MediaStream>>(new Set());
+
+  /** Route one MediaStream into the recording mix exactly once. */
+  function tapStream(stream: MediaStream) {
+    const ctx = mixCtx.current;
+    const dest = mixDest.current;
+    if (!ctx || !dest || mixed.current.has(stream)) return;
+    try {
+      ctx.createMediaStreamSource(stream).connect(dest);
+      mixed.current.add(stream);
+    } catch {
+      /* stream may not be ready yet; a later connect will retry */
+    }
+  }
+
+  /** Lazily create the persistent mix and (re)tap the local microphone. */
+  function ensureMix(): MediaStreamAudioDestinationNode | null {
+    try {
+      if (!mixCtx.current || mixCtx.current.state === "closed") {
+        mixCtx.current = new AudioContext();
+        mixDest.current = mixCtx.current.createMediaStreamDestination();
+        mixed.current = new Set();
+      }
+      if (localStream.current) tapStream(localStream.current);
+      return mixDest.current;
+    } catch {
+      return null;
+    }
+  }
 
   function startRecording(maxBytes: number, overLimit?: () => void): boolean {
     if (recorder.current) return false;
     try {
-      const ctx = new AudioContext();
-      const dest = ctx.createMediaStreamDestination();
-      if (localStream.current) ctx.createMediaStreamSource(localStream.current).connect(dest);
-      for (const stream of remoteStreams.current.values()) {
-        try {
-          ctx.createMediaStreamSource(stream).connect(dest);
-        } catch {
-          /* stream may not be ready yet */
-        }
-      }
+      const dest = ensureMix();
+      if (!dest) return false;
+      // Tap everyone already connected; peers who arrive later are tapped from
+      // `ontrack`, so the mix (and this recorder) always holds the full room.
+      for (const stream of remoteStreams.current.values()) tapStream(stream);
+      void mixCtx.current?.resume().catch(() => undefined);
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : "audio/webm";
@@ -104,7 +134,6 @@ export function useSpaceAudio(opts: {
       };
       mr.start(1000);
       recorder.current = mr;
-      recordCtx.current = ctx;
       setIsRecordingLocally(true);
       return true;
     } catch {
@@ -123,8 +152,8 @@ export function useSpaceAudio(opts: {
       mr.onstop = () => {
         const blob = new Blob(recordChunks.current, { type: mr.mimeType || "audio/webm" });
         recordChunks.current = [];
-        void recordCtx.current?.close();
-        recordCtx.current = null;
+        // Keep the mixer alive so a re-record (and any peer who joined while we
+        // were stopped) is captured without rebuilding every source node.
         recorder.current = null;
         setIsRecordingLocally(false);
         recordResolve.current?.(blob);
@@ -217,6 +246,8 @@ export function useSpaceAudio(opts: {
         }
         el.srcObject = stream;
         void el.play().catch(() => undefined);
+        // Capture peers who join after recording started by tapping them live.
+        tapStream(stream);
         watchLevel(peerId, stream);
       };
       let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -342,6 +373,22 @@ export function useSpaceAudio(opts: {
       [...pcs.current.keys()].forEach(closePeer);
       localStream.current?.getTracks().forEach((t) => t.stop());
       localStream.current = null;
+      if (recorder.current && recorder.current.state !== "inactive") {
+        try {
+          recorder.current.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      recorder.current = null;
+      try {
+        void mixCtx.current?.close();
+      } catch {
+        /* ignore */
+      }
+      mixCtx.current = null;
+      mixDest.current = null;
+      mixed.current = new Set();
       sfuAdapter?.leave();
       void supabase.removeChannel(channel);
       setStatus("idle");

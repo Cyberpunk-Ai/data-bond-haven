@@ -17,6 +17,11 @@ export interface AccentDefinition {
   brand: string;
   brandPink: string;
   brandOrange: string;
+  // Lighter variants used on the dark canvas so brand-colored small text and
+  // icons clear WCAG AA; the base values are tuned for the light background.
+  brandDark: string;
+  brandPinkDark: string;
+  brandOrangeDark: string;
 }
 
 export const ACCENT_PALETTES: Record<ThemeAccent, AccentDefinition> = {
@@ -27,6 +32,9 @@ export const ACCENT_PALETTES: Record<ThemeAccent, AccentDefinition> = {
     brand: "oklch(0.541 0.281 293.009)",
     brandPink: "oklch(0.656 0.241 354.308)",
     brandOrange: "oklch(0.705 0.213 47.604)",
+    brandDark: "oklch(0.69 0.2 293)",
+    brandPinkDark: "oklch(0.76 0.17 354)",
+    brandOrangeDark: "oklch(0.8 0.15 47)",
   },
   amber: {
     id: "amber",
@@ -35,6 +43,9 @@ export const ACCENT_PALETTES: Record<ThemeAccent, AccentDefinition> = {
     brand: "oklch(0.66 0.21 55)",
     brandPink: "oklch(0.62 0.22 35)",
     brandOrange: "oklch(0.75 0.18 65)",
+    brandDark: "oklch(0.79 0.16 55)",
+    brandPinkDark: "oklch(0.76 0.17 35)",
+    brandOrangeDark: "oklch(0.84 0.13 65)",
   },
   emerald: {
     id: "emerald",
@@ -43,6 +54,9 @@ export const ACCENT_PALETTES: Record<ThemeAccent, AccentDefinition> = {
     brand: "oklch(0.62 0.19 155)",
     brandPink: "oklch(0.65 0.16 180)",
     brandOrange: "oklch(0.72 0.15 140)",
+    brandDark: "oklch(0.76 0.15 155)",
+    brandPinkDark: "oklch(0.79 0.12 180)",
+    brandOrangeDark: "oklch(0.82 0.12 140)",
   },
   rose: {
     id: "rose",
@@ -51,6 +65,9 @@ export const ACCENT_PALETTES: Record<ThemeAccent, AccentDefinition> = {
     brand: "oklch(0.58 0.24 15)",
     brandPink: "oklch(0.64 0.22 350)",
     brandOrange: "oklch(0.68 0.21 30)",
+    brandDark: "oklch(0.73 0.18 15)",
+    brandPinkDark: "oklch(0.77 0.16 350)",
+    brandOrangeDark: "oklch(0.79 0.15 30)",
   },
   indigo: {
     id: "indigo",
@@ -59,6 +76,9 @@ export const ACCENT_PALETTES: Record<ThemeAccent, AccentDefinition> = {
     brand: "oklch(0.52 0.24 265)",
     brandPink: "oklch(0.60 0.22 290)",
     brandOrange: "oklch(0.65 0.18 220)",
+    brandDark: "oklch(0.69 0.19 265)",
+    brandPinkDark: "oklch(0.74 0.17 290)",
+    brandOrangeDark: "oklch(0.78 0.14 220)",
   },
 };
 
@@ -142,11 +162,11 @@ export function applyThemeToDOM(settings: ThemeSettings) {
     root.classList.remove("dark");
   }
 
-  // 2. Accent color variables
+  // 2. Accent color variables (lighter on the dark canvas for AA contrast)
   const palette = ACCENT_PALETTES[settings.accent] || ACCENT_PALETTES.violet;
-  root.style.setProperty("--brand", palette.brand);
-  root.style.setProperty("--brand-pink", palette.brandPink);
-  root.style.setProperty("--brand-orange", palette.brandOrange);
+  root.style.setProperty("--brand", isDark ? palette.brandDark : palette.brand);
+  root.style.setProperty("--brand-pink", isDark ? palette.brandPinkDark : palette.brandPink);
+  root.style.setProperty("--brand-orange", isDark ? palette.brandOrangeDark : palette.brandOrange);
 
   // 3. Reduced motion
   if (settings.reduceMotion) {
