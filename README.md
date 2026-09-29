@@ -34,8 +34,32 @@ npm run dev                 # http://localhost:8080
 Production shape:
 
 ```sh
-npm run build && npm start  # node .output/server/index.mjs, port 3000
+npm run build && npm start  # serves .output/server/index.mjs on port 3000
 ```
+
+### Commands and the URL each one prints
+
+| Command               | What you get                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------ |
+| `npm run dev`         | Vite dev SSR on **http://localhost:8080** (if 8080 is taken Vite moves to 8081 and says so)      |
+| `npm run dev:open`    | same, and hands the link to your default browser                                                 |
+| `npm run build`       | production bundle in `.output/` (Nitro `node-server`, pre-compressed assets)                     |
+| `npm start`           | serves that bundle on **http://localhost:3000** — checks the build exists and the port is free   |
+| `npm start -- --open` | same, opens the browser once the port answers                                                    |
+| `npm run preview`     | `npm run build` then serve, one command                                                          |
+| `npm run serve`       | the bare `node .output/server/index.mjs` — what a container should run so the server keeps PID 1 |
+
+Nitro's build hint ("you can preview this build using `npx vite preview`") does
+not apply here: `vite preview` looks for `dist/server/server.js`, while Nitro
+writes everything to `.output/` — so `preview` is wired to the build-and-serve
+runner instead. Stop any running server before rebuilding: on Windows a live
+server holds `.output/` open and `vite build` aborts with `ENOTEMPTY` (which is
+also why `npm run preview` refuses to start while the port is busy).
+
+Both servers honour `PORT` (shell, then `.env`) and `HOST`; `npm start -- --port
+3005` overrides for one run. To open the app from a phone or tablet, use the
+LAN address the banner prints — it names each adapter, so you can pick your Wi-Fi
+over a VPN or VirtualBox range — because the server binds every interface.
 
 Everything else: `npm run typecheck`, `npm run test`, `npm run lint`,
 `npm run format`, `npm run db:migrate` (+ `:status` / `:dry` / `db:backup` /

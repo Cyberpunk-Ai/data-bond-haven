@@ -2,14 +2,13 @@ import { defineConfig, loadEnv } from "vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import tsConfigPaths from "vite-tsconfig-paths";
 import { nitro } from "nitro/vite";
 import { fileURLToPath } from "node:url";
 
 // Neutral Vite/TanStack Start configuration (no editor-coupled presets).
 // Composes the same plugins the previous managed config provided:
-//   tailwindcss, tsconfig path alias, TanStack Start (SSR), React, and
-//   Nitro (build-only, Cloudflare Module Worker preset).
+//   tailwindcss, the `@` path alias below, TanStack Start (SSR), React, and
+//   Nitro (build-only, portable node-server preset).
 export default defineConfig(({ command, mode }) => {
   // Mirror .env into process.env for the Node process that runs dev/preview
   // SSR. Vite only exposes VITE_* keys to client code via import.meta.env —
@@ -56,7 +55,9 @@ export default defineConfig(({ command, mode }) => {
     },
     plugins: [
       tailwindcss(),
-      tsConfigPaths({ projects: ["./tsconfig.json"] }),
+      // The `@` alias above is the single source of truth for imports: tsconfig.json
+      // declares no `paths`, so the vite-tsconfig-paths plugin resolved nothing and
+      // only printed a deprecation notice on every dev/preview/build start.
       tanstackStart({
         // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
         server: { entry: "server" },
