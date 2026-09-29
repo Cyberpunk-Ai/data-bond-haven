@@ -2417,7 +2417,7 @@ export async function getAdminOverview(
         storage_usage_bytes: 0,
         error_rate_percent: 0,
         db_driver: "postgres",
-        memory_mb: Math.round((process.memoryUsage?.().heapUsed ?? 0) / 1024 / 1024),
+        memory_mb: nodeMemoryMb(),
       },
     },
     storage_usage_breakdown: {
@@ -2524,6 +2524,15 @@ async function buildAdminCharts(totals: {
 function process_uptime() {
   if (typeof performance !== "undefined") return performance.now() / 1000;
   return 0;
+}
+
+/** Live heap size, or 0 when the caller isn't Node. `process` is an undeclared
+ *  identifier in the browser, so `process.memoryUsage?.()` still throws
+ *  ReferenceError — only `typeof` may test it. This throw sits inside the
+ *  overview payload, so it rejected an otherwise successful page of stats. */
+function nodeMemoryMb(): number {
+  if (typeof process === "undefined") return 0;
+  return Math.round((process.memoryUsage?.().heapUsed ?? 0) / 1024 / 1024);
 }
 
 // ---------------------------------------------------------------------------

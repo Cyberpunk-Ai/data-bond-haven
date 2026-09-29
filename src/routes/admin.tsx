@@ -6,6 +6,7 @@ import { getAdminOverview } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-state";
 import { supabase } from "@/integrations/supabase/client";
 import { currentUser } from "@/lib/profile-service";
+import { friendlyError } from "@/lib/error-messages";
 import type { AdminOverviewData, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -74,6 +75,7 @@ function AdminPage() {
   const [activeRole, setActiveRole] = useState<UserRole>("moderator");
   const [tab, setTab] = useState<(typeof TABS)[number]>("overview");
   const [overview, setOverview] = useState<AdminOverviewData | null>(null);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [access, setAccess] = useState<"checking" | "granted" | "denied">("checking");
 
@@ -119,8 +121,14 @@ function AdminPage() {
       // `force` skips the short overview cache — the header refresh button
       // should always re-run the aggregations, tab switches should not.
       setOverview(await getAdminOverview({ force }));
-    } catch {
+      setOverviewError(null);
+    } catch (err) {
+      // Swallowing this used to blame the visitor's connection for whatever it
+      // actually was (a bad column, a throw in the payload builder). Staff see
+      // the reason, and the console keeps the stack.
+      console.error("[admin] overview failed", err);
       setOverview(null);
+      setOverviewError(friendlyError(err, "The stats request didn't complete."));
     } finally {
       setRefreshing(false);
     }
@@ -223,7 +231,9 @@ function AdminPage() {
       {tab === "overview" && !overview && !refreshing && (
         <div className="rounded-2xl border border-border bg-card p-8 text-center">
           <p className="text-sm font-bold">We couldn't load the dashboard stats.</p>
-          <p className="mt-1 text-xs text-muted-foreground">Check your connection and try again.</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {overviewError ?? "Check your connection and try again."}
+          </p>
           <button
             onClick={() => void load(true)}
             className="mt-4 rounded-full bg-brand px-4 py-2 text-xs font-bold text-white hover:opacity-90 transition-opacity cursor-pointer"
