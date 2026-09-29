@@ -225,7 +225,7 @@ export function MonetizationHub() {
           <p className="text-muted-foreground">
             Withdrawals are sent automatically to your payout account. We verify the account with
             our payment provider once, then store only an encrypted payout token and the last four
-            digits — never the full number, and never any card details.
+            digits 
           </p>
         </div>
       </div>

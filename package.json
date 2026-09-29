@@ -16,6 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "node scripts/db-migrate.mjs",
+    "db:backup": "node scripts/db-backup.mjs",
+    "db:restore": "node scripts/db-restore.mjs",
     "db:migrate:status": "node scripts/db-migrate.mjs --status",
     "db:migrate:dry": "node scripts/db-migrate.mjs --dry-run",
     "db:migrate:baseline": "node scripts/db-migrate.mjs --baseline"
