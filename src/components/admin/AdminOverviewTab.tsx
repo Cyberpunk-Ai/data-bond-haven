@@ -114,7 +114,7 @@ export function AdminOverviewTab({ overview, activeRole, onNavigateTab }: AdminO
     {
       title: "Tipping Activity",
       value: `${stats.total_tips_count?.toLocaleString() ?? 0} tips`,
-      subtext: `${(stats.tips_currency ?? "NGN")} ${(stats.total_tips_amount ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} sent`,
+      subtext: `${stats.tips_currency ?? "NGN"} ${(stats.total_tips_amount ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} sent`,
       icon: HandCoins,
       iconColor: "text-amber-600 dark:text-amber-400",
       bgGradient: "from-amber-500/10 to-yellow-500/10",
@@ -377,7 +377,10 @@ export function AdminOverviewTab({ overview, activeRole, onNavigateTab }: AdminO
                         ? "bg-emerald-500"
                         : "bg-brand";
                 return (
-                  <div key={a.id} className="flex items-start gap-2.5 rounded-xl px-2 py-2 hover:bg-foreground/5">
+                  <div
+                    key={a.id}
+                    className="flex items-start gap-2.5 rounded-xl px-2 py-2 hover:bg-foreground/5"
+                  >
                     <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", dot)} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-xs font-bold text-foreground">
@@ -388,7 +391,10 @@ export function AdminOverviewTab({ overview, activeRole, onNavigateTab }: AdminO
                         <p className="truncate text-[0.7rem] text-muted-foreground">{a.details}</p>
                       )}
                     </div>
-                    <TimeAgo iso={a.created_at} className="shrink-0 text-[0.65rem] text-muted-foreground" />
+                    <TimeAgo
+                      iso={a.created_at}
+                      className="shrink-0 text-[0.65rem] text-muted-foreground"
+                    />
                   </div>
                 );
               })
@@ -430,13 +436,16 @@ export function AdminOverviewTab({ overview, activeRole, onNavigateTab }: AdminO
                       {tip.recipient}
                     </p>
                     {tip.message && (
-                      <p className="truncate text-[0.7rem] text-muted-foreground">“{tip.message}”</p>
+                      <p className="truncate text-[0.7rem] text-muted-foreground">
+                        “{tip.message}”
+                      </p>
                     )}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-3 text-right">
                   <span className="text-xs font-extrabold text-amber-600 dark:text-amber-400">
-                    {tip.currency} {tip.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    {tip.currency}{" "}
+                    {tip.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                   </span>
                   <TimeAgo iso={tip.created_at} className="text-[0.65rem] text-muted-foreground" />
                 </div>

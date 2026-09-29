@@ -63,7 +63,7 @@ function BillingCallback() {
   }, []);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
       <div className="w-full max-w-md rounded-3xl border border-border/60 bg-card p-8 text-center shadow-soft">
         <div className="flex justify-center">
           {state === "loading" && <Loader2 className="h-10 w-10 animate-spin text-brand" />}

@@ -29,21 +29,21 @@ function About() {
     >
       <Section title="What we believe">
         <p>
-          <strong className="text-foreground">Conversation beats broadcast.</strong> Every
-          feature is designed around real exchange: replies, live rooms, and private messages
-          that stay private.
+          <strong className="text-foreground">Conversation beats broadcast.</strong> Every feature
+          is designed around real exchange: replies, live rooms, and private messages that stay
+          private.
         </p>
         <p>
-          <strong className="text-foreground">Creators should get paid directly.</strong>{" "}
-          Supporters tip without middlemen deciding who deserves an audience. We keep the
-          platform's cut small and honest: nothing is taken when a tip arrives — a single
-          withdrawal fee (5% on Free, 3% on Plus, 1% on Pro) applies only when a creator
-          cashes out, and it's always shown before they confirm.
+          <strong className="text-foreground">Creators should get paid directly.</strong> Supporters
+          tip without middlemen deciding who deserves an audience. We keep the platform's cut small
+          and honest: nothing is taken when a tip arrives — a single withdrawal fee (5% on Free, 3%
+          on Plus, 1% on Pro) applies only when a creator cashes out, and it's always shown before
+          they confirm.
         </p>
         <p>
-          <strong className="text-foreground">Your data is yours.</strong> We don't sell
-          personal information and we don't run a surveillance advertising model. The service
-          is funded by subscriptions, not by your attention being auctioned.
+          <strong className="text-foreground">Your data is yours.</strong> We don't sell personal
+          information and we don't run a surveillance advertising model. The service is funded by
+          subscriptions, not by your attention being auctioned.
         </p>
       </Section>
 
@@ -53,10 +53,13 @@ function About() {
           <li>Host or join live audio Spaces with your community.</li>
           <li>Message and call people you follow — privately.</li>
           <li>
-            Build with a team: workspace profiles with roles, shared posting, team tips and
-            team analytics.
+            Build with a team: workspace profiles with roles, shared posting, team tips and team
+            analytics.
           </li>
-          <li>Earn from your work: tips in USD, transparent withdrawals to local banks and mobile money, worldwide.</li>
+          <li>
+            Earn from your work: tips in USD, transparent withdrawals to local banks and mobile
+            money, worldwide.
+          </li>
           <li>Understand your audience with real analytics computed from your own posts.</li>
           <li>Build on the platform with the developer API and webhooks.</li>
         </ul>
@@ -66,8 +69,8 @@ function About() {
         <p>
           Creators who want a direct relationship with their audience — writers, musicians,
           educators, podcasters, devs, small studios and community teams — and the people who
-          support them. The platform is global by default: balances in dollars, payouts to
-          local currencies, and content in your own language.
+          support them. The platform is global by default: balances in dollars, payouts to local
+          currencies, and content in your own language.
         </p>
       </Section>
 

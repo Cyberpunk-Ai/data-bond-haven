@@ -694,7 +694,21 @@ function MessagesPage() {
       const ext = file.name.split(".").pop()?.toLowerCase() || "";
       const isMedia =
         /^(image|video|audio)\//.test(file.type) ||
-        ["png", "jpg", "jpeg", "webp", "gif", "avif", "mp4", "webm", "mov", "mp3", "wav", "ogg", "m4a"].includes(ext);
+        [
+          "png",
+          "jpg",
+          "jpeg",
+          "webp",
+          "gif",
+          "avif",
+          "mp4",
+          "webm",
+          "mov",
+          "mp3",
+          "wav",
+          "ogg",
+          "m4a",
+        ].includes(ext);
       const previewUrl = /^(image|video)\//.test(file.type) ? URL.createObjectURL(file) : "";
       return {
         id: `att_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 7)}`,
@@ -965,7 +979,11 @@ function MessagesPage() {
             m.conversation_id === event.conversationId &&
             m.sender_id === currentUserId &&
             !m.read_at
-              ? { ...m, read_at: event.at || new Date().toISOString(), delivered_at: m.delivered_at || event.at }
+              ? {
+                  ...m,
+                  read_at: event.at || new Date().toISOString(),
+                  delivered_at: m.delivered_at || event.at,
+                }
               : m,
           ),
         );
@@ -974,7 +992,9 @@ function MessagesPage() {
       if (event.type === "message:delivered" && event.conversationId) {
         setAll((prev) =>
           prev.map((m) =>
-            m.conversation_id === event.conversationId && m.sender_id === currentUserId && !m.delivered_at
+            m.conversation_id === event.conversationId &&
+            m.sender_id === currentUserId &&
+            !m.delivered_at
               ? { ...m, delivered_at: event.at || new Date().toISOString() }
               : m,
           ),
@@ -1357,7 +1377,7 @@ function MessagesPage() {
 
   return (
     <AppShell title="Messages">
-      <div className="glass-panel grid h-[calc(100vh-8.5rem)] grid-cols-1 overflow-hidden rounded-3xl shadow-soft lg:h-[calc(100vh-3rem)] lg:grid-cols-[20rem_1fr]">
+      <div className="glass-panel grid h-[calc(100dvh-8.5rem)] grid-cols-1 overflow-hidden rounded-3xl shadow-soft lg:h-[calc(100dvh-3rem)] lg:grid-cols-[20rem_1fr]">
         {/* conversation list */}
         <div
           className={cn(
@@ -1722,7 +1742,9 @@ function MessagesPage() {
                                 {mine && (
                                   <span
                                     className="flex items-center gap-0.5 ml-1"
-                                    title={m.read_at ? "Seen" : m.delivered_at ? "Delivered" : "Sent"}
+                                    title={
+                                      m.read_at ? "Seen" : m.delivered_at ? "Delivered" : "Sent"
+                                    }
                                   >
                                     {m.read_at ? (
                                       <CheckCheck className="h-3.5 w-3.5 text-sky-300" />
@@ -2064,7 +2086,7 @@ function MessagesPage() {
       {showNewMsgModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in">
           <div
-            className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl space-y-4"
+            className="w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto custom-scrollbar rounded-3xl border border-border bg-card p-6 shadow-2xl space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -2135,7 +2157,7 @@ function MessagesPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in"
           onClick={() => setLightboxImage(null)}
         >
-          <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
+          <div className="relative max-w-4xl max-h-[90dvh] flex flex-col items-center">
             <button
               onClick={() => setLightboxImage(null)}
               className="absolute -top-12 right-0 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 transition-colors cursor-pointer"
@@ -2146,7 +2168,7 @@ function MessagesPage() {
             <AuthorizedImg
               src={lightboxImage}
               alt="Full Preview"
-              className="max-h-[80vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
+              className="max-h-[80dvh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             />
             <div className="mt-4 flex items-center gap-3">

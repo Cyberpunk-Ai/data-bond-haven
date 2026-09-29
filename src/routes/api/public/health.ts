@@ -18,15 +18,20 @@ export const Route = createFileRoute("/api/public/health")({
       GET: async ({ request }) => {
         const cors = apiCorsHeaders(request.headers.get("origin"));
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        // Probed through the storage abstraction, never a named vendor: an R2
+        // or B2 deployment must not read as "media degraded" just because it no
+        // longer uses the Supabase bucket.
+        const { getStorageProvider } = await import("@/lib/storage/index.server");
 
         const [dbRes, mediaRes] = await Promise.allSettled([
           (supabaseAdmin as any).from("profiles").select("id", { count: "exact", head: true }),
-          (supabaseAdmin as any).storage.from("media").list("", { limit: 1 }),
+          getStorageProvider().verifyAccess(),
         ]);
         const dbOk =
-          dbRes.status === "fulfilled" && !dbRes.value.error && typeof dbRes.value.count === "number";
-        const mediaOk =
-          mediaRes.status === "fulfilled" && !mediaRes.value.error && Array.isArray(mediaRes.value.data);
+          dbRes.status === "fulfilled" &&
+          !dbRes.value.error &&
+          typeof dbRes.value.count === "number";
+        const mediaOk = mediaRes.status === "fulfilled" && mediaRes.value.ok === true;
 
         const services = [
           { id: "app", label: "App & API", status: "operational" as const },

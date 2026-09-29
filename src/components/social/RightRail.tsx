@@ -349,11 +349,7 @@ export function RailFooter() {
   return (
     <p className="px-4 text-xs leading-relaxed text-muted-foreground">
       {links.map((l) => (
-        <Link
-          key={l.to}
-          to={l.to}
-          className="mr-2 inline-block transition-colors hover:text-brand"
-        >
+        <Link key={l.to} to={l.to} className="mr-2 inline-block transition-colors hover:text-brand">
           {l.label}
         </Link>
       ))}

@@ -44,6 +44,15 @@ export function StoryModal({
   const [replyText, setReplyText] = useState("");
   const [sendingReply, setSendingReply] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Optimistic like state for the story currently open. Writing back into the
+  // `stories` prop mutated a shared object and only re-rendered when the parent
+  // happened to pass a callback, which could leave the heart and its count out
+  // of sync for a frame or two.
+  const [likeOverride, setLikeOverride] = useState<{
+    id: string;
+    liked: boolean;
+    count: number;
+  } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -55,6 +64,14 @@ export function StoryModal({
   const currentStory = stories[currentIndex];
   const author: Profile | undefined = currentStory ? getProfile(currentStory.user_id) : undefined;
   const isMyStory = currentStory?.user_id === currentUserId;
+
+  // What the heart button shows: our in-flight answer for this story if we just
+  // tapped it, otherwise the hydrated props. Both halves come from one snapshot,
+  // so a filled heart is never paired with a count that ignores it.
+  const likedNow =
+    likeOverride?.id === currentStory?.id ? likeOverride.liked : Boolean(currentStory?.likedByMe);
+  const likesNow =
+    likeOverride?.id === currentStory?.id ? likeOverride.count : currentStory?.likes_count || 0;
 
   // Story images are follow-network media now: resolve the signed URL the
   // media proxy accepts (a no-op for public/gradient stories).
@@ -87,6 +104,8 @@ export function StoryModal({
   // Reset progress when index changes
   useEffect(() => {
     setProgress(0);
+    // Move the optimistic like on: it describes the story that was open.
+    setLikeOverride(null);
   }, [currentIndex]);
 
   // Keyboard navigation
@@ -120,20 +139,24 @@ export function StoryModal({
 
   async function handleLike() {
     if (!currentStory) return;
+    const storyId = currentStory.id;
+    const apply = (liked: boolean, count: number) => setLikeOverride({ id: storyId, liked, count });
+
+    apply(!likedNow, Math.max(0, likesNow + (likedNow ? -1 : 1)));
     try {
-      const res = await toggleLikeStory(currentStory.id);
-      currentStory.likedByMe = res.liked;
-      currentStory.likes_count = res.likesCount;
-      onStoryLikeToggled?.(currentStory.id, res.liked, res.likesCount);
+      const res = await toggleLikeStory(storyId);
+      // Flag and tally arrive from the same write, so the filled heart and the
+      // number beside it always move together.
+      apply(res.liked, res.likesCount);
+      onStoryLikeToggled?.(storyId, res.liked, res.likesCount);
       if (res.liked) {
         toast.success("Liked story ❤️");
       }
-    } catch {
-      // Local fallback
-      currentStory.likedByMe = !currentStory.likedByMe;
-      currentStory.likes_count =
-        (currentStory.likes_count || 0) + (currentStory.likedByMe ? 1 : -1);
-      onStoryLikeToggled?.(currentStory.id, !!currentStory.likedByMe, currentStory.likes_count);
+    } catch (err) {
+      // Put back exactly what was there: a heart that stayed behind after a
+      // failed request is the inconsistency people notice.
+      apply(likedNow, likesNow);
+      toast.error(friendlyError(err, "Couldn't like that story — try again in a moment."));
     }
   }
 
@@ -205,7 +228,7 @@ export function StoryModal({
       {/* Main Story Container */}
       <div
         className={cn(
-          "relative flex flex-col justify-between h-[92vh] sm:h-[85vh] max-h-[680px] w-full max-w-sm overflow-hidden rounded-2xl sm:rounded-[32px] p-4 sm:p-5 shadow-2xl bg-gradient-to-b text-white border border-white/15 select-none transition-all",
+          "relative flex flex-col justify-between h-[92dvh] sm:h-[85dvh] max-h-[680px] w-full max-w-sm overflow-hidden rounded-2xl sm:rounded-[32px] p-4 sm:p-5 shadow-2xl bg-gradient-to-b text-white border border-white/15 select-none transition-all",
           !currentStory.media_url && gradientClass,
         )}
         style={
@@ -373,15 +396,16 @@ export function StoryModal({
               <button
                 type="button"
                 onClick={handleLike}
+                aria-pressed={likedNow}
                 className={cn(
                   "flex items-center gap-1.5 rounded-full px-3 py-2.5 backdrop-blur-md transition-all active:scale-90",
-                  currentStory.likedByMe
+                  likedNow
                     ? "bg-rose-500 text-white shadow-soft"
                     : "bg-white/15 text-white hover:bg-white/25",
                 )}
               >
-                <Heart className={cn("h-4 w-4", currentStory.likedByMe && "fill-current")} />
-                <span className="text-xs font-bold">{currentStory.likes_count || 0}</span>
+                <Heart className={cn("h-4 w-4", likedNow && "fill-current")} />
+                <span className="text-xs font-bold">{likesNow}</span>
               </button>
             )}
           </form>

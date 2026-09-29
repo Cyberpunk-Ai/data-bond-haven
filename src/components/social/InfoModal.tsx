@@ -87,7 +87,7 @@ export function InfoModal({ type, isOpen, onClose }: InfoModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div
-        className="glass-panel relative w-full max-w-md overflow-hidden rounded-3xl p-6 shadow-2xl border border-border/80 bg-card/95"
+        className="glass-panel relative w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto custom-scrollbar rounded-3xl p-6 shadow-2xl border border-border/80 bg-card/95"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between pb-4 border-b border-border/60">

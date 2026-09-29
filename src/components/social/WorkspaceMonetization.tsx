@@ -195,9 +195,7 @@ export function WorkspaceMonetization({ workspaceId }: { workspaceId: string }) 
           <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
             Total earned
           </span>
-          <span className="block text-2xl font-black">
-            {usd(data.totalEarnings)}
-          </span>
+          <span className="block text-2xl font-black">{usd(data.totalEarnings)}</span>
         </div>
         <div className="rounded-3xl border border-emerald-500/30 bg-emerald-500/5 p-5 space-y-1.5 shadow-soft">
           <span className="text-xs font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
@@ -270,7 +268,11 @@ export function WorkspaceMonetization({ workspaceId }: { workspaceId: string }) 
                   className="flex items-center justify-between p-3 rounded-2xl bg-foreground/5 text-xs"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <Avatar name={t.senderName} src={t.senderAvatar} className="h-8 w-8 text-xs shrink-0" />
+                    <Avatar
+                      name={t.senderName}
+                      src={t.senderAvatar}
+                      className="h-8 w-8 text-xs shrink-0"
+                    />
                     <div className="min-w-0">
                       <p className="font-bold truncate">{t.senderName}</p>
                       <p className="text-[10px] text-muted-foreground truncate">
@@ -283,7 +285,10 @@ export function WorkspaceMonetization({ workspaceId }: { workspaceId: string }) 
                       +{usd(t.amount)}
                     </span>
                     {t.message && (
-                      <p className="text-[10px] text-muted-foreground italic truncate max-w-[140px]" title={t.message}>
+                      <p
+                        className="text-[10px] text-muted-foreground italic truncate max-w-[140px]"
+                        title={t.message}
+                      >
                         {t.message}
                       </p>
                     )}
@@ -312,17 +317,22 @@ export function WorkspaceMonetization({ workspaceId }: { workspaceId: string }) 
                   className="flex items-center justify-between p-3 rounded-2xl bg-foreground/5 text-xs"
                 >
                   <div className="min-w-0">
-                    <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-extrabold capitalize", statusTone(p.status))}>
+                    <span
+                      className={cn(
+                        "px-2 py-0.5 rounded-full text-[10px] font-extrabold capitalize",
+                        statusTone(p.status),
+                      )}
+                    >
                       {p.status}
                     </span>
                     <p className="mt-1 text-[10px] text-muted-foreground">
                       {new Date(p.createdAt).toLocaleDateString()}
                     </p>
-                    {p.failureReason && <p className="text-[10px] text-rose-500">{p.failureReason}</p>}
+                    {p.failureReason && (
+                      <p className="text-[10px] text-rose-500">{p.failureReason}</p>
+                    )}
                   </div>
-                  <span className="shrink-0 font-black">
-                    {usd(p.amount)}
-                  </span>
+                  <span className="shrink-0 font-black">{usd(p.amount)}</span>
                 </div>
               ))
             )}
@@ -332,7 +342,7 @@ export function WorkspaceMonetization({ workspaceId }: { workspaceId: string }) 
 
       {isWithdrawOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-xl space-y-5">
+          <div className="w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto custom-scrollbar rounded-3xl border border-border bg-card p-6 shadow-xl space-y-5">
             <div>
               <h3 className="text-lg font-black">Withdraw team earnings</h3>
               <p className="text-xs text-muted-foreground">
@@ -400,7 +410,11 @@ export function WorkspaceMonetization({ workspaceId }: { workspaceId: string }) 
                   disabled={busy}
                   className="flex min-h-[40px] items-center gap-1.5 rounded-full bg-emerald-600 hover:bg-emerald-700 px-5 py-2 text-xs font-bold text-white shadow-soft transition-all disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  {busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  {busy ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="h-3.5 w-3.5" />
+                  )}
                   <span>{busy ? "Sending…" : "Withdraw now"}</span>
                 </button>
               </div>

@@ -15,7 +15,9 @@ export const editPost = createServerFn({ method: "POST" })
     if (!postId) throw new Error("Missing post id");
     if (!content) throw new Error("Post content can't be empty");
     if (content.length > 5000) throw new Error("Post is too long");
-    const tags = Array.isArray(d.tags) ? d.tags.filter((t) => typeof t === "string").slice(0, 10) : undefined;
+    const tags = Array.isArray(d.tags)
+      ? d.tags.filter((t) => typeof t === "string").slice(0, 10)
+      : undefined;
     return { postId, content, tags };
   })
   .middleware([requireSupabaseAuth])

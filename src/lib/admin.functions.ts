@@ -55,6 +55,20 @@ export const listAccessLevels = createServerFn({ method: "GET" })
     return map;
   });
 
+/**
+ * Which object store the platform is writing to right now, plus a live
+ * credential probe. Administrators only, and deliberately without secrets: the
+ * bucket name and endpoint host only. This is what tells you that the R2 (or
+ * B2 / Spaces / MinIO) credentials you just added were actually picked up.
+ */
+export const getStorageStatus = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await assertAdmin(context);
+    const mod = await import("@/lib/storage/index.server");
+    return await mod.storageStatus();
+  });
+
 /** Grants or removes admin / moderator access for a member. */
 export const setAccessLevel = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -108,6 +122,67 @@ export const setAccessLevel = createServerFn({ method: "POST" })
     if (auditError) console.error("access audit write failed:", auditError.message);
 
     return { profileId: target.id, username: target.username, role: dbRole ?? "user" };
+  });
+
+/**
+ * Copy over the objects that still only exist in a retired bucket, so media
+ * keeps working after `STORAGE_PROVIDER` moves to R2 (or back to Supabase) even
+ * once the old store's credentials leave the environment. Keys are preserved,
+ * existing objects are never overwritten and nothing is deleted, so this is
+ * idempotent — each call is bounded, so run it until it reports `exhausted`.
+ * Administrators only, and a real copy is audited.
+ */
+export const relocateLegacyMedia = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        dryRun: z.boolean().default(false),
+        limit: z.number().int().min(1).max(500).default(100),
+        maxBytes: z
+          .number()
+          .int()
+          .min(1)
+          .max(200 * 1024 * 1024)
+          .default(32 * 1024 * 1024),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const actorAuthId = await assertAdmin(context);
+    const mod = await import("@/lib/storage/relocate.server");
+    const reports = await mod.relocateLegacyMedia(data);
+    const moved = reports.reduce((sum, report) => sum + report.copied, 0);
+
+    if (!data.dryRun && moved > 0) {
+      const admin = await getAdmin();
+      const { data: actor } = await admin
+        .from("profiles")
+        .select("id, display_name, username")
+        .eq("auth_user_id", actorAuthId)
+        .maybeSingle();
+      const { error: auditError } = await admin.from("audit_logs").insert({
+        actor_id: actor?.id ?? null,
+        actor_name: actor?.display_name || actor?.username || "Administrator",
+        actor_role: "admin",
+        action: "storage.relocate",
+        // The whole bucket is the target, so there is no single row id here and
+        // `audit_logs.target_id` is NOT NULL — the route reads from the details.
+        target_type: "media",
+        target_id: "",
+        details: reports.map((report) => mod.describeRelocate(report)).join("; "),
+        severity: "info",
+      });
+      if (auditError) console.error("storage relocation audit write failed:", auditError.message);
+    }
+
+    return {
+      dryRun: data.dryRun,
+      reports: reports.map((report) => ({
+        ...report,
+        summary: mod.describeRelocate(report, data.dryRun),
+      })),
+    };
   });
 
 /** Does the signed-in person have console access? */

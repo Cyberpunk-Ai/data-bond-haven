@@ -30,12 +30,7 @@ export function TeamAvatar({
   halo?: boolean;
   className?: string;
 }) {
-  const box =
-    size === "lg"
-      ? "h-20 w-20 sm:h-24 sm:w-24"
-      : size === "md"
-        ? "h-11 w-11"
-        : "h-9 w-9";
+  const box = size === "lg" ? "h-20 w-20 sm:h-24 sm:w-24" : size === "md" ? "h-11 w-11" : "h-9 w-9";
   const emojiText = size === "lg" ? "text-3xl" : size === "md" ? "text-lg" : "text-base";
 
   return (

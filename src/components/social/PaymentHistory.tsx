@@ -74,7 +74,10 @@ export function PaymentHistory() {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-3">
-              <span className="text-sm font-black" title={`${row.majorAmount.toFixed(2)} ${row.currency} charged at checkout`}>
+              <span
+                className="text-sm font-black"
+                title={`${row.majorAmount.toFixed(2)} ${row.currency} charged at checkout`}
+              >
                 {usd(row.quoted_amount_usd ?? row.majorAmount)}
               </span>
               <span

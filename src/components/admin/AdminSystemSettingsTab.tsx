@@ -19,6 +19,7 @@ import {
   Server,
 } from "lucide-react";
 import { getAdminSettings, updateAdminSettings, syncSupabaseDatabase } from "@/lib/api-client";
+import { getStorageStatus, relocateLegacyMedia } from "@/lib/admin.functions";
 import { useRealtime } from "@/lib/realtime";
 import type { SystemSettings, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -39,7 +40,71 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
     counts: Record<string, number>;
     durationMs: number;
   } | null>(null);
+  // Which object store the platform is actually writing to — set by the
+  // STORAGE_PROVIDER / S3_* / R2_* environment, never by a switch in here.
+  // `mirrors` are older stores whose objects stay readable after a switch.
+  const [storage, setStorage] = useState<{
+    id: string;
+    label: string;
+    bucket: string;
+    endpoint?: string;
+    ok: boolean;
+    detail?: string;
+    mirrors?: Array<{
+      id: string;
+      label: string;
+      bucket: string;
+      endpoint?: string;
+      ok: boolean;
+      detail?: string;
+    }>;
+  } | null>(null);
+  const [checkingStorage, setCheckingStorage] = useState(false);
+  // Relocating a legacy bucket is a two-step, deliberately boring operation:
+  // count what is missing first (dry run), then copy. Reports come back per
+  // legacy store, so an operator can see every hop accounted for.
+  const [relocating, setRelocating] = useState<"check" | "copy" | null>(null);
+  const [relocateReports, setRelocateReports] = useState<string[]>([]);
+  const [relocateExhausted, setRelocateExhausted] = useState(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const handleCheckStorage = async () => {
+    try {
+      setCheckingStorage(true);
+      setStorage((await getStorageStatus()) as never);
+    } catch (err: any) {
+      toast.error(friendlyError(err, "Couldn't read the storage backend status."));
+    } finally {
+      setCheckingStorage(false);
+    }
+  };
+
+  const runRelocate = async (dryRun: boolean) => {
+    try {
+      setRelocating(dryRun ? "check" : "copy");
+      const res = await relocateLegacyMedia({
+        data: { dryRun, limit: 500, maxBytes: 200 * 1024 * 1024 },
+      });
+      const reports = res.reports ?? [];
+      setRelocateReports(reports.map((report) => String(report.summary)));
+      setRelocateExhausted(reports.length > 0 && reports.every((report) => report.exhausted));
+      if (!reports.length) {
+        setRelocateReports(["No other object store is configured, so nothing needs relocating."]);
+        toast.info("Nothing to relocate — only one storage backend is configured.");
+      } else if (dryRun) {
+        toast.success("Legacy bucket scan finished: review the counts before copying.");
+      } else {
+        toast.success("Legacy objects copied into the active bucket.");
+        // The mirror list is what tells you a legacy store is still needed, so
+        // refresh it after a full copy rather than leaving a stale card.
+        setStorage((await getStorageStatus()) as never);
+      }
+    } catch (err: any) {
+      toast.error(friendlyError(err, "Couldn't work through the legacy bucket. Try again."));
+    } finally {
+      setRelocating(null);
+    }
+  };
 
   const handleSyncDatabase = async () => {
     try {
@@ -68,6 +133,8 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
 
   useEffect(() => {
     fetchSettings();
+    void handleCheckStorage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useRealtime({
@@ -332,12 +399,77 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
           <div className="rounded-2xl border border-border bg-foreground/5 p-4 space-y-1">
             <div className="flex items-center gap-2">
               <Server className="h-4 w-4 text-brand" />
-              <span className="text-xs font-bold text-foreground">Storage Buckets</span>
+              <span className="text-xs font-bold text-foreground">Storage Backend</span>
             </div>
-            <p className="text-sm font-black text-foreground">Supabase Storage</p>
+            <p className="text-sm font-black text-foreground">{storage?.label ?? "Reading…"}</p>
             <p className="text-[0.7rem] text-muted-foreground">
-              avatars, posts, media, spaces, public-assets
+              {storage ? (
+                <>
+                  bucket <span className="font-semibold">{storage.bucket}</span>
+                  {storage.endpoint ? ` · ${storage.endpoint}` : ""} ·{" "}
+                  <span className={storage.ok ? "text-emerald-600" : "text-rose-500"}>
+                    {storage.ok ? "credentials verified" : (storage.detail ?? "unreachable")}
+                  </span>
+                </>
+              ) : (
+                "avatars, posts, stories, messages, recordings"
+              )}
             </p>
+            {storage?.mirrors?.length ? (
+              <p className="text-[0.7rem] text-muted-foreground">
+                Also readable (legacy objects):{" "}
+                {storage.mirrors.map((mirror, i) => (
+                  <span key={mirror.id}>
+                    {i > 0 ? ", " : ""}
+                    <span className="font-semibold text-foreground">{mirror.label}</span>{" "}
+                    <span className={mirror.ok ? "text-emerald-600" : "text-rose-500"}>
+                      ({mirror.ok ? `"${mirror.bucket}" reachable` : "credentials failed"})
+                    </span>
+                  </span>
+                ))}
+              </p>
+            ) : null}
+            <button
+              onClick={handleCheckStorage}
+              disabled={checkingStorage}
+              className="mt-1 flex min-h-9 items-center gap-1.5 text-[0.65rem] font-bold text-brand hover:underline disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw className={cn("h-3 w-3", checkingStorage && "animate-spin")} />
+              Re-check after an .env change
+            </button>
+            {storage?.mirrors?.length ? (
+              <div className="pt-1">
+                <p className="text-[0.65rem] text-muted-foreground">
+                  Stored paths are backend-agnostic, so switching buckets never breaks a row — but
+                  objects uploaded before the switch only exist in the legacy bucket. Copy them
+                  across to retire its credentials safely.
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => runRelocate(true)}
+                    disabled={relocating !== null || !canEditSettings}
+                    className="flex min-h-9 items-center gap-1.5 rounded-xl border border-border bg-background/70 px-2.5 text-[0.65rem] font-bold text-foreground hover:border-brand/50 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <Layers className={cn("h-3 w-3", relocating === "check" && "animate-spin")} />
+                    <span>{relocating === "check" ? "Scanning…" : "Check what's missing"}</span>
+                  </button>
+                  <button
+                    onClick={() => runRelocate(false)}
+                    disabled={relocating !== null || !canEditSettings}
+                    className="flex min-h-9 items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/15 px-2.5 text-[0.65rem] font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <Upload className={cn("h-3 w-3", relocating === "copy" && "animate-spin")} />
+                    <span>
+                      {relocating === "copy"
+                        ? "Copying…"
+                        : relocateExhausted
+                          ? "Copy legacy objects"
+                          : "Continue copying"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-2xl border border-border bg-foreground/5 p-4 space-y-1">
@@ -349,6 +481,23 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
             <p className="text-[0.7rem] text-muted-foreground">Sub-millisecond pub/sub channel</p>
           </div>
         </div>
+
+        {relocateReports.length > 0 && (
+          <div className="rounded-2xl border border-border bg-foreground/5 p-4 space-y-1.5 text-xs">
+            <p className="text-[0.68rem] font-bold uppercase tracking-wider text-muted-foreground">
+              Legacy bucket relocation
+            </p>
+            {relocateReports.map((summary) => (
+              <p key={summary} className="text-[0.72rem] text-foreground">
+                {summary}
+              </p>
+            ))}
+            <p className="text-[0.68rem] text-muted-foreground">
+              Objects already in the active bucket are never overwritten and nothing is deleted, so
+              it is safe to run this again.
+            </p>
+          </div>
+        )}
 
         {syncResult && (
           <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-2 text-xs animate-in fade-in">

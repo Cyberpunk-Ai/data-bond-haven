@@ -98,7 +98,7 @@ export function ReportTargetModal({ report, onClose }: ReportTargetModalProps) {
       aria-label={`Reported ${report.target_type} preview`}
     >
       <div
-        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl border border-border bg-card p-5 shadow-2xl"
+        className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
@@ -155,7 +155,9 @@ export function ReportTargetModal({ report, onClose }: ReportTargetModalProps) {
 
         {state === "ready" && loaded?.kind === "post" && <PostBody post={loaded.post} />}
         {state === "ready" && loaded?.kind === "user" && <UserBody profile={loaded.profile} />}
-        {state === "ready" && loaded?.kind === "comment" && <CommentBody comment={loaded.comment} />}
+        {state === "ready" && loaded?.kind === "comment" && (
+          <CommentBody comment={loaded.comment} />
+        )}
         {state === "ready" && loaded?.kind === "story" && <StoryBody story={loaded.story} />}
         {state === "ready" && loaded?.kind === "space" && <SpaceBody space={loaded.space} />}
 
@@ -189,8 +191,7 @@ function TargetGlyph({ type }: { type: string }) {
 
 function getExternalLink(loaded: Loaded | null, report: ModerationReport) {
   if (!loaded) return null;
-  if (loaded.kind === "post")
-    return { href: `/post/${report.target_id}`, label: "Open post page" };
+  if (loaded.kind === "post") return { href: `/post/${report.target_id}`, label: "Open post page" };
   if (loaded.kind === "user" && loaded.profile.username)
     return { href: `/u/${loaded.profile.username}`, label: "Open profile" };
   if (loaded.kind === "comment" && loaded.comment.post_id)
@@ -293,7 +294,10 @@ function PostBody({ post }: { post: Post }) {
       {post.tags.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {post.tags.map((t) => (
-            <span key={t} className="rounded-lg bg-brand/10 px-2 py-0.5 text-[0.68rem] font-semibold text-brand">
+            <span
+              key={t}
+              className="rounded-lg bg-brand/10 px-2 py-0.5 text-[0.68rem] font-semibold text-brand"
+            >
               #{t}
             </span>
           ))}
@@ -322,7 +326,11 @@ function UserBody({ profile }: { profile: Profile }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3">
-        <Avatar name={profile.display_name} src={profile.avatar_url} className="h-12 w-12 text-sm" />
+        <Avatar
+          name={profile.display_name}
+          src={profile.avatar_url}
+          className="h-12 w-12 text-sm"
+        />
         <div className="min-w-0">
           <p className="truncate text-sm font-bold">
             {profile.display_name}
@@ -402,7 +410,9 @@ function StoryBody({ story }: { story: Story }) {
         </div>
       ) : null}
       {(story.text || story.caption) && !story.gradient && (
-        <p className="whitespace-pre-wrap break-words text-sm font-medium">{story.text || story.caption}</p>
+        <p className="whitespace-pre-wrap break-words text-sm font-medium">
+          {story.text || story.caption}
+        </p>
       )}
       <div className="flex gap-4 border-t border-border/60 pt-3 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
@@ -431,7 +441,9 @@ function SpaceBody({ space }: { space: Space }) {
       {space.topic && <p className="text-xs text-foreground">{space.topic}</p>}
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
-          <Radio className={cn("h-3.5 w-3.5", space.live ? "text-emerald-500" : "text-muted-foreground")} />
+          <Radio
+            className={cn("h-3.5 w-3.5", space.live ? "text-emerald-500" : "text-muted-foreground")}
+          />
           {space.live ? "LIVE right now" : "Ended"}
         </span>
         <span>🎙 {space.host_name || getProfile(space.host_id).display_name}</span>

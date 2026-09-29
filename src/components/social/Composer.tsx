@@ -23,10 +23,13 @@ import { currentUser } from "@/lib/profile-service";
 import { createPost, uploadMedia } from "@/lib/api-client";
 import { AiDraftModal } from "@/components/social/AiDraftModal";
 import { useAuth } from "@/lib/auth-state";
+import { appConfig } from "@/lib/config";
+import { usePlatform } from "@/lib/platform-state";
 import { useWorkspace } from "@/lib/workspace-state";
 import { cn } from "@/lib/utils";
 
-const LIMIT = 1000;
+// Env-tunable (VITE_MAX_POST_LENGTH) and always below the server's hard ceiling.
+const LIMIT = appConfig.limits.postLength;
 
 const sampleLocations = [
   "San Francisco, CA",
@@ -73,6 +76,9 @@ export function Composer({
   // Active posting identity: personal account or a team workspace the user can
   // post to (Owner/Admin/Editor). Switching in the sidebar updates this live.
   const { activeWorkspace, canPost: canPostAsWorkspace } = useWorkspace();
+  // Toggles from the admin console: the AI assistant disappears with the
+  // subsystem, and posting is refused (not just hidden) during maintenance.
+  const { aiEnabled, maintenanceBlocked } = usePlatform();
   const postAsBrand = Boolean(activeWorkspace && canPostAsWorkspace);
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
@@ -134,6 +140,7 @@ export function Composer({
   }
   const hasValidPoll = showPollBuilder && pollErrors.length === 0;
   const canPost =
+    !maintenanceBlocked &&
     (draft.trim().length > 0 ||
       attachedMedia.length > 0 ||
       selectedGradient ||
@@ -575,7 +582,10 @@ export function Composer({
                 </div>
 
                 <div>
-                  <label htmlFor="poll-question" className="mb-1 block text-xs font-semibold text-foreground">
+                  <label
+                    htmlFor="poll-question"
+                    className="mb-1 block text-xs font-semibold text-foreground"
+                  >
                     Question
                   </label>
                   <input
@@ -746,15 +756,17 @@ export function Composer({
                   <MapPin className="h-[1.1rem] w-[1.1rem]" />
                 </button>
 
-                {/* AI draft assistant */}
-                <button
-                  type="button"
-                  title="AI Spark Assistant"
-                  onClick={() => setShowAiModal(true)}
-                  className="rounded-full p-2 transition-all duration-200 hover:bg-brand/10 active:scale-90 text-brand min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
-                >
-                  <Sparkles className="h-[1.1rem] w-[1.1rem]" />
-                </button>
+                {/* AI draft assistant — only while the console leaves the subsystem on */}
+                {aiEnabled && (
+                  <button
+                    type="button"
+                    title="AI Spark Assistant"
+                    onClick={() => setShowAiModal(true)}
+                    className="rounded-full p-2 transition-all duration-200 hover:bg-brand/10 active:scale-90 text-brand min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+                  >
+                    <Sparkles className="h-[1.1rem] w-[1.1rem]" />
+                  </button>
+                )}
               </div>
 
               <div className="flex items-center gap-2.5 sm:gap-3 ml-auto shrink-0">

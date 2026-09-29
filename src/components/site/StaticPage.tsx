@@ -27,10 +27,13 @@ export function StaticPage({
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-dvh bg-background text-foreground">
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
-          <Link to="/" className="text-lg font-extrabold tracking-tight">
+          <Link
+            to="/"
+            className="inline-flex min-h-9 items-center text-lg font-extrabold tracking-tight"
+          >
             {appConfig.brand.name}
           </Link>
           <nav className="hidden gap-5 text-sm text-muted-foreground md:flex">
@@ -38,7 +41,7 @@ export function StaticPage({
               <Link
                 key={n.to}
                 to={n.to}
-                className="transition-colors hover:text-foreground"
+                className="inline-flex min-h-9 items-center transition-colors hover:text-foreground"
                 activeProps={{ className: "text-foreground font-semibold" }}
               >
                 {n.label}
@@ -65,7 +68,15 @@ export function StaticPage({
   );
 }
 
-export function Section({ title, children, id }: { title: string; children: ReactNode; id?: string }) {
+export function Section({
+  title,
+  children,
+  id,
+}: {
+  title: string;
+  children: ReactNode;
+  id?: string;
+}) {
   return (
     <section id={id} className="scroll-mt-24">
       <h2 className="text-xl font-bold tracking-tight">{title}</h2>
@@ -118,11 +129,16 @@ export function SiteFooter() {
           </div>
           {cols.map((c) => (
             <div key={c.title}>
-              <p className="mb-4 text-xs font-bold uppercase tracking-wider text-foreground">{c.title}</p>
+              <p className="mb-4 text-xs font-bold uppercase tracking-wider text-foreground">
+                {c.title}
+              </p>
               <ul className="space-y-3 text-sm text-muted-foreground">
                 {c.links.map((l) => (
                   <li key={l.label}>
-                    <Link to={l.to} className="transition-colors hover:text-brand">
+                    <Link
+                      to={l.to}
+                      className="inline-flex min-h-9 items-center transition-colors hover:text-brand"
+                    >
                       {l.label}
                     </Link>
                   </li>
@@ -135,7 +151,10 @@ export function SiteFooter() {
           <p>
             © {new Date().getFullYear()} {appConfig.brand.name}. All rights reserved.
           </p>
-          <a href={`mailto:${appConfig.brand.supportEmail}`} className="hover:text-foreground">
+          <a
+            href={`mailto:${appConfig.brand.supportEmail}`}
+            className="inline-flex min-h-9 items-center hover:text-foreground"
+          >
             {appConfig.brand.supportEmail}
           </a>
         </div>

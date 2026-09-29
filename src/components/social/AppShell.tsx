@@ -1,17 +1,9 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
-
-/** True only after the first client paint. SSR and the very first client render
- * both see `false`, so anything gated behind it renders a neutral placeholder on
- * the server and swaps in real user data afterwards — this avoids the auth-driven
- * hydration mismatch where SSR knows the visitor as a guest but the client has
- * already resolved a session. */
-function useMounted() {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  return mounted;
-}
+// useMounted() gates auth-derived UI: SSR sees a guest, the client may already
+// have a session, so anything that differs renders only after the first paint.
+import { useMounted } from "@/hooks/use-mounted";
 import {
   Home,
   Compass,
@@ -34,6 +26,8 @@ import { Avatar } from "@/components/social/Avatar";
 import { BrandLogo } from "@/components/BrandLogo";
 import { UserBadge } from "@/components/social/UserBadge";
 import { AnnouncementBanner } from "@/components/social/AnnouncementBanner";
+import { MaintenanceBanner } from "@/components/social/MaintenanceBanner";
+import { usePlatform } from "@/lib/platform-state";
 import { currentUser } from "@/lib/profile-service";
 import { useWorkspace } from "@/lib/workspace-state";
 import { useAuth } from "@/lib/auth-state";
@@ -171,7 +165,9 @@ function Sidebar({
               title={item.name}
               aria-label={`Switch to ${item.name} accent theme`}
               className={cn(
-                "h-4.5 w-4.5 rounded-full bg-gradient-to-r transition-transform hover:scale-125 cursor-pointer shrink-0",
+                // 18px dots are too small to aim at on a phone, so the hit area
+                // grows by the 6px gap on every side without moving the layout.
+                "relative h-4.5 w-4.5 shrink-0 cursor-pointer rounded-full bg-gradient-to-r transition-transform before:absolute before:-inset-1.5 before:content-[''] hover:scale-125",
                 item.gradientClass,
                 isSelected
                   ? "ring-2 ring-foreground ring-offset-1 ring-offset-card scale-110"
@@ -218,7 +214,7 @@ function Sidebar({
           </p>
           <button
             onClick={() => openUpgradeModal("Sidebar Upgrade")}
-            className="mt-2.5 w-full rounded-xl bg-gradient-to-r from-brand to-brand-pink py-1.5 text-center font-extrabold text-white shadow-xs hover:brightness-105 transition-all text-[0.72rem]"
+            className="mt-2.5 inline-flex min-h-9 w-full items-center justify-center rounded-xl bg-gradient-to-r from-brand to-brand-pink px-3 py-1.5 text-center font-extrabold text-white shadow-xs hover:brightness-105 transition-all text-[0.72rem] cursor-pointer"
           >
             Upgrade for $9/mo
           </button>
@@ -338,7 +334,9 @@ function WorkspaceSwitcher({ mounted = true }: { mounted?: boolean }) {
         }}
         className="w-full rounded-2xl border border-border/70 bg-foreground/[0.03] px-3 py-2 text-xs font-bold outline-none focus:border-brand"
       >
-        <option value="personal">👤 {mounted ? currentUser.display_name || "Personal" : "Personal"}</option>
+        <option value="personal">
+          👤 {mounted ? currentUser.display_name || "Personal" : "Personal"}
+        </option>
         {workspaces.map((ws) => (
           <option key={ws.id} value={ws.id} disabled={ws.myRole === "Viewer"}>
             {ws.logoEmoji} {ws.name}
@@ -376,6 +374,9 @@ export function AppShell({
   // Live notification toasts on every page, not just the notifications tab.
   useNotificationToasts();
   const { isDark, toggleTheme } = useTheme();
+  // Maintenance Mode hides the compose affordance for restricted accounts:
+  // the write would be refused anyway, so offering it is only a failed toast.
+  const { maintenanceBlocked } = usePlatform();
 
   // Smart floating compose button visibility on scroll
   const [isFabVisible, setIsFabVisible] = useState(true);
@@ -418,7 +419,7 @@ export function AppShell({
   ];
 
   return (
-    <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
+    <div className="min-h-dvh bg-background text-foreground overflow-x-hidden">
       {/* ambient background */}
       <div className="pointer-events-none fixed inset-0 z-0 opacity-25 overflow-hidden">
         <div className="absolute -left-20 -top-20 h-[24rem] w-[24rem] rounded-full bg-violet-400/30 blur-[100px]" />
@@ -426,7 +427,7 @@ export function AppShell({
       </div>
 
       {/* mobile top bar */}
-      <header className="sticky top-0 z-40 flex items-center justify-between px-3.5 py-2.5 bg-card/90 backdrop-blur-md border-b border-border/80 lg:hidden shadow-xs">
+      <header className="sticky top-0 z-40 flex items-center justify-between px-3.5 pt-[calc(0.625rem+env(safe-area-inset-top,0px))] pb-2.5 bg-card/90 backdrop-blur-md border-b border-border/80 lg:hidden shadow-xs">
         <div className="flex items-center gap-2">
           <button
             onClick={() => setOpen(true)}
@@ -451,7 +452,7 @@ export function AppShell({
           </Link>
         </div>
 
-        <Link to="/" className="flex items-center gap-1.5">
+        <Link to="/" className="flex min-h-11 items-center gap-1.5">
           <BrandLogo className="h-7 w-7" />
           <span className="text-lg font-extrabold tracking-tight">Spaces1</span>
         </Link>
@@ -490,7 +491,7 @@ export function AppShell({
         />
         <aside
           className={cn(
-            "absolute left-0 top-0 h-full w-[18rem] max-w-[85vw] bg-card border-r border-border/80 rounded-r-3xl p-5 shadow-2xl transition-transform duration-300 ease-out overflow-y-auto custom-scrollbar",
+            "absolute left-0 top-0 h-full w-[18rem] max-w-[85vw] bg-card border-r border-border/80 rounded-r-3xl p-5 pt-[calc(1.25rem+env(safe-area-inset-top,0px))] pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))] shadow-2xl transition-transform duration-300 ease-out overflow-y-auto custom-scrollbar",
             open ? "translate-x-0" : "-translate-x-full",
           )}
         >
@@ -510,42 +511,48 @@ export function AppShell({
         </aside>
       </div>
 
-      <div className="relative z-10 mx-auto flex w-full max-w-[90rem] gap-6 px-3 sm:px-4 pb-28 lg:px-6 lg:pb-0 lg:h-screen lg:overflow-hidden">
-        <aside className="hidden h-screen w-[17rem] shrink-0 overflow-y-auto custom-scrollbar py-6 lg:block">
+      <div className="relative z-10 mx-auto flex w-full max-w-[90rem] gap-6 px-3 sm:px-4 pb-28 lg:px-6 lg:pb-0 lg:h-dvh lg:overflow-hidden">
+        <aside className="hidden h-dvh w-[17rem] shrink-0 overflow-y-auto custom-scrollbar py-6 lg:block">
           <Sidebar unreadMessages={unreadMessages} unreadNotifications={unreadNotifications} />
         </aside>
 
-        <main id="app-main" className="min-w-0 flex-1 py-4 sm:py-6 lg:h-full lg:overflow-y-auto custom-scrollbar lg:pr-1.5">
+        <main
+          id="app-main"
+          className="min-w-0 flex-1 py-4 sm:py-6 lg:h-full lg:overflow-y-auto custom-scrollbar lg:pr-1.5"
+        >
+          <MaintenanceBanner />
           <AnnouncementBanner />
           {children}
         </main>
 
         {right && (
-          <aside className="hidden h-screen w-[21rem] shrink-0 overflow-y-auto custom-scrollbar py-6 xl:block">
+          <aside className="hidden h-dvh w-[21rem] shrink-0 overflow-y-auto custom-scrollbar py-6 xl:block">
             {right}
           </aside>
         )}
       </div>
 
       {/* Mobile Floating Compose Button */}
-      <Link
-        to="/feed"
-        search={{ compose: "true" }}
-        onClick={() => {
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("spaces:trigger_compose"));
-          }
-        }}
-        aria-label="Create post"
-        className={cn(
-          "fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] right-4 sm:right-6 z-40 flex h-13 w-13 min-h-[48px] min-w-[48px] aspect-square items-center justify-center rounded-full bg-gradient-to-r from-brand to-brand-pink text-white shadow-glow transition-all duration-300 hover:scale-105 active:scale-95 lg:hidden cursor-pointer shrink-0",
-          isFabVisible
-            ? "translate-y-0 opacity-100 scale-100 pointer-events-auto"
-            : "translate-y-12 opacity-0 scale-75 pointer-events-none",
-        )}
-      >
-        <Feather className="h-5.5 w-5.5" />
-      </Link>
+      {!maintenanceBlocked && (
+        <Link
+          to="/feed"
+          search={{ compose: "true" }}
+          onClick={() => {
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("spaces:trigger_compose"));
+            }
+          }}
+          aria-label="Create post"
+          className={cn(
+            "fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] right-4 sm:right-6 z-40 flex h-13 w-13 min-h-[48px] min-w-[48px] aspect-square items-center justify-center rounded-full bg-gradient-to-r from-brand to-brand-pink text-white shadow-glow transition-all duration-300 hover:scale-105 active:scale-95 lg:hidden cursor-pointer shrink-0",
+            isFabVisible
+              ? "translate-y-0 opacity-100 scale-100 pointer-events-auto"
+              : "translate-y-12 opacity-0 scale-75 pointer-events-none",
+          )}
+        >
+          <Feather className="h-5.5 w-5.5" />
+        </Link>
+      )}
 
       <UpgradeModal />
 

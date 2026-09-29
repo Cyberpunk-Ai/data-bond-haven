@@ -202,7 +202,7 @@ export function CallModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
       <div
-        className="glass-panel relative flex flex-col justify-between h-[85vh] max-h-[640px] w-full max-w-md overflow-hidden rounded-3xl p-5 shadow-2xl bg-gradient-to-b from-slate-900 via-slate-950 to-black text-white border border-white/10"
+        className="glass-panel relative flex flex-col justify-between h-[85dvh] max-h-[640px] w-full max-w-md overflow-hidden rounded-3xl p-5 shadow-2xl bg-gradient-to-b from-slate-900 via-slate-950 to-black text-white border border-white/10"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Floating live reaction hearts/emojis */}

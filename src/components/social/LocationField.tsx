@@ -27,7 +27,10 @@ export function LocationField({ onSelect, fallback }: Props) {
       setLoading(true);
       try {
         const url = `${appConfig.geocoder.url}?format=json&limit=6&q=${encodeURIComponent(q)}`;
-        const res = await fetch(url, { signal: ctrl.signal, headers: { Accept: "application/json" } });
+        const res = await fetch(url, {
+          signal: ctrl.signal,
+          headers: { Accept: "application/json" },
+        });
         const json = (await res.json()) as Array<{ display_name: string }>;
         setResults(json.map((r) => r.display_name.split(",").slice(0, 3).join(",").trim()));
       } catch {

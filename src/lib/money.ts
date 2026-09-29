@@ -144,7 +144,9 @@ export function usdToSettlement({ usd, usdRate, maxSettlement }: UsdToSettlement
   const rate = Number(usdRate) > 0 ? Number(usdRate) : 130;
   const converted = round2(Math.max(0, Number(usd || 0)) * rate);
   const ceiling = Number(maxSettlement);
-  return Number.isFinite(ceiling) && ceiling >= 0 ? Math.min(converted, round2(ceiling)) : converted;
+  return Number.isFinite(ceiling) && ceiling >= 0
+    ? Math.min(converted, round2(ceiling))
+    : converted;
 }
 
 /** Platform fee, in bps (integer basis points), applied to a minor amount. */

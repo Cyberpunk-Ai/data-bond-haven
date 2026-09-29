@@ -101,8 +101,8 @@ export function TeamWorkspaceManager() {
             <div>
               <h3 className="text-base font-extrabold">Your teams</h3>
               <p className="text-xs text-muted-foreground">
-                You're currently posting as Personal. Open a team desk to manage members, seats
-                and branding.
+                You're currently posting as Personal. Open a team desk to manage members, seats and
+                branding.
               </p>
             </div>
             <div className="space-y-2">
@@ -118,8 +118,7 @@ export function TeamWorkspaceManager() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-extrabold">{w.name}</p>
                       <p className="truncate text-[0.7rem] text-muted-foreground">
-                        @{w.slug} · {w.members.length}/{w.seatsTotal} seats ·{" "}
-                        {w.myRole ?? "Member"}
+                        @{w.slug} · {w.members.length}/{w.seatsTotal} seats · {w.myRole ?? "Member"}
                       </p>
                     </div>
                   </div>
@@ -357,7 +356,7 @@ export function TeamWorkspaceManager() {
           onClick={() => setIsInviteModalOpen(false)}
         >
           <div
-            className="w-full max-w-md rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4"
+            className="w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto custom-scrollbar rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -567,17 +566,28 @@ function WorkspaceCreator({
     <form onSubmit={submit} className="space-y-4">
       <div className="flex items-center gap-3">
         {/* Logo upload from device, exactly like the profile photo flow. */}
-        <label className="relative shrink-0 cursor-pointer group" title="Upload a logo from your device">
+        <label
+          className="relative shrink-0 cursor-pointer group"
+          title="Upload a logo from your device"
+        >
           <input type="file" accept="image/*" className="sr-only" onChange={handleLogoChange} />
           {avatarUrl ? (
-            <Avatar name={name || "Team"} src={avatarUrl} className="h-14 w-14 text-lg ring-2 ring-amber-500/40" />
+            <Avatar
+              name={name || "Team"}
+              src={avatarUrl}
+              className="h-14 w-14 text-lg ring-2 ring-amber-500/40"
+            />
           ) : (
             <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-border bg-muted/40 text-xl">
               {emoji.trim() || "✨"}
             </div>
           )}
           <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white shadow-soft ring-2 ring-card group-hover:brightness-110 transition-all">
-            {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+            {uploading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Camera className="h-3 w-3" />
+            )}
           </span>
         </label>
         <div className="grid flex-1 gap-3 sm:grid-cols-[5rem_1fr]">
@@ -624,7 +634,7 @@ function WorkspaceCreator({
         onClick={onClose}
       >
         <div
-          className="w-full max-w-md rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4"
+          className="w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto custom-scrollbar rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center justify-between">
@@ -650,8 +660,8 @@ function WorkspaceCreator({
       <div className="space-y-1">
         <h3 className="text-base font-extrabold">Create your first team workspace</h3>
         <p className="mt-1 text-xs text-muted-foreground max-w-sm mx-auto">
-          A shared brand account your team can post from. You&apos;ll be the Owner and can invite
-          up to 10 members with Admin, Editor, or Viewer roles.
+          A shared brand account your team can post from. You&apos;ll be the Owner and can invite up
+          to 10 members with Admin, Editor, or Viewer roles.
         </p>
       </div>
       <div className="text-left max-w-sm mx-auto">{form}</div>
@@ -781,7 +791,13 @@ function WorkspaceProfileEditor({
               disabled={saving}
               className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-5 py-2 text-xs font-bold text-white shadow-soft hover:brightness-105 transition-all cursor-pointer disabled:opacity-60"
             >
-              {saving ? "Saving…" : <><Check className="h-3.5 w-3.5" /> Save profile</>}
+              {saving ? (
+                "Saving…"
+              ) : (
+                <>
+                  <Check className="h-3.5 w-3.5" /> Save profile
+                </>
+              )}
             </button>
           </div>
         </div>

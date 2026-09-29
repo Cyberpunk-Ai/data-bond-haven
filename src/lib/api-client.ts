@@ -1,7 +1,7 @@
 /**
- * Data access layer for the Spaces1 app. All calls go through the Lovable Cloud
- * backend (Supabase) with defensive mapping so the UI keeps working while the
- * schema evolves.
+ * Data access layer for the Spaces1 app. All calls go through the Supabase
+ * backend (PostgREST + RLS) with defensive mapping so the UI keeps working while
+ * the schema evolves.
  */
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -406,7 +406,43 @@ export async function deletePost(id: string) {
   return { ok: true };
 }
 
-async function toggleRelation(table: string, postId: string, event: string, countField: string) {
+/**
+ * Read a trigger-maintained tally column (`posts.like_count`, `stories.likes_count`).
+ * `null` when the row is unreadable — deleted mid-click, or hidden by the
+ * viewer's access rules — so callers can fall back to a live count.
+ */
+async function readTally(table: string, column: string, id: string): Promise<number | null> {
+  const { data } = await db.from(table).select(column).eq("id", id).maybeSingle();
+  const value = Number((data as Record<string, unknown> | null)?.[column]);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** Live `COUNT(*)` over a join table, used only when there is no tally to read. */
+async function countRows(table: string, column: string, id: string): Promise<number | null> {
+  const { count } = await db
+    .from(table)
+    .select(column, { count: "exact", head: true })
+    .eq(column, id);
+  return count ?? null;
+}
+
+/**
+ * Toggle a (post, viewer) join row and return the viewer's new state together
+ * with the *same* tally the feed renders. The counter columns are maintained by
+ * AFTER triggers with the identical `count(*)` formula, but a toggle that
+ * re-counted the join table itself would report a different number than the one
+ * already on screen whenever a counter had drifted — the heart would fill while
+ * the figure beside it moved the wrong way. Reading the column back after the
+ * write keeps flag and count in one agreement; the count is only a fallback for
+ * relations that have no counter column (bookmarks).
+ */
+async function toggleRelation(
+  table: string,
+  postId: string,
+  event: string,
+  countField: string,
+  tallyColumn?: string,
+) {
   const userId = me();
   if (!isDbId(userId)) throw new Error("Sign in to interact with posts");
   if (!isDbId(postId)) throw new Error("This is sample content and can't be saved.");
@@ -428,11 +464,10 @@ async function toggleRelation(table: string, postId: string, event: string, coun
     if (error && error.code !== "23505") throw new Error(error.message);
   }
 
-  const { count: exactCount } = await db
-    .from(table)
-    .select("post_id", { count: "exact", head: true })
-    .eq("post_id", postId);
-  const count = exactCount ?? (active ? 1 : 0);
+  const count =
+    (tallyColumn ? await readTally("posts", tallyColumn, postId) : null) ??
+    (await countRows(table, "post_id", postId)) ??
+    (active ? 1 : 0);
 
   const result = { active, count };
   emitRealtime(event, { id: postId, postId, [countField]: result.count, active: result.active });
@@ -466,7 +501,13 @@ async function myWorkspaceIds(userId: string): Promise<string[]> {
 }
 
 export async function toggleLikePost(postId: string) {
-  const { active, count } = await toggleRelation("likes", postId, "post_like_updated", "likeCount");
+  const { active, count } = await toggleRelation(
+    "likes",
+    postId,
+    "post_like_updated",
+    "likeCount",
+    "like_count",
+  );
   return { liked: active, likeCount: count, likesCount: count };
 }
 
@@ -507,11 +548,10 @@ export async function toggleRepostPost(postId: string, workspaceId?: string | nu
       if (error && error.code !== "23505") throw new Error(error.message);
     }
 
-    const { count: exactCount } = await db
-      .from("reposts")
-      .select("post_id", { count: "exact", head: true })
-      .eq("post_id", postId);
-    const count = exactCount ?? (active ? 1 : 0);
+    const count =
+      (await readTally("posts", "repost_count", postId)) ??
+      (await countRows("reposts", "post_id", postId)) ??
+      (active ? 1 : 0);
     emitRealtime("post_repost_updated", { id: postId, postId, repostCount: count, active });
     return { reposted: active, repostCount: count };
   }
@@ -571,7 +611,9 @@ export async function toggleRepostPost(postId: string, workspaceId?: string | nu
   const active = ((rows ?? []) as any[]).some(
     (r) => r.user_id === userId || (r.workspace_id && wsIds.includes(String(r.workspace_id))),
   );
-  const count = exactCount ?? 0;
+  // Same tally the feed renders, falling back to a live count only if the post
+  // row is unreadable.
+  const count = (await readTally("posts", "repost_count", postId)) ?? exactCount ?? 0;
 
   emitRealtime("post_repost_updated", { id: postId, postId, repostCount: count, active });
   return { reposted: active, repostCount: count };
@@ -630,11 +672,7 @@ export async function getWorkspaceReposts(workspaceId: string, limit = 50): Prom
   return posts;
 }
 
-export async function addPostComment(
-  postId: string,
-  content: string,
-  parentId?: string | null,
-) {
+export async function addPostComment(postId: string, content: string, parentId?: string | null) {
   const userId = me();
   if (!isDbId(userId)) throw new Error("Sign in to comment");
   if (!isDbId(postId)) throw new Error("This is sample content and can't be commented on.");
@@ -714,11 +752,7 @@ export async function deletePostComment(commentId: string, postId: string) {
   if (!isDbId(userId)) throw new Error("Sign in to delete comments");
   if (!isDbId(commentId)) throw new Error("That comment isn't real yet.");
 
-  const { error } = await db
-    .from("comments")
-    .delete()
-    .eq("id", commentId)
-    .eq("user_id", userId);
+  const { error } = await db.from("comments").delete().eq("id", commentId).eq("user_id", userId);
   if (error) {
     // Surface the failure (e.g. RLS denial for someone else's comment)
     // instead of reporting a delete that never happened.
@@ -843,6 +877,9 @@ function rowToStory(row: any): Story {
     expires_at: row.expires_at ?? nowIso(),
     view_count: row.view_count ?? 0,
     likes_count: row.likes_count ?? 0,
+    // Explicit: `undefined` and `false` rendering the same today is a coincidence
+    // that makes a missing hydration pass invisible.
+    likedByMe: false,
     location: row.location ?? undefined,
     mood: row.mood ?? undefined,
     stickers: row.stickers ?? [],
@@ -862,12 +899,37 @@ export async function getStories(): Promise<Story[]> {
     const stories = (data ?? []).map(rowToStory);
     if (stories.length > 0) {
       await hydrateAuthors(stories.map((s: Story) => s.user_id));
+      await hydrateStoryLikes(stories);
       return stories;
     }
   } catch (err) {
     console.warn("getStories notice:", err);
   }
   return [];
+}
+
+/**
+ * Stamp each story with the viewer's own like. `likes_count` already includes
+ * their like, so without this the story opens with an empty heart next to a
+ * number that counts them — the post feed gets the same treatment from
+ * `hydrateEngagement`.
+ */
+async function hydrateStoryLikes(stories: Story[]) {
+  const userId = me();
+  const ids = dbIds(stories.map((s) => s.id));
+  if (!isDbId(userId) || ids.length === 0) return;
+  try {
+    const { data } = await db
+      .from("story_likes")
+      .select("story_id")
+      .eq("user_id", userId)
+      .in("story_id", ids);
+    const rows = (data ?? []) as { story_id: string }[];
+    const mine = new Set(rows.map((r) => String(r.story_id)));
+    for (const story of stories) story.likedByMe = mine.has(String(story.id));
+  } catch (err) {
+    console.warn("story likes hydration skipped:", err);
+  }
 }
 
 export async function createStory(input: {
@@ -922,22 +984,40 @@ export async function deleteStory(id: string) {
 
 export async function toggleLikeStory(storyId: string) {
   const userId = me();
-  if (!userId || userId === "guest") throw new Error("Sign in to like stories");
-  const { data: existing } = await db
+  if (!isDbId(userId)) throw new Error("Sign in to like stories");
+  if (!isDbId(storyId)) throw new Error("This story is no longer available.");
+
+  const { data: existing, error: readError } = await db
     .from("story_likes")
     .select("story_id")
     .eq("story_id", storyId)
     .eq("user_id", userId)
     .maybeSingle();
-  if (existing) await db.from("story_likes").delete().eq("story_id", storyId).eq("user_id", userId);
-  else await db.from("story_likes").insert({ story_id: storyId, user_id: userId });
+  if (readError) throw new Error(readError.message);
 
-  const { count } = await db
-    .from("story_likes")
-    .select("story_id", { count: "exact", head: true })
-    .eq("story_id", storyId);
-  emitRealtime("story_like_updated", { storyId, liked: !existing, likesCount: count ?? 0 });
-  return { liked: !existing, likesCount: count ?? 0 };
+  const liked = !existing;
+  if (existing) {
+    const { error } = await db
+      .from("story_likes")
+      .delete()
+      .eq("story_id", storyId)
+      .eq("user_id", userId);
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await db.from("story_likes").insert({ story_id: storyId, user_id: userId });
+    // 23505: the (story_id,user_id) primary key already exists — another tab
+    // liked it first, which is the state we were aiming for anyway.
+    if (error && error.code !== "23505") throw new Error(error.message);
+  }
+
+  // Read back the counter the rail and modal render, so the heart and the number
+  // beside it always come from the same write.
+  const likesCount =
+    (await readTally("stories", "likes_count", storyId)) ??
+    (await countRows("story_likes", "story_id", storyId)) ??
+    (liked ? 1 : 0);
+  emitRealtime("story_like_updated", { storyId, liked, likesCount });
+  return { liked, likesCount };
 }
 
 /* --------------------------------------------------------------- profiles */
@@ -1122,7 +1202,9 @@ export async function uploadMedia(
       // browser-inferred code/text MIME can never be rejected, and the reader
       // safely serves it back as a download.
       const isMedia = /^(image|video|audio)\//.test(file.type);
-      const contentType = isMedia ? file.type || "application/octet-stream" : "application/octet-stream";
+      const contentType = isMedia
+        ? file.type || "application/octet-stream"
+        : "application/octet-stream";
       const res = await fetch(`/api/uploads/?folder=${encodeURIComponent(folder)}`, {
         method: "POST",
         headers: {
@@ -1193,7 +1275,11 @@ function spaceStartsLabel(row: any): string | undefined {
   if (row.live || row.recorded || !row.starts_at) return undefined;
   const when = new Date(row.starts_at);
   if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) return undefined;
-  const day = when.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const day = when.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
   const time = when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   return `${day} at ${time}`;
 }
@@ -1552,7 +1638,7 @@ export async function getConversations(): Promise<Conversation[]> {
           ),
       ]);
       const unreadByConversation = new Map<string, number>();
-      for (const row of ((unreadRows?.data ?? []) as any[])) {
+      for (const row of (unreadRows?.data ?? []) as any[]) {
         const key = String(row.conversation_id);
         unreadByConversation.set(key, (unreadByConversation.get(key) ?? 0) + 1);
       }
@@ -2007,7 +2093,7 @@ export async function updateReportStatus(
   const data = await resolveReport({
     data: {
       reportId,
-      status: status as "pending" | "reviewing" | "resolved" | "dismissed",
+      status: status as "pending" | "investigating" | "resolved" | "dismissed",
       ...(actionTaken ? { actionTaken } : {}),
     },
   });
@@ -2136,7 +2222,8 @@ export async function getAdminAuditLogs(filters: { limit?: number; severity?: st
   return (data ?? []) as AuditLog[];
 }
 
-const DEFAULT_SETTINGS: SystemSettings = {
+/** Neutral position of every toggle; also the shape shown before a read lands. */
+export const DEFAULT_SETTINGS: SystemSettings = {
   maintenance_mode: false,
   registration_enabled: true,
   ai_generation_enabled: true,
@@ -2171,6 +2258,10 @@ export async function getAdminSettings(): Promise<SystemSettings> {
   };
 }
 
+/**
+ * The toggle panel, readable by anyone: guests need it too (maintenance banner,
+ * closed-signups notice), and `system_settings` is select-only-public by policy.
+ */
 export async function getPublicSettings(): Promise<SystemSettings> {
   return getAdminSettings();
 }
@@ -2241,15 +2332,15 @@ export async function getAdminOverview(
     safeCount(db.from("likes").select("post_id", { count: "exact", head: true })),
     safeCount(db.from("comments").select("id", { count: "exact", head: true })),
     safeCount(db.from("reposts").select("post_id", { count: "exact", head: true })),
-    safeCount(db.from("profiles").select("id", { count: "exact", head: true }).eq("status", "suspended")),
-    safeCount(db.from("profiles").select("id", { count: "exact", head: true }).eq("verified", true)),
+    safeCount(
+      db.from("profiles").select("id", { count: "exact", head: true }).eq("status", "suspended"),
+    ),
+    safeCount(
+      db.from("profiles").select("id", { count: "exact", head: true }).eq("verified", true),
+    ),
     (async () => {
       try {
-        const r = await db
-          .from("posts")
-          .select("user_id")
-          .gte("created_at", since)
-          .limit(2000);
+        const r = await db.from("posts").select("user_id").gte("created_at", since).limit(2000);
         return (r.data ?? []) as any[];
       } catch {
         return [] as any[];
@@ -2716,7 +2807,8 @@ export async function getCreatorAnalytics(
   const userId = me();
   if (!isDbId(userId)) return EMPTY_ANALYTICS;
 
-  const workspaceId = options.workspaceId && isDbId(options.workspaceId) ? options.workspaceId : null;
+  const workspaceId =
+    options.workspaceId && isDbId(options.workspaceId) ? options.workspaceId : null;
 
   const days = timeframe === "7d" ? 7 : 30;
   const since = new Date(Date.now() - days * 86400000);

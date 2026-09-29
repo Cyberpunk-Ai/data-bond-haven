@@ -19,6 +19,7 @@ import { RailFooter } from "@/components/social/RightRail";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
 import { SpaceRoomModal } from "@/components/social/SpaceRoomModal";
+import { usePlatform } from "@/lib/platform-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { compact } from "@/lib/formatters";
 
@@ -127,7 +128,9 @@ function SpaceCard({
   // Mirror the Recorded-tab rule: a room is only a replay once a real
   // recording URL was saved alongside the flag — and recordings belong to the
   // host alone, so only they ever see (or re-enter) the replay.
-  const isRecorded = Boolean(space.recorded && space.recording_url && space.host_id === currentUser.id);
+  const isRecorded = Boolean(
+    space.recorded && space.recording_url && space.host_id === currentUser.id,
+  );
   const isMine = space.host_id === currentUser.id;
 
   return (
@@ -269,6 +272,9 @@ const tabs = ["Live now", "Upcoming", "Recorded"] as const;
 function SpacesPage() {
   const search = Route.useSearch();
   const { currentPlan, planDetails, isPro, isUltra } = usePlan();
+  // The console can switch the whole live-audio subsystem off; the database
+  // refuses the writes, and these pages refuse to offer them.
+  const { spacesEnabled } = usePlatform();
   const [tab, setTab] = useState<(typeof tabs)[number]>("Live now");
   const [allSpaces, setAllSpaces] = useState<Space[]>([]);
   const [loading, setLoading] = useState(true);
@@ -369,7 +375,13 @@ function SpacesPage() {
         if (sid) applyRecordingDeleted(sid);
       }
     },
-    ["space:created", "space:ended", "space:listeners", "space:recording", "space:recording-deleted"],
+    [
+      "space:created",
+      "space:ended",
+      "space:listeners",
+      "space:recording",
+      "space:recording-deleted",
+    ],
   );
 
   // Auto-open space if spaceId is provided in URL
@@ -377,12 +389,18 @@ function SpacesPage() {
   const autoOpened = useRef<string | null>(null);
   useEffect(() => {
     if (!search.spaceId || autoOpened.current === search.spaceId || allSpaces.length === 0) return;
+    if (!spacesEnabled) {
+      // A shared link into a room must not open a subsystem that is switched
+      // off; remember the id so this effect doesn't re-run on every list tick.
+      autoOpened.current = search.spaceId;
+      return;
+    }
     const found = allSpaces.find((s) => s.id === search.spaceId);
     if (found) {
       autoOpened.current = search.spaceId;
       setActiveSpace((cur) => (cur?.id === found.id ? cur : found));
     }
-  }, [search.spaceId, allSpaces]);
+  }, [search.spaceId, allSpaces, spacesEnabled]);
 
   function handleRemind(spaceId: string) {
     setReminders((prev) => {
@@ -399,7 +417,13 @@ function SpacesPage() {
     setAllSpaces((prev) =>
       prev.map((s) =>
         s.id === spaceId
-          ? { ...s, recorded: false, recording_url: undefined, is_recording: false, replay_count: 0 }
+          ? {
+              ...s,
+              recorded: false,
+              recording_url: undefined,
+              is_recording: false,
+              replay_count: 0,
+            }
           : s,
       ),
     );
@@ -544,7 +568,9 @@ function SpacesPage() {
             </p>
             <button
               onClick={() => setShowCreateModal(true)}
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-brand to-brand-pink py-3 text-sm font-bold text-white transition-all duration-300 hover:shadow-glow active:scale-[0.98]"
+              disabled={!spacesEnabled}
+              title={spacesEnabled ? undefined : "Live Spaces are paused by the platform team"}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-brand to-brand-pink py-3 text-sm font-bold text-white transition-all duration-300 hover:shadow-glow active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:shadow-none"
             >
               <Plus className="h-4 w-4" /> Start a Space
             </button>
@@ -560,12 +586,24 @@ function SpacesPage() {
           action={
             <button
               onClick={() => setShowCreateModal(true)}
-              className="flex items-center gap-2 rounded-full bg-gradient-to-r from-brand to-brand-pink px-5 py-2.5 text-sm font-bold text-white transition-all duration-300 hover:shadow-glow active:scale-95"
+              disabled={!spacesEnabled}
+              title={spacesEnabled ? undefined : "Live Spaces are paused by the platform team"}
+              className="flex items-center gap-2 rounded-full bg-gradient-to-r from-brand to-brand-pink px-5 py-2.5 text-sm font-bold text-white transition-all duration-300 hover:shadow-glow active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:shadow-none"
             >
               <Radio className="h-4 w-4" /> Go live
             </button>
           }
         />
+
+        {!spacesEnabled && (
+          <div className="flex items-center gap-3 rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-xs font-semibold text-rose-900 shadow-soft dark:text-rose-100">
+            <Radio className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
+            <span>
+              Live Audio Spaces are paused right now. Recorded rooms stay available to replay, and
+              hosting resumes on its own when the platform team switches the subsystem back on.
+            </span>
+          </div>
+        )}
 
         <div className="glass-panel flex gap-1 rounded-full p-1.5 shadow-soft overflow-x-auto [scrollbar-width:none] touch-pan-x">
           {tabs.map((t) => (
@@ -594,7 +632,13 @@ function SpacesPage() {
                   key={s.id}
                   space={s}
                   index={i}
-                  onJoin={(sp) => setActiveSpace(sp)}
+                  onJoin={(sp) => {
+                    if (!spacesEnabled) {
+                      toast.info("Live Spaces are paused right now — try again shortly.");
+                      return;
+                    }
+                    setActiveSpace(sp);
+                  }}
                   onRemind={handleRemind}
                   isReminded={Boolean(reminders[s.id])}
                   onDeleteRecording={(sp) => setDeleteTarget(sp)}
@@ -639,8 +683,8 @@ function SpacesPage() {
               </div>
             </div>
             <p className="text-xs text-foreground/80 leading-relaxed">
-              The replay of “{deleteTarget.title}” will be removed for you and every listener. The
-              room's chat transcript stays as it is.
+              The replay of “{deleteTarget.title}” will be removed for you and every listener.
+              The room's chat transcript stays as it is.
             </p>
             <div className="flex items-center gap-2 pt-2">
               <button
@@ -668,7 +712,7 @@ function SpacesPage() {
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4 animate-in fade-in duration-200">
           <div
-            className="glass-panel relative w-full max-w-md max-h-[92vh] overflow-y-auto rounded-2xl sm:rounded-3xl p-5 sm:p-6 shadow-2xl border border-border/80 bg-card/95"
+            className="glass-panel relative w-full max-w-md max-h-[92dvh] overflow-y-auto rounded-2xl sm:rounded-3xl p-5 sm:p-6 shadow-2xl border border-border/80 bg-card/95"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between pb-3 sm:pb-4 border-b border-border/60">

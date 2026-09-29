@@ -22,72 +22,72 @@ export default defineConfig(({ command, mode }) => {
   }
 
   return {
-  css: { transformer: "lightningcss" },
-  resolve: {
-    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
-    dedupe: [
-      "react",
-      "react-dom",
-      "react/jsx-runtime",
-      "react/jsx-dev-runtime",
-      "@tanstack/react-query",
-      "@tanstack/query-core",
-    ],
-  },
-  optimizeDeps: {
-    include: [
-      "react",
-      "react-dom",
-      "react-dom/client",
-      "react/jsx-runtime",
-      "react/jsx-dev-runtime",
-    ],
-    ignoreOutdatedRequests: true,
-  },
-  server: { host: "::", port: 8080 },
-  build: {
-    // Modern browsers + the workererd runtime understand current syntax, so we
-    // skip down-level transpilation to keep bundles smaller and parse faster.
-    target: "esnext",
-    // Skip gzip/brotli size estimation in CI — it only slows the build, the
-    // real compression happens at the edge/CDN.
-    reportCompressedSize: false,
-    cssMinify: "lightningcss",
-  },
-  plugins: [
-    tailwindcss(),
-    tsConfigPaths({ projects: ["./tsconfig.json"] }),
-    tanstackStart({
-      // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
-      server: { entry: "server" },
-      importProtection: {
-        behavior: "error",
-        client: {
-          files: ["**/server/**"],
-          specifiers: ["server-only"],
+    css: { transformer: "lightningcss" },
+    resolve: {
+      alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+      dedupe: [
+        "react",
+        "react-dom",
+        "react/jsx-runtime",
+        "react/jsx-dev-runtime",
+        "@tanstack/react-query",
+        "@tanstack/query-core",
+      ],
+    },
+    optimizeDeps: {
+      include: [
+        "react",
+        "react-dom",
+        "react-dom/client",
+        "react/jsx-runtime",
+        "react/jsx-dev-runtime",
+      ],
+      ignoreOutdatedRequests: true,
+    },
+    server: { host: "::", port: 8080 },
+    build: {
+      // Modern browsers + the workererd runtime understand current syntax, so we
+      // skip down-level transpilation to keep bundles smaller and parse faster.
+      target: "esnext",
+      // Skip gzip/brotli size estimation in CI — it only slows the build, the
+      // real compression happens at the edge/CDN.
+      reportCompressedSize: false,
+      cssMinify: "lightningcss",
+    },
+    plugins: [
+      tailwindcss(),
+      tsConfigPaths({ projects: ["./tsconfig.json"] }),
+      tanstackStart({
+        // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
+        server: { entry: "server" },
+        importProtection: {
+          behavior: "error",
+          client: {
+            files: ["**/server/**"],
+            specifiers: ["server-only"],
+          },
         },
-      },
-    }),
-    // Nitro runs only for production builds; dev SSR is served by Vite.
-    // Default to a portable Node server so `npm run build && npm start`
-    // yields a standalone `.output/server/index.mjs` that runs anywhere Node
-    // does (Docker, VPS, Render, Railway, Lovable, ...). Deploy targets that
-    // need a different runtime override it via env, e.g.
-    //   NITRO_PRESET=cloudflare-module npm run build
-    // compressPublicAssets bakes gzip + brotli copies of every hashed JS/CSS
-    // asset at build time and the server negotiates Accept-Encoding from
-    // there — no per-request compression CPU, and JS/CSS travel ~70-85%
-    // smaller. (Image/video bandwidth is already handled by the immutable
-    // Cache-Control on the /api/public/media proxy.)
-    ...(command === "build"
-      ? [
-          nitro({
-            defaultPreset: "node-server",
-            compressPublicAssets: { brotli: true, gzip: true },
-          }),
-        ]
-      : []),
-    viteReact(),
-  ],
+      }),
+      // Nitro runs only for production builds; dev SSR is served by Vite.
+      // Default to a portable Node server so `npm run build && npm start`
+      // yields a standalone `.output/server/index.mjs` that runs anywhere Node
+      // does (Docker, VPS, Render, Railway, Lovable, ...). Deploy targets that
+      // need a different runtime override it via env, e.g.
+      //   NITRO_PRESET=cloudflare-module npm run build
+      // compressPublicAssets bakes gzip + brotli copies of every hashed JS/CSS
+      // asset at build time and the server negotiates Accept-Encoding from
+      // there — no per-request compression CPU, and JS/CSS travel ~70-85%
+      // smaller. (Image/video bandwidth is already handled by the immutable
+      // Cache-Control on the /api/public/media proxy.)
+      ...(command === "build"
+        ? [
+            nitro({
+              defaultPreset: "node-server",
+              compressPublicAssets: { brotli: true, gzip: true },
+            }),
+          ]
+        : []),
+      viteReact(),
+    ],
   };
 });

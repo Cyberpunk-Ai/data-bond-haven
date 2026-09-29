@@ -11,6 +11,11 @@
  *     gone; canonical `SUPABASE_*` / `AI_*` only.
  *   • a required secret that is absent produces a loud, specific error naming
  *     the key, instead of a silent `""` fallback that weakens crypto or auth.
+ *
+ * Object storage is intentionally NOT modelled here: the credentials differ per
+ * backend (R2, B2, Spaces, MinIO, S3, or the Supabase bucket) and the platform
+ * must still boot when a store has not been pointed at yet, so that contract is
+ * owned by the adapter itself — see `src/lib/storage/s3.server.ts`.
  */
 
 let cached: ServerEnv | undefined;
@@ -28,15 +33,7 @@ type ServerEnv = {
   cronSecret: string;
   webhookMaxAttempts: number;
   allowedApiOrigins: string[];
-  r2: {
-    accountId?: string;
-    accessKeyId?: string;
-    secretAccessKey?: string;
-    bucket?: string;
-    publicBaseUrl?: string;
-  };
   turn: { restUrl?: string; username?: string; apiKey?: string; ttlSeconds: number };
-  media: { imageMb: number; videoMb: number; audioMb: number };
 };
 
 function read(name: string): string | undefined {
@@ -103,13 +100,6 @@ function build(): ServerEnv {
       .split(",")
       .map((o) => o.trim().replace(/\/+$/, ""))
       .filter(Boolean),
-    r2: {
-      accountId: read("R2_ACCOUNT_ID"),
-      accessKeyId: read("R2_ACCESS_KEY_ID"),
-      secretAccessKey: read("R2_SECRET_ACCESS_KEY"),
-      bucket: read("R2_BUCKET"),
-      publicBaseUrl: read("R2_PUBLIC_BASE_URL"),
-    },
     // Ephemeral TURN (RFC 5766). Credentials are minted server-side per request
     // and handed to the browser short-lived — the shared secret never ships in
     // the bundle (plan §S4). Unset => STUN-only fallback (calls still connect
@@ -119,11 +109,6 @@ function build(): ServerEnv {
       username: read("TURN_REST_USERNAME"),
       apiKey: read("TURN_REST_API_KEY"),
       ttlSeconds: numOr("TURN_TTL_SECONDS", 3600),
-    },
-    media: {
-      imageMb: numOr("MEDIA_MAX_IMAGE_MB", 25),
-      videoMb: numOr("MEDIA_MAX_VIDEO_MB", 100),
-      audioMb: numOr("MEDIA_MAX_AUDIO_MB", 100),
     },
   };
 }

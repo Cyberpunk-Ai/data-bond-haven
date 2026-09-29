@@ -60,7 +60,10 @@ export const Route = createFileRoute("/workspace/$id")({
       : Promise.resolve(null),
   head: ({ loaderData }) => {
     const ws = loaderData as WorkspaceProfile | null;
-    if (!ws) return { meta: [{ title: "Team unavailable — Spaces1" }, { name: "robots", content: "noindex" }] };
+    if (!ws)
+      return {
+        meta: [{ title: "Team unavailable — Spaces1" }, { name: "robots", content: "noindex" }],
+      };
     const title = `${ws.name} — Team on Spaces1`;
     return {
       meta: [
@@ -140,7 +143,9 @@ function WorkspaceProfilePage() {
   useRealtime(
     (event) => {
       if (event.type === "new_post" && event.post && (event.post as any).workspace_id === id) {
-        setPosts((prev) => (prev.some((p) => p.id === event.post.id) ? prev : [event.post as Post, ...prev]));
+        setPosts((prev) =>
+          prev.some((p) => p.id === event.post.id) ? prev : [event.post as Post, ...prev],
+        );
       } else if (event.type === "post_deleted" && event.postId) {
         setPosts((prev) => prev.filter((p) => p.id !== event.postId));
       }
@@ -165,11 +170,16 @@ function WorkspaceProfilePage() {
   }, [tab, id]);
 
   const media = useMemo(
-    () => posts.filter((p) => Boolean((p as any).image_gradient || (p as any).image_url || (p as any).media_url)),
+    () =>
+      posts.filter((p) =>
+        Boolean((p as any).image_gradient || (p as any).image_url || (p as any).media_url),
+      ),
     [posts],
   );
 
-  const memberCount = entry ? entry.members.filter((m) => m.status === "active").length : ws?.memberCount || 0;
+  const memberCount = entry
+    ? entry.members.filter((m) => m.status === "active").length
+    : ws?.memberCount || 0;
 
   if (!ws) {
     return (
@@ -206,9 +216,7 @@ function WorkspaceProfilePage() {
   function handleShareProfile() {
     const url = `${window.location.origin}/workspace/${id}`;
     if (navigator.share) {
-      navigator
-        .share({ title: `${ws!.name} on Spaces1`, text: ws!.bio, url })
-        .catch(() => {});
+      navigator.share({ title: `${ws!.name} on Spaces1`, text: ws!.bio, url }).catch(() => {});
     } else {
       navigator.clipboard
         .writeText(url)
@@ -224,7 +232,17 @@ function WorkspaceProfilePage() {
     avatarUrl: string | null;
   }) {
     await updateWorkspaceFor(id, patch);
-    setWs((prev) => (prev ? { ...prev, name: patch.name, bio: patch.bio, logoEmoji: patch.logoEmoji, avatarUrl: patch.avatarUrl } : prev));
+    setWs((prev) =>
+      prev
+        ? {
+            ...prev,
+            name: patch.name,
+            bio: patch.bio,
+            logoEmoji: patch.logoEmoji,
+            avatarUrl: patch.avatarUrl,
+          }
+        : prev,
+    );
   }
 
   const list = tab === "Media" ? media : posts;
@@ -384,8 +402,8 @@ function WorkspaceProfilePage() {
             </div>
             <p className="text-sm text-muted-foreground">
               A team of{" "}
-              <strong className="font-semibold text-foreground">{compact(memberCount)}</strong>{" "}
-              on Spaces1
+              <strong className="font-semibold text-foreground">{compact(memberCount)}</strong> on
+              Spaces1
               {isOwner && (
                 <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.65rem] font-extrabold text-amber-600 dark:text-amber-400">
                   <Check className="h-3 w-3" /> You own this team
@@ -419,9 +437,7 @@ function WorkspaceProfilePage() {
           {tab === "Earnings" && isOwner ? (
             <WorkspaceMonetization workspaceId={id} />
           ) : tab === "Analytics" && isOwner ? (
-            <Suspense
-              fallback={<div className="h-64 animate-pulse rounded-2xl bg-muted/40" />}
-            >
+            <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl bg-muted/40" />}>
               <AnalyticsDashboard workspaceId={id} />
             </Suspense>
           ) : tab === "Team" && entry ? (
@@ -479,7 +495,12 @@ function WorkspaceProfilePage() {
         isOpen={isTipOpen}
         onClose={() => setIsTipOpen(false)}
         recipient={{ username: ws.slug, display_name: ws.name, avatar_url: ws.avatarUrl }}
-        team={{ workspaceId: ws.id, name: ws.name, avatarUrl: ws.avatarUrl, logoEmoji: ws.logoEmoji }}
+        team={{
+          workspaceId: ws.id,
+          name: ws.name,
+          avatarUrl: ws.avatarUrl,
+          logoEmoji: ws.logoEmoji,
+        }}
       />
 
       {/* Owner/Admin team-profile editor (name, logo, bio). */}
@@ -526,9 +547,7 @@ function TeamSettingsPane({
   }, [workspaceId, onActivate]);
 
   return (
-    <Suspense
-      fallback={<div className="h-64 animate-pulse rounded-2xl bg-muted/40" />}
-    >
+    <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl bg-muted/40" />}>
       <TeamWorkspaceManager />
     </Suspense>
   );

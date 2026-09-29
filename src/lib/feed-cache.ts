@@ -91,7 +91,12 @@ export async function triggerFeedPreload(force = false): Promise<PreloadBundleRe
       // 404 (and cache nothing), so only public post media is warmed here.
       const imagesToWarm: (string | null | undefined)[] = [];
       const splitUrls = (value?: string | null) =>
-        value ? value.split(",").map((s) => s.trim()).filter(Boolean) : [];
+        value
+          ? value
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : [];
       bundle.foryou.forEach((p) => {
         imagesToWarm.push(...splitUrls(p.media_url));
       });

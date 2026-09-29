@@ -15,6 +15,7 @@ import { Avatar } from "@/components/social/Avatar";
 import type { Story } from "@/lib/types";
 import { currentUser } from "@/lib/profile-service";
 import { createStory, uploadMedia, generateAIStory } from "@/lib/api-client";
+import { usePlatform } from "@/lib/platform-state";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
@@ -63,7 +64,20 @@ const MOODS = [
   "🎧 In the Zone",
   "⚡️ Flow State",
 ];
-const STICKER_OPTIONS = ["✨", "🔥", "☕", "📸", "🎵", "💡", "🚀", "✍️", "🎬", "🤖", "❤️", "🌿"];
+const STICKER_OPTIONS = [
+  "✨",
+  "🔥",
+  "☕",
+  "📸",
+  "🎵",
+  "💡",
+  "🚀",
+  "✍️",
+  "🎬",
+  "🤖",
+  "❤️",
+  "🌿",
+];
 
 const AI_PROMPT_CHIPS = [
   "Studio golden hour light and coffee 🌅",
@@ -88,6 +102,8 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
   const [uploading, setUploading] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
+  // "AI Sparks" is part of the AI subsystem the console can switch off.
+  const { aiEnabled } = usePlatform();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -168,10 +184,13 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto animate-in fade-in duration-200">
-      <div className="relative flex flex-col md:flex-row w-full max-w-4xl max-h-[95vh] md:max-h-[90vh] overflow-hidden rounded-2xl sm:rounded-3xl bg-card border border-border shadow-lift">
+      <div className="relative flex flex-col md:flex-row w-full max-w-4xl max-h-[95dvh] md:max-h-[90dvh] overflow-hidden rounded-2xl sm:rounded-3xl bg-card border border-border shadow-lift">
         {/* Left Side: Story Controls & Customizer */}
         {/* Mobile: toggle between editing and preview so the preview never covers the controls */}
-        <div className="md:hidden flex rounded-full bg-foreground/5 p-1 m-3 mb-0 gap-1" role="tablist">
+        <div
+          className="md:hidden flex rounded-full bg-foreground/5 p-1 m-3 mb-0 gap-1"
+          role="tablist"
+        >
           {(["edit", "preview"] as const).map((m) => (
             <button
               key={m}
@@ -185,7 +204,9 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
             </button>
           ))}
         </div>
-        <div className={`flex-1 flex-col justify-between p-4 sm:p-6 overflow-y-auto max-h-[85vh] md:max-h-[90vh] ${mobileView === "edit" ? "flex" : "hidden md:flex"}`}>
+        <div
+          className={`flex-1 flex-col justify-between p-4 sm:p-6 overflow-y-auto max-h-[85dvh] md:max-h-[90dvh] ${mobileView === "edit" ? "flex" : "hidden md:flex"}`}
+        >
           <div>
             {/* Top Bar */}
             <div className="flex items-center justify-between pb-3 sm:pb-4 border-b border-border">
@@ -232,17 +253,19 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
               >
                 <ImageIcon className="h-3.5 w-3.5" /> Photo / Media
               </button>
-              <button
-                onClick={() => setTab("ai")}
-                className={cn(
-                  "flex-1 min-w-[90px] flex items-center justify-center gap-1.5 py-1.5 sm:py-2 rounded-full text-xs font-bold transition-all min-h-[36px]",
-                  tab === "ai"
-                    ? "bg-gradient-to-r from-brand to-brand-pink text-white shadow-xs"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Wand2 className="h-3.5 w-3.5" /> AI Sparks
-              </button>
+              {aiEnabled && (
+                <button
+                  onClick={() => setTab("ai")}
+                  className={cn(
+                    "flex-1 min-w-[90px] flex items-center justify-center gap-1.5 py-1.5 sm:py-2 rounded-full text-xs font-bold transition-all min-h-[36px]",
+                    tab === "ai"
+                      ? "bg-gradient-to-r from-brand to-brand-pink text-white shadow-xs"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Wand2 className="h-3.5 w-3.5" /> AI Sparks
+                </button>
+              )}
             </div>
 
             {/* Content per Tab */}
@@ -544,7 +567,9 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
         </div>
 
         {/* Right Side: Live Story Preview Screen */}
-        <div className={`w-full md:w-[320px] bg-slate-950 p-6 flex-col items-center justify-center border-t md:border-t-0 md:border-l border-border/50 ${mobileView === "preview" ? "flex" : "hidden md:flex"}`}>
+        <div
+          className={`w-full md:w-[320px] bg-slate-950 p-6 flex-col items-center justify-center border-t md:border-t-0 md:border-l border-border/50 ${mobileView === "preview" ? "flex" : "hidden md:flex"}`}
+        >
           <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-3">
             Live Preview
           </p>

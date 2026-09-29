@@ -285,22 +285,22 @@ function PostCardBase({
   const { activeWorkspace, canPost } = useWorkspace();
   const cardRef = useRef<HTMLElement>(null);
   const [state, setState] = useState({
-    liked: post.likedByMe,
-    likes: post.likeCount,
-    reposted: post.repostedByMe,
-    reposts: post.repostCount,
-    saved: post.bookmarkedByMe,
+    liked: !!post.likedByMe,
+    likes: post.likeCount || 0,
+    reposted: !!post.repostedByMe,
+    reposts: post.repostCount || 0,
+    saved: !!post.bookmarkedByMe,
     views: post.viewCount || 1,
   });
 
   // Sync state if post prop changes
   useEffect(() => {
     setState({
-      liked: post.likedByMe,
-      likes: post.likeCount,
-      reposted: post.repostedByMe,
-      reposts: post.repostCount,
-      saved: post.bookmarkedByMe,
+      liked: !!post.likedByMe,
+      likes: post.likeCount || 0,
+      reposted: !!post.repostedByMe,
+      reposts: post.repostCount || 0,
+      saved: !!post.bookmarkedByMe,
       views: post.viewCount || 1,
     });
     if (post.comments) {
@@ -360,6 +360,9 @@ function PostCardBase({
         event.postId === post.id &&
         typeof event.likeCount === "number"
       ) {
+        // Only the tally is shared: the payload's `active` flag belongs to whoever
+        // clicked, and this viewer's own heart is driven by their own toggle
+        // response (and by `post.likedByMe` on load).
         const newLikes = event.likeCount;
         setState((s) => ({ ...s, likes: newLikes }));
       } else if (
@@ -401,7 +404,11 @@ function PostCardBase({
         setCommentsList((prev) =>
           prev.map((c) =>
             c.id === event.commentId
-              ? { ...c, content: event.content ?? c.content, edited_at: event.editedAt ?? c.edited_at }
+              ? {
+                  ...c,
+                  content: event.content ?? c.content,
+                  edited_at: event.editedAt ?? c.edited_at,
+                }
               : c,
           ),
         );
@@ -424,7 +431,13 @@ function PostCardBase({
         });
       }
     },
-    ["post_like_updated", "post_repost_updated", "post_view_updated", "poll_updated", "post_updated"],
+    [
+      "post_like_updated",
+      "post_repost_updated",
+      "post_view_updated",
+      "poll_updated",
+      "post_updated",
+    ],
   );
 
   // Comments state
@@ -549,24 +562,35 @@ function PostCardBase({
   const mediaSrc = post.image_url || post.media_url;
 
   async function handleLike() {
-    const nextLiked = !state.liked;
-    const nextLikes = state.likes + (nextLiked ? 1 : -1);
-    setState((s) => ({ ...s, liked: nextLiked, likes: Math.max(0, nextLikes) }));
+    const prev = { liked: state.liked, likes: state.likes };
+    const nextLiked = !prev.liked;
+    setState((s) => ({
+      ...s,
+      liked: nextLiked,
+      likes: Math.max(0, prev.likes + (nextLiked ? 1 : -1)),
+    }));
 
     try {
       const res = await toggleLikePost(post.id);
-      if (res && typeof res.likeCount === "number") {
-        setState((s) => ({ ...s, liked: res.liked, likes: res.likeCount }));
-      }
+      // The server answer carries the flag and the tally from the same write, so
+      // the heart colour and the number beside it can never disagree.
+      setState((s) => ({ ...s, liked: res.liked, likes: res.likeCount }));
     } catch (err) {
-      console.warn("Like sync fallback:", err);
+      // Undo both halves together. Leaving the optimistic heart behind is how a
+      // guest used to end up with a rose heart on a count that never moved.
+      setState((s) => ({ ...s, liked: prev.liked, likes: prev.likes }));
+      toast.error(friendlyError(err, "Couldn't update your like — try again in a moment."));
     }
   }
 
   async function handleRepost() {
-    const nextReposted = !state.reposted;
-    const nextReposts = state.reposts + (nextReposted ? 1 : -1);
-    setState((s) => ({ ...s, reposted: nextReposted, reposts: Math.max(0, nextReposts) }));
+    const prev = { reposted: state.reposted, reposts: state.reposts };
+    const nextReposted = !prev.reposted;
+    setState((s) => ({
+      ...s,
+      reposted: nextReposted,
+      reposts: Math.max(0, prev.reposts + (nextReposted ? 1 : -1)),
+    }));
 
     const teamId = activeWorkspace && canPost ? activeWorkspace.id : null;
     try {
@@ -582,13 +606,14 @@ function PostCardBase({
             : "Reposted to your profile",
       );
     } catch (err) {
-      console.warn("Repost sync fallback:", err);
-      toast.error("Couldn't repost right now — try again in a moment.");
+      setState((s) => ({ ...s, reposted: prev.reposted, reposts: prev.reposts }));
+      toast.error(friendlyError(err, "Couldn't repost right now — try again in a moment."));
     }
   }
 
   async function handleBookmark() {
-    const nextSaved = !state.saved;
+    const prevSaved = state.saved;
+    const nextSaved = !prevSaved;
     setState((s) => ({ ...s, saved: nextSaved }));
 
     try {
@@ -598,7 +623,8 @@ function PostCardBase({
       }
       toast(nextSaved ? "Saved to Bookmarks" : "Removed from Bookmarks");
     } catch (err) {
-      console.warn("Bookmark sync fallback:", err);
+      setState((s) => ({ ...s, saved: prevSaved }));
+      toast.error(friendlyError(err, "Couldn't update your bookmark — try again in a moment."));
     }
   }
 
@@ -920,7 +946,12 @@ function PostCardBase({
     try {
       window.dispatchEvent(
         new CustomEvent("rt:post_updated", {
-          detail: { type: "post_updated", postId: post.id, content: editDraft.trim(), editedAt: new Date().toISOString() },
+          detail: {
+            type: "post_updated",
+            postId: post.id,
+            content: editDraft.trim(),
+            editedAt: new Date().toISOString(),
+          },
         }),
       );
     } catch {
@@ -971,7 +1002,11 @@ function PostCardBase({
           {ws ? (
             <TeamAvatar name={ws.name} emoji={ws.logoEmoji} avatarUrl={ws.avatarUrl} size="md" />
           ) : (
-            <Avatar name={author.display_name} src={author.avatar_url} className="h-11 w-11 text-xs shrink-0" />
+            <Avatar
+              name={author.display_name}
+              src={author.avatar_url}
+              className="h-11 w-11 text-xs shrink-0"
+            />
           )}
         </BrandProfileLink>
         <div className="min-w-0 flex-1">
@@ -1006,9 +1041,7 @@ function PostCardBase({
             >
               <TimeAgo iso={post.created_at} />
             </Link>
-            {editedAt && (
-              <span className="text-xs text-muted-foreground italic">· Edited</span>
-            )}
+            {editedAt && <span className="text-xs text-muted-foreground italic">· Edited</span>}
           </div>
           {/* Content with Expand/Collapse & Link Parsers */}
           {isEditing ? (
@@ -1209,7 +1242,7 @@ function PostCardBase({
                   <Sparkles className="h-3 w-3 text-brand" /> {allMedia.length} Media attachments
                 </span>
                 <span className="text-[10px] uppercase tracking-wider font-mono bg-muted/60 dark:bg-muted/10 px-2.5 py-0.5 rounded-full text-muted-foreground/95 flex items-center gap-1">
-                  Swipe ➔
+                  Swipe ❔
                 </span>
               </div>
               <div className="flex gap-2.5 overflow-x-auto pb-2 pt-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden touch-pan-x snap-x snap-mandatory">
@@ -1292,13 +1325,13 @@ function PostCardBase({
             onClick={() => setShowImagePreview(false)}
           >
             <div
-              className="relative max-w-5xl max-h-[92vh] overflow-hidden rounded-3xl"
+              className="relative max-w-5xl max-h-[92dvh] overflow-hidden rounded-3xl"
               onClick={(e) => e.stopPropagation()}
             >
               <img
                 src={previewMediaUrl || mediaSrc || ""}
                 alt="Full preview"
-                className="max-h-[85vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
+                className="max-h-[85dvh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
               />
               <button
                 onClick={() => setShowImagePreview(false)}
@@ -1523,7 +1556,12 @@ function PostCardBase({
         }}
         team={
           ws
-            ? { workspaceId: ws.id, name: ws.name, avatarUrl: ws.avatarUrl, logoEmoji: ws.logoEmoji }
+            ? {
+                workspaceId: ws.id,
+                name: ws.name,
+                avatarUrl: ws.avatarUrl,
+                logoEmoji: ws.logoEmoji,
+              }
             : null
         }
         postId={post.id}

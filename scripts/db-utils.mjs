@@ -34,8 +34,7 @@ export function stamp(d = new Date()) {
   return d.toISOString().replace(/[:.]/g, "-").slice(0, 19);
 }
 
-export const storageKey = (env) =>
-  env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || "";
+export const storageKey = (env) => env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 /** Authenticated call to the project's REST/storage API with the secret key. */
 export async function apiFetch(env, path, init = {}) {

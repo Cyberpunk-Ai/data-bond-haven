@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Phone, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -59,7 +68,9 @@ export function useCallDialer(): CallDialerContextValue {
 /** A gentle two-tone ringtone using WebAudio so no audio asset is needed. */
 function startRingtone(): () => void {
   if (typeof window === "undefined") return () => {};
-  const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  const Ctx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctx) return () => {};
   const ctx = new Ctx();
   let stopped = false;
@@ -350,7 +361,9 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
                 className="h-20 w-20"
               />
             </div>
-            <p className="text-sm font-semibold text-foreground">{incomingCall.user.display_name}</p>
+            <p className="text-sm font-semibold text-foreground">
+              {incomingCall.user.display_name}
+            </p>
             <p className="mt-1 text-xs text-muted-foreground">
               Incoming {incomingCall.type === "video" ? "video" : "audio"} call…
             </p>
@@ -369,7 +382,11 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
                 aria-label="Accept call"
                 className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white transition-transform hover:scale-105"
               >
-                {incomingCall.type === "video" ? <Video className="h-6 w-6" /> : <Phone className="h-6 w-6" />}
+                {incomingCall.type === "video" ? (
+                  <Video className="h-6 w-6" />
+                ) : (
+                  <Phone className="h-6 w-6" />
+                )}
               </button>
             </div>
           </div>

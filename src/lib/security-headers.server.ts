@@ -75,16 +75,14 @@ function buildCsp(enforce: boolean): string {
 }
 
 /**
- * Non-production previews are legitimately embedded (the Lovable preview and
+ * Non-production previews are legitimately embedded (the editor's preview and
  * internal staging iframes), so `frame-ancestors 'none'` / X-Frame-Options DENY
  * are only applied in production. Everything else is applied everywhere so the
  * staging surface exercises the same policy.
  */
 export function securityHeaders(): Record<string, string> {
   const enforce = isProduction() && !truthy(process.env["CSP_REPORT_ONLY"]);
-  const cspKey = enforce
-    ? "content-security-policy"
-    : "content-security-policy-report-only";
+  const cspKey = enforce ? "content-security-policy" : "content-security-policy-report-only";
 
   const headers: Record<string, string> = {
     [cspKey]: buildCsp(enforce),

@@ -175,9 +175,7 @@ function NotificationsPage() {
   useRealtime(
     (event) => {
       if (event.type === "notification_read" && event.id) {
-        setItems((prev) =>
-          prev.map((n) => (n.id === event.id ? { ...n, read: true } : n)),
-        );
+        setItems((prev) => prev.map((n) => (n.id === event.id ? { ...n, read: true } : n)));
         return;
       }
       const notif =
@@ -253,16 +251,19 @@ function NotificationsPage() {
       await deleteNotification(id);
     } catch {
       // Restore on failure so the user doesn't lose the notification silently.
-      if (removed) setItems((p) => [removed, ...p].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)));
+      if (removed)
+        setItems((p) => [removed, ...p].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)));
       toast.error("Couldn't delete that notification. Please try again.");
     }
   }
 
   const visible = items.filter((n) => {
     if (filter === "All") return true;
-    if (filter === "Mentions") return n.type === "mention" || n.type === "comment" || n.type === "reply";
+    if (filter === "Mentions")
+      return n.type === "mention" || n.type === "comment" || n.type === "reply";
     if (filter === "Follows") return n.type === "follow";
-    if (filter === "Likes") return n.type === "like" || n.type === "repost" || n.type === "story_like";
+    if (filter === "Likes")
+      return n.type === "like" || n.type === "repost" || n.type === "story_like";
     if (filter === "Tips") return n.type === "tip" || n.type === "payout";
     if (filter === "Spaces") return n.type === "space";
     return true;
@@ -405,7 +406,11 @@ function NotificationsPage() {
   );
 }
 
-function InviteActions({ notification }: { notification: { action: { member_id: string; state: string } } }) {
+function InviteActions({
+  notification,
+}: {
+  notification: { action: { member_id: string; state: string } };
+}) {
   const [state, setState] = useState(notification.action.state);
   const [busy, setBusy] = useState(false);
   async function respond(accept: boolean) {

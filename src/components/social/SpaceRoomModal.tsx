@@ -58,6 +58,7 @@ import { appConfig } from "@/lib/config";
 import { useAuthorizedMediaUrl } from "@/lib/media-access";
 import { friendlyError } from "@/lib/error-messages";
 import { useRealtime } from "@/lib/realtime";
+import { usePlatform } from "@/lib/platform-state";
 import { cn } from "@/lib/utils";
 import { ClampText } from "@/components/social/ClampText";
 import { toast } from "sonner";
@@ -90,6 +91,8 @@ export function SpaceRoomModal({ space, isOpen, onClose }: SpaceRoomModalProps) 
 }
 
 function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () => void }) {
+  // AI room summaries belong to the AI subsystem the console can switch off.
+  const { aiEnabled } = usePlatform();
   const [activeTab, setActiveTab] = useState<"stage" | "chat" | "manage">("stage");
   const [chatDraft, setChatDraft] = useState("");
   const [isMuted, setIsMuted] = useState(true);
@@ -656,7 +659,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-2 sm:p-4 animate-in fade-in duration-200">
         <div
-          className="glass-panel relative flex flex-col h-[95vh] sm:h-[90vh] max-h-[750px] w-full max-w-2xl overflow-hidden rounded-2xl sm:rounded-3xl border border-border/80 bg-card/95 shadow-2xl"
+          className="glass-panel relative flex flex-col h-[95dvh] sm:h-[90dvh] max-h-[750px] w-full max-w-2xl overflow-hidden rounded-2xl sm:rounded-3xl border border-border/80 bg-card/95 shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Top Header */}
@@ -705,18 +708,20 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                 <span>Tip Host</span>
               </button>
 
-              <button
-                onClick={handleSummarize}
-                disabled={summarizing}
-                className="flex items-center gap-1.5 rounded-full bg-foreground/5 hover:bg-foreground/10 px-2.5 sm:px-3 py-1.5 text-xs font-semibold transition-all disabled:opacity-50 min-h-[36px]"
-              >
-                {summarizing ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Sparkles className="h-3.5 w-3.5 text-brand" />
-                )}
-                <span className="hidden xs:inline">AI Summary</span>
-              </button>
+              {aiEnabled && (
+                <button
+                  onClick={handleSummarize}
+                  disabled={summarizing}
+                  className="flex items-center gap-1.5 rounded-full bg-foreground/5 hover:bg-foreground/10 px-2.5 sm:px-3 py-1.5 text-xs font-semibold transition-all disabled:opacity-50 min-h-[36px]"
+                >
+                  {summarizing ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5 text-brand" />
+                  )}
+                  <span className="hidden xs:inline">AI Summary</span>
+                </button>
+              )}
               <button
                 onClick={onClose}
                 className="rounded-full p-2 text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors min-h-[36px] min-w-[36px] flex items-center justify-center"
@@ -770,8 +775,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                 </span>
               ) : (
                 <span className="flex items-center gap-1">
-                  <Headphones className="h-3.5 w-3.5" /> {participants.length} in
-                  room
+                  <Headphones className="h-3.5 w-3.5" /> {participants.length} in room
                 </span>
               )}
             </div>
@@ -1197,34 +1201,34 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           {/* Bottom Action Bar */}
           <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 border-t border-border/60 p-3 sm:p-4 bg-card/60">
             {!isReplay && (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleToggleMic}
-                className={cn(
-                  "flex items-center gap-1.5 sm:gap-2 rounded-full px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs font-bold transition-all active:scale-95 shadow-soft min-h-[38px] sm:min-h-[40px] cursor-pointer",
-                  isMuted
-                    ? "bg-foreground/10 text-foreground hover:bg-foreground/15"
-                    : "bg-emerald-500 text-white hover:bg-emerald-600 shadow-glow",
-                )}
-              >
-                {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                {isMuted ? "Unmute" : "Speaking"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleToggleMic}
+                  className={cn(
+                    "flex items-center gap-1.5 sm:gap-2 rounded-full px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs font-bold transition-all active:scale-95 shadow-soft min-h-[38px] sm:min-h-[40px] cursor-pointer",
+                    isMuted
+                      ? "bg-foreground/10 text-foreground hover:bg-foreground/15"
+                      : "bg-emerald-500 text-white hover:bg-emerald-600 shadow-glow",
+                  )}
+                >
+                  {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                  {isMuted ? "Unmute" : "Speaking"}
+                </button>
 
-              <button
-                onClick={handleToggleHand}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-full px-3 sm:px-4 py-2 sm:py-2.5 text-xs font-bold transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] cursor-pointer",
-                  handRaised
-                    ? "bg-amber-500 text-white"
-                    : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
-                )}
-              >
-                <Hand className="h-4 w-4" />
-                <span className="hidden xs:inline">
-                  {handRaised ? "Hand Raised" : "Raise Hand"}
-                </span>
-              </button>
+                <button
+                  onClick={handleToggleHand}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-full px-3 sm:px-4 py-2 sm:py-2.5 text-xs font-bold transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] cursor-pointer",
+                    handRaised
+                      ? "bg-amber-500 text-white"
+                      : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
+                  )}
+                >
+                  <Hand className="h-4 w-4" />
+                  <span className="hidden xs:inline">
+                    {handRaised ? "Hand Raised" : "Raise Hand"}
+                  </span>
+                </button>
               </div>
             )}
 
@@ -1438,11 +1442,7 @@ function ReplayPlayer({ src, durationLabel }: { src: string; durationLabel?: str
       const res = await fetch(playable);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
-      const ext = blob.type.includes("mp4")
-        ? "m4a"
-        : blob.type.includes("ogg")
-          ? "ogg"
-          : "webm";
+      const ext = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = objectUrl;

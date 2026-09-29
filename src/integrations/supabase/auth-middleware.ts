@@ -95,6 +95,19 @@ export const requireSupabaseAuth = createMiddleware({ type: "function" }).server
       throw new Error("Unauthorized: No user ID found in token");
     }
 
+    // Maintenance mode is enforced here rather than in ~40 handlers: this is the
+    // one gate every signed-in server function passes through, so publishing the
+    // toggle closes the write surface platform-wide on the next request. The
+    // import is dynamic because that module holds the service-role client, and
+    // an unavailable gate must not lock anyone out — fail open, never down.
+    let gate: ((userId: string) => Promise<void>) | null = null;
+    try {
+      gate = (await import("@/lib/feature-flags.server")).requirePlatformOpen;
+    } catch (err) {
+      console.error("[Supabase] maintenance gate unavailable:", err);
+    }
+    if (gate) await gate(data.claims.sub);
+
     return next({
       context: {
         supabase,

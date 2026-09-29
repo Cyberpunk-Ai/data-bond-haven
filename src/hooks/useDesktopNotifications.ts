@@ -88,7 +88,13 @@ export function useDesktopNotifications(userId?: string | null): void {
         },
         (payload: { new?: Record<string, unknown> }) => {
           const n = payload.new as
-            | { id: string; type: string; body?: string; link?: string | null; post_id?: string | null }
+            | {
+                id: string;
+                type: string;
+                body?: string;
+                link?: string | null;
+                post_id?: string | null;
+              }
             | undefined;
           if (!n?.id) return;
           const toggles = getPreferences().toggles;

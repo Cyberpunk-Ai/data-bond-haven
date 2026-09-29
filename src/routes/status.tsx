@@ -122,19 +122,21 @@ function StatusPage() {
               setLoading(true);
               void check();
             }}
-            className="ml-auto flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-bold transition-colors hover:bg-muted cursor-pointer"
+            className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-bold transition-colors hover:bg-muted cursor-pointer"
           >
             <RotateCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /> Re-check
           </button>
         </div>
 
         <ul className="mt-4 divide-y divide-border rounded-2xl border border-border bg-card">
-          {(health?.services ?? [
-            { id: "app", label: "App & API", status: "operational" as const },
-            { id: "data", label: "Posts, profiles & messages", status: "operational" as const },
-            { id: "media", label: "Photos, video & audio", status: "operational" as const },
-            { id: "payments", label: "Tips & withdrawals", status: "operational" as const },
-          ]).map((s) => (
+          {(
+            health?.services ?? [
+              { id: "app", label: "App & API", status: "operational" as const },
+              { id: "data", label: "Posts, profiles & messages", status: "operational" as const },
+              { id: "media", label: "Photos, video & audio", status: "operational" as const },
+              { id: "payments", label: "Tips & withdrawals", status: "operational" as const },
+            ]
+          ).map((s) => (
             <li key={s.id} className="flex items-center justify-between gap-3 px-5 py-3.5">
               <span className="text-sm font-semibold">{s.label}</span>
               <span
@@ -171,8 +173,8 @@ function StatusPage() {
           <Link to="/contact" className="font-semibold text-brand underline">
             tell us what happened
           </Link>
-          . Include the time, what you were doing and any message you saw; it makes fixing
-          things much faster.
+          . Include the time, what you were doing and any message you saw; it makes fixing things
+          much faster.
         </p>
         <p>
           Payments in flight are never lost: withdrawals that don't complete are automatically

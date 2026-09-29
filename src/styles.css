@@ -139,6 +139,11 @@
     overflow-y: scroll;
     width: 100%;
     touch-action: manipulation;
+    /* iOS inflates text in landscape whenever it decides a page is a desktop
+       layout; this is a designed app shell with its own type scale, so never
+       rescale — otherwise a rotated feed renders at three different sizes. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
 
   body {

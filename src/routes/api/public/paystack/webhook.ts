@@ -90,7 +90,7 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
               .eq("transfer_code", tx.transfer_code)
               .select("user_id, amount, amount_usd, currency, workspace_id")
               .maybeSingle();
-            
+
             // Tell the creator/owner the outcome (personal or team withdrawal).
             // A no-op for already-resolved rows since `updated` is null then.
             if (updated && (status === "paid" || status === "failed")) {
@@ -107,7 +107,9 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
                   status === "paid"
                     ? `your withdrawal of ${amount} has been paid out`
                     : `your withdrawal of ${amount} failed${tx.reason ? `: ${tx.reason}` : ""}`,
-                link: updated.workspace_id ? "/settings?section=workspaces" : "/settings?section=monetization",
+                link: updated.workspace_id
+                  ? "/settings?section=workspaces"
+                  : "/settings?section=monetization",
               });
             }
           }

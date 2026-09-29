@@ -24,7 +24,13 @@ import { UserBadge } from "@/components/social/UserBadge";
 import { compact } from "@/lib/formatters";
 import { currentUser, profileRegistry, getProfile } from "@/lib/profile-service";
 import type { Post, Profile, Topic, TrendingTag } from "@/lib/types";
-import { getPostsPage, getCreatorsPage, globalSearch, getTopics, getTrendingTags } from "@/lib/api-client";
+import {
+  getPostsPage,
+  getCreatorsPage,
+  globalSearch,
+  getTopics,
+  getTrendingTags,
+} from "@/lib/api-client";
 import { getWhoToFollow } from "@/lib/recommendations.functions";
 import { cn } from "@/lib/utils";
 
@@ -148,7 +154,10 @@ function ExplorePage() {
       const existing = new Set(matchedPeople.map((p) => p.id));
       const fresh: Profile[] = [];
       for (let guard = 0; guard < 3 && fresh.length < EXPLORE_PEOPLE_CHUNK; guard++) {
-        const chunk = await getCreatorsPage({ limit: EXPLORE_PEOPLE_CHUNK, offset: peopleWalkRef.current });
+        const chunk = await getCreatorsPage({
+          limit: EXPLORE_PEOPLE_CHUNK,
+          offset: peopleWalkRef.current,
+        });
         peopleWalkRef.current += chunk.length;
         for (const p of chunk) {
           if (!p.id || p.id === currentUser.id || existing.has(p.id)) continue;
@@ -546,7 +555,10 @@ function ExplorePage() {
                   <div key={n} className="glass-panel animate-pulse rounded-3xl p-5 h-36" />
                 ))
               ) : filteredCreators.length > 0 ? (
-                (filter === "Top" ? filteredCreators.slice(0, 4) : filteredCreators.slice(0, peopleVisible)).map((p, i) => (
+                (filter === "Top"
+                  ? filteredCreators.slice(0, 4)
+                  : filteredCreators.slice(0, peopleVisible)
+                ).map((p, i) => (
                   <div
                     key={p.id}
                     style={{ animationDelay: `${i * 50}ms` }}
@@ -647,111 +659,111 @@ function ExplorePage() {
               <FeedSkeleton />
             ) : mediaPosts.length > 0 ? (
               <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {mediaPosts.slice(0, mediaVisible).map((p, i) => {
-                  const author = getProfile(p.user_id);
-                  return (
-                    <article
-                      key={p.id}
-                      style={{ animationDelay: `${i * 60}ms` }}
-                      className="glass-panel overflow-hidden rounded-3xl shadow-soft hover:shadow-lift transition-all hover:-translate-y-1 flex flex-col justify-between"
-                    >
-                      {/* Media Header / Visual — clickable, opens the actual post */}
-                      <Link
-                        to="/post/$id"
-                        params={{ id: p.id }}
-                        aria-label="Open post"
-                        className="group/media relative block"
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {mediaPosts.slice(0, mediaVisible).map((p, i) => {
+                    const author = getProfile(p.user_id);
+                    return (
+                      <article
+                        key={p.id}
+                        style={{ animationDelay: `${i * 60}ms` }}
+                        className="glass-panel overflow-hidden rounded-3xl shadow-soft hover:shadow-lift transition-all hover:-translate-y-1 flex flex-col justify-between"
                       >
-                        {p.image_url || p.media_url ? (
-                          <div className="relative aspect-video w-full overflow-hidden bg-black/10">
-                            {/* media_url can hold several comma-joined attachments — the thumbnail uses the first. */}
-                            <img
-                              src={(p.image_url || p.media_url || "").split(",")[0]?.trim()}
-                              alt={p.content}
-                              loading="lazy"
-                              decoding="async"
-                              className="h-full w-full object-cover transition-transform duration-500 group-hover/media:scale-105"
-                            />
-                          </div>
-                        ) : p.image_gradient ? (
-                          <div
-                            className={cn(
-                              "relative aspect-video w-full flex items-center justify-center p-6 bg-gradient-to-br text-white text-center font-bold text-base shadow-inner transition-transform duration-500 group-hover/media:scale-[1.02]",
-                              p.image_gradient,
-                            )}
-                          >
-                            <span className="line-clamp-3">{p.content}</span>
-                          </div>
-                        ) : null}
-                      </Link>
-
-                      {/* Card Body */}
-                      <div className="p-4 space-y-3 flex-1 flex flex-col justify-between">
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Link to="/profile" search={{ id: author.id, user: author.username }}>
-                              <Avatar
-                                name={author.display_name}
-                                src={author.avatar_url}
-                                className="h-7 w-7 text-xs"
+                        {/* Media Header / Visual — clickable, opens the actual post */}
+                        <Link
+                          to="/post/$id"
+                          params={{ id: p.id }}
+                          aria-label="Open post"
+                          className="group/media relative block"
+                        >
+                          {p.image_url || p.media_url ? (
+                            <div className="relative aspect-video w-full overflow-hidden bg-black/10">
+                              {/* media_url can hold several comma-joined attachments — the thumbnail uses the first. */}
+                              <img
+                                src={(p.image_url || p.media_url || "").split(",")[0]?.trim()}
+                                alt={p.content}
+                                loading="lazy"
+                                decoding="async"
+                                className="h-full w-full object-cover transition-transform duration-500 group-hover/media:scale-105"
                               />
-                            </Link>
-                            <Link
-                              to="/profile"
-                              search={{ id: author.id, user: author.username }}
-                              className="text-xs font-bold text-foreground hover:text-brand truncate"
+                            </div>
+                          ) : p.image_gradient ? (
+                            <div
+                              className={cn(
+                                "relative aspect-video w-full flex items-center justify-center p-6 bg-gradient-to-br text-white text-center font-bold text-base shadow-inner transition-transform duration-500 group-hover/media:scale-[1.02]",
+                                p.image_gradient,
+                              )}
                             >
-                              {author.display_name}
+                              <span className="line-clamp-3">{p.content}</span>
+                            </div>
+                          ) : null}
+                        </Link>
+
+                        {/* Card Body */}
+                        <div className="p-4 space-y-3 flex-1 flex flex-col justify-between">
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <Link to="/profile" search={{ id: author.id, user: author.username }}>
+                                <Avatar
+                                  name={author.display_name}
+                                  src={author.avatar_url}
+                                  className="h-7 w-7 text-xs"
+                                />
+                              </Link>
+                              <Link
+                                to="/profile"
+                                search={{ id: author.id, user: author.username }}
+                                className="text-xs font-bold text-foreground hover:text-brand truncate"
+                              >
+                                {author.display_name}
+                              </Link>
+                            </div>
+                            <Link
+                              to="/post/$id"
+                              params={{ id: p.id }}
+                              className="text-xs text-foreground/90 line-clamp-2 hover:text-brand transition-colors"
+                            >
+                              {p.content}
                             </Link>
                           </div>
-                          <Link
-                            to="/post/$id"
-                            params={{ id: p.id }}
-                            className="text-xs text-foreground/90 line-clamp-2 hover:text-brand transition-colors"
-                          >
-                            {p.content}
-                          </Link>
-                        </div>
 
-                        {/* Stats footer */}
-                        <div className="flex items-center justify-between pt-2 border-t border-border/50 text-[11px] text-muted-foreground font-semibold">
-                          <div className="flex items-center gap-3">
-                            <span className="flex items-center gap-1">
-                              <Heart className="h-3.5 w-3.5 text-rose-500 fill-rose-500/20" />{" "}
-                              {compact(p.likeCount || 0)}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <MessageCircle className="h-3.5 w-3.5 text-brand" />{" "}
-                              {compact(p.commentCount || 0)}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Repeat2 className="h-3.5 w-3.5 text-emerald-500" />{" "}
-                              {compact(p.repostCount || 0)}
-                            </span>
+                          {/* Stats footer */}
+                          <div className="flex items-center justify-between pt-2 border-t border-border/50 text-[11px] text-muted-foreground font-semibold">
+                            <div className="flex items-center gap-3">
+                              <span className="flex items-center gap-1">
+                                <Heart className="h-3.5 w-3.5 text-rose-500 fill-rose-500/20" />{" "}
+                                {compact(p.likeCount || 0)}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <MessageCircle className="h-3.5 w-3.5 text-brand" />{" "}
+                                {compact(p.commentCount || 0)}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Repeat2 className="h-3.5 w-3.5 text-emerald-500" />{" "}
+                                {compact(p.repostCount || 0)}
+                              </span>
+                            </div>
+                            {p.tags.length > 0 && (
+                              <span className="text-brand font-bold truncate max-w-[100px]">
+                                #{p.tags[0]}
+                              </span>
+                            )}
                           </div>
-                          {p.tags.length > 0 && (
-                            <span className="text-brand font-bold truncate max-w-[100px]">
-                              #{p.tags[0]}
-                            </span>
-                          )}
                         </div>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-              {mediaVisible < mediaPosts.length && (
-                <div className="flex justify-center mt-1">
-                  <button
-                    type="button"
-                    onClick={() => setMediaVisible((v) => v + EXPLORE_PEOPLE_CHUNK)}
-                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-soft"
-                  >
-                    <ImageIcon className="h-3.5 w-3.5" /> Load more media
-                  </button>
+                      </article>
+                    );
+                  })}
                 </div>
-              )}
+                {mediaVisible < mediaPosts.length && (
+                  <div className="flex justify-center mt-1">
+                    <button
+                      type="button"
+                      onClick={() => setMediaVisible((v) => v + EXPLORE_PEOPLE_CHUNK)}
+                      className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-soft"
+                    >
+                      <ImageIcon className="h-3.5 w-3.5" /> Load more media
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <Panel className="text-center py-12">
@@ -776,37 +788,35 @@ function ExplorePage() {
                 <FeedSkeleton />
               ) : (
                 <>
-                  {
-                /* Top tab reveals 10 posts per tap; the server is only asked
-                   for a fresh chunk once the loaded pool runs out. */
-              }
-              {sortedTopPosts.slice(0, topVisible).map((p, i) => (
-                <PostCard key={p.id} post={p} index={i} />
-              ))}
-              {sortedTopPosts.length === 0 && (
-                <Panel className="text-center py-10">
-                  <p className="text-sm text-muted-foreground">
-                    No posts matching your criteria.
-                  </p>
-                </Panel>
-              )}
-              {(topVisible < sortedTopPosts.length || postsCursor) && (
-                <div className="flex justify-center pt-1">
-                  <button
-                    type="button"
-                    disabled={loadingMorePosts}
-                    onClick={() => void loadMoreTopPosts()}
-                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-soft disabled:opacity-60 disabled:hover:scale-100"
-                  >
-                    {loadingMorePosts ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <TrendingUp className="h-3.5 w-3.5" />
-                    )}
-                    Show more top posts
-                  </button>
-                </div>
-              )}
+                  {/* Top tab reveals 10 posts per tap; the server is only asked
+                   for a fresh chunk once the loaded pool runs out. */}
+                  {sortedTopPosts.slice(0, topVisible).map((p, i) => (
+                    <PostCard key={p.id} post={p} index={i} />
+                  ))}
+                  {sortedTopPosts.length === 0 && (
+                    <Panel className="text-center py-10">
+                      <p className="text-sm text-muted-foreground">
+                        No posts matching your criteria.
+                      </p>
+                    </Panel>
+                  )}
+                  {(topVisible < sortedTopPosts.length || postsCursor) && (
+                    <div className="flex justify-center pt-1">
+                      <button
+                        type="button"
+                        disabled={loadingMorePosts}
+                        onClick={() => void loadMoreTopPosts()}
+                        className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-soft disabled:opacity-60 disabled:hover:scale-100"
+                      >
+                        {loadingMorePosts ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <TrendingUp className="h-3.5 w-3.5" />
+                        )}
+                        Show more top posts
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>

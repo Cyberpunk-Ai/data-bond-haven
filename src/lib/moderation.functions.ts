@@ -13,6 +13,13 @@ async function getAdmin() {
   return mod.supabaseAdmin;
 }
 
+/** Server-only feature-flag helpers, imported lazily so the service-role
+ *  client behind them never reaches a bundle that ships to a browser. */
+async function getFlags() {
+  const mod = await import("@/lib/feature-flags.server");
+  return mod;
+}
+
 /** Confirms the caller is an admin or moderator and returns who they are. */
 async function assertStaff(context: any) {
   const { supabase, userId } = context;
@@ -248,7 +255,9 @@ export const resolveReport = createServerFn({ method: "POST" })
     z
       .object({
         reportId: z.string().uuid(),
-        status: z.enum(["pending", "reviewing", "resolved", "dismissed"]),
+        // Vocabulary must match ModerationReport (types.ts) and the moderation
+        // queue UI — "investigating", not "reviewing" (that is payouts' dialect).
+        status: z.enum(["pending", "investigating", "resolved", "dismissed"]),
         actionTaken: z.string().max(300).optional(),
       })
       .parse(input),
@@ -345,5 +354,13 @@ export const saveSystemSettings = createServerFn({ method: "POST" })
       "System settings updated",
       "warning",
     );
+
+    // Drop this server's cached flags so the new configuration is enforced on
+    // the very next request instead of up to its cache TTL later.
+    try {
+      (await getFlags()).invalidatePlatformFlags();
+    } catch (err) {
+      console.warn("[settings] flag cache invalidation skipped:", err);
+    }
     return data;
   });

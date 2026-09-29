@@ -82,7 +82,7 @@ export function UpgradeModal() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-3 sm:p-4 animate-in fade-in duration-200">
       <div
-        className="relative w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-3xl border border-white/10 bg-background shadow-2xl transition-all duration-300 [scrollbar-width:thin]"
+        className="relative w-full max-w-2xl max-h-[92dvh] overflow-y-auto rounded-3xl border border-white/10 bg-background shadow-2xl transition-all duration-300 [scrollbar-width:thin]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Glowing Top Gradient Bar */}
@@ -131,7 +131,7 @@ export function UpgradeModal() {
             </div>
           </div>
         ) : (
-          <div className="max-h-[90vh] overflow-y-auto p-6 md:p-8">
+          <div className="max-h-[90dvh] overflow-y-auto p-6 md:p-8">
             {/* Header */}
             <div className="text-center">
               {featureHint ? (

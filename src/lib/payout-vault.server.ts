@@ -57,7 +57,13 @@ function key(): Buffer {
         "API_KEY_PEPPER is not set; payout details cannot be encrypted. Generate one with `openssl rand -hex 32`.",
       );
     }
-    const derived = hkdfSync("sha256", Buffer.from(pepper, "utf8"), Buffer.alloc(0), Buffer.from(HKDF_INFO, "utf8"), 32);
+    const derived = hkdfSync(
+      "sha256",
+      Buffer.from(pepper, "utf8"),
+      Buffer.alloc(0),
+      Buffer.from(HKDF_INFO, "utf8"),
+      32,
+    );
     cachedKey = Buffer.from(derived);
   }
   return cachedKey;

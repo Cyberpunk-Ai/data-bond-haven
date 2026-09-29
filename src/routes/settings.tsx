@@ -38,10 +38,7 @@ import { setLoggedOut, useAuth, updateUserSession } from "@/lib/auth-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { useTheme, ACCENT_PALETTES, type ThemeAccent, type ThemeMode } from "@/lib/theme-state";
 import { usePreferences } from "@/lib/preferences-state";
-import {
-  notificationPermission,
-  requestNotificationPermission,
-} from "@/lib/browser-notifications";
+import { notificationPermission, requestNotificationPermission } from "@/lib/browser-notifications";
 import { PLAN_DETAILS, type PlanTier } from "@/lib/plans";
 import { PaymentHistory } from "@/components/social/PaymentHistory";
 import { cn } from "@/lib/utils";
@@ -335,7 +332,7 @@ function SettingsPage() {
         <PageHeader title="Settings" subtitle="Tune Spaces to fit the way you work." />
 
         <div className="grid gap-5 md:grid-cols-[15rem_1fr]">
-          <Panel className="min-w-0 p-2 md:max-h-[calc(100vh-8.5rem)] md:overflow-y-auto custom-scrollbar">
+          <Panel className="min-w-0 p-2 md:max-h-[calc(100dvh-8.5rem)] md:overflow-y-auto custom-scrollbar">
             <nav className="flex md:flex-col gap-1 overflow-x-auto md:overflow-visible pb-1 md:pb-0 [scrollbar-width:none]">
               {sections.map((s) => {
                 const Icon = s.icon;
@@ -378,7 +375,7 @@ function SettingsPage() {
           </Panel>
 
           <Panel
-            className="min-w-0 animate-in fade-in slide-in-from-bottom-2 duration-300 md:max-h-[calc(100vh-8.5rem)] md:overflow-y-auto custom-scrollbar"
+            className="min-w-0 animate-in fade-in slide-in-from-bottom-2 duration-300 md:max-h-[calc(100dvh-8.5rem)] md:overflow-y-auto custom-scrollbar"
             key={active}
           >
             {active === "profile" && (

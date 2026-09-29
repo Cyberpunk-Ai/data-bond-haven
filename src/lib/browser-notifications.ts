@@ -43,11 +43,10 @@ let swRegistration: Promise<ServiceWorkerRegistration | null> | undefined;
 
 /** Registers /sw.js once; failures are tolerated (in-app UI still works). */
 export function ensureNotificationsWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (typeof window === "undefined" || !("serviceWorker" in navigator)) return Promise.resolve(null);
+  if (typeof window === "undefined" || !("serviceWorker" in navigator))
+    return Promise.resolve(null);
   if (!swRegistration) {
-    swRegistration = navigator.serviceWorker
-      .register("/sw.js", { scope: "/" })
-      .catch(() => null);
+    swRegistration = navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => null);
   }
   return swRegistration;
 }
@@ -56,7 +55,9 @@ export function ensureNotificationsWorker(): Promise<ServiceWorkerRegistration |
  * Asks for OS permission (must run inside a user gesture — the settings
  * toggle handler does exactly that). Returns the resulting state.
  */
-export async function requestNotificationPermission(): Promise<NotificationPermission | "unsupported"> {
+export async function requestNotificationPermission(): Promise<
+  NotificationPermission | "unsupported"
+> {
   if (!notificationsSupported()) return "unsupported";
   await ensureNotificationsWorker();
   if (Notification.permission === "default") {
@@ -65,7 +66,9 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
       const result = await new Promise<NotificationPermission>((resolve) => {
         const maybe = Notification.requestPermission(resolve);
         if (maybe && typeof (maybe as Promise<NotificationPermission>).then === "function") {
-          void (maybe as Promise<NotificationPermission>).then(resolve).catch(() => resolve("denied"));
+          void (maybe as Promise<NotificationPermission>)
+            .then(resolve)
+            .catch(() => resolve("denied"));
         }
       });
       return result;
@@ -97,7 +100,9 @@ export async function showSystemNotification(n: SystemNotification): Promise<voi
       await reg.showNotification(n.title, {
         ...options,
         actions,
-      } as NotificationOptions & { actions?: Array<{ action: string; title: string; icon?: string }> });
+      } as NotificationOptions & {
+        actions?: Array<{ action: string; title: string; icon?: string }>;
+      });
     } else if (typeof window !== "undefined") {
       new Notification(n.title, options);
     }

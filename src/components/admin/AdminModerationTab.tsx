@@ -298,7 +298,9 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
                         </span>
                       </div>
                       <p className="text-xs font-medium text-foreground italic">
-                        &quot;{report.target_preview || "(Target payload attached in review context)"}&quot;
+                        &quot;
+                        {report.target_preview || "(Target payload attached in review context)"}
+                        &quot;
                       </p>
                       {report.author_name && (
                         <p className="mt-1 text-[0.7rem] text-muted-foreground">
@@ -339,63 +341,63 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
                       <Eye className="h-3.5 w-3.5" />
                       <span>View Reported</span>
                     </button>
-                  {canModerate && (
-                    <>
-                      {report.status !== "resolved" && (
-                        <>
-                          <button
-                            onClick={() => handleForceDeleteAndResolve(report)}
-                            className="flex items-center justify-center gap-1.5 rounded-2xl bg-rose-600 px-3 py-2 text-xs font-bold text-white shadow-soft hover:bg-rose-700 active:scale-[0.98]"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            <span>Remove Content</span>
-                          </button>
-
-                          {report.author_id && (
+                    {canModerate && (
+                      <>
+                        {report.status !== "resolved" && (
+                          <>
                             <button
-                              onClick={() => handleWarnAuthorAndResolve(report)}
-                              className="flex items-center justify-center gap-1.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-800 dark:text-amber-200 hover:bg-amber-500/20"
+                              onClick={() => handleForceDeleteAndResolve(report)}
+                              className="flex items-center justify-center gap-1.5 rounded-2xl bg-rose-600 px-3 py-2 text-xs font-bold text-white shadow-soft hover:bg-rose-700 active:scale-[0.98]"
                             >
-                              <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
-                              <span>Issue Warning</span>
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span>Remove Content</span>
                             </button>
-                          )}
-                        </>
-                      )}
 
-                      {report.status === "pending" && (
-                        <button
-                          onClick={() =>
-                            handleUpdateReport(
-                              report.id,
-                              "investigating",
-                              "Investigating by moderator",
-                            )
-                          }
-                          className="flex items-center justify-center gap-1.5 rounded-2xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground hover:bg-foreground/5"
-                        >
-                          <Eye className="h-3.5 w-3.5 text-blue-500" />
-                          <span>Mark Investigating</span>
-                        </button>
-                      )}
+                            {report.author_id && (
+                              <button
+                                onClick={() => handleWarnAuthorAndResolve(report)}
+                                className="flex items-center justify-center gap-1.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-800 dark:text-amber-200 hover:bg-amber-500/20"
+                              >
+                                <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
+                                <span>Issue Warning</span>
+                              </button>
+                            )}
+                          </>
+                        )}
 
-                      {report.status !== "dismissed" && (
-                        <button
-                          onClick={() =>
-                            handleUpdateReport(
-                              report.id,
-                              "dismissed",
-                              "Dismissed as false report / non-violative",
-                            )
-                          }
-                          className="flex items-center justify-center gap-1.5 rounded-2xl border border-border/60 bg-transparent px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
-                        >
-                          <XCircle className="h-3.5 w-3.5" />
-                          <span>Dismiss Report</span>
-                        </button>
-                      )}
-                    </>
-                  )}
+                        {report.status === "pending" && (
+                          <button
+                            onClick={() =>
+                              handleUpdateReport(
+                                report.id,
+                                "investigating",
+                                "Investigating by moderator",
+                              )
+                            }
+                            className="flex items-center justify-center gap-1.5 rounded-2xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground hover:bg-foreground/5"
+                          >
+                            <Eye className="h-3.5 w-3.5 text-blue-500" />
+                            <span>Mark Investigating</span>
+                          </button>
+                        )}
+
+                        {report.status !== "dismissed" && (
+                          <button
+                            onClick={() =>
+                              handleUpdateReport(
+                                report.id,
+                                "dismissed",
+                                "Dismissed as false report / non-violative",
+                              )
+                            }
+                            className="flex items-center justify-center gap-1.5 rounded-2xl border border-border/60 bg-transparent px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
+                          >
+                            <XCircle className="h-3.5 w-3.5" />
+                            <span>Dismiss Report</span>
+                          </button>
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

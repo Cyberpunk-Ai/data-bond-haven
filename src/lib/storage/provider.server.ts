@@ -15,11 +15,50 @@ export interface StorageStat {
   contentType: string;
 }
 
+/** One read result. `totalSize` is the whole object; `body` may be a slice. */
+export interface StorageRead {
+  body: Uint8Array;
+  contentType: string;
+  totalSize: number;
+  /** True when the backend served only the requested byte range (HTTP 206). */
+  partial: boolean;
+}
+
+export interface StorageProbe {
+  ok: boolean;
+  /** Coarse reason for a failure — safe to show an admin, never a stack trace. */
+  detail?: string;
+}
+
+/** What backend is actually live, for the admin console and the status page. */
+export interface StorageInfo {
+  /** `s3` covers every S3-compatible store (R2, B2, Spaces, MinIO, AWS). */
+  id: "s3" | "supabase";
+  label: string;
+  bucket: string;
+  /** Host only — credentials are never reported anywhere. */
+  endpoint?: string;
+}
+
+/** One page of key names, plus the cursor that continues where this stopped. */
+export interface StorageListing {
+  keys: string[];
+  /** null once the whole bucket has been enumerated. */
+  nextCursor: string | null;
+}
+
 export interface StorageProvider {
+  readonly info: StorageInfo;
   /** Write a file to storage under `key`. */
   put(key: string, body: Uint8Array | ArrayBuffer, contentType: string): Promise<StoragePutResult>;
   /** Read a file back out; returns null if it does not exist. */
-  get(key: string): Promise<{ body: Uint8Array; contentType: string } | null>;
+  get(key: string): Promise<StorageRead | null>;
+  /**
+   * Read `start..end` (inclusive) of an object. Players seek through video and
+   * audio with byte ranges, so without this the proxy had to pull the entire
+   * recording into memory for every seek.
+   */
+  getRange(key: string, start: number, end?: number): Promise<StorageRead | null>;
   /**
    * Permanently remove an object. Required for GDPR/CCPA erasure, deleting a
    * post's media, and expiring stories — without it, bytes outlive every row
@@ -28,6 +67,23 @@ export interface StorageProvider {
   delete(keys: string[]): Promise<string[]>;
   /** Metadata for an object (size/content-type); null if it does not exist. */
   stat(key: string): Promise<StorageStat | null>;
+  /**
+   * A directly-fetchable URL for a public object, when the bucket is mirrored
+   * behind a CDN hostname. Returning null means "always stream through the
+   * signed proxy", which is the default and the safe answer for private data.
+   */
+  publicUrl?(key: string): string | null;
+  /**
+   * Cheap credential/permission check used by /api/public/health. Must not
+   * write anything: probes read a key that does not exist.
+   */
+  verifyAccess(): Promise<StorageProbe>;
+  /**
+   * Enumerate object keys a page at a time. Only the relocation tool needs this
+   * (moving bytes out of a store the platform is leaving), so it is optional —
+   * no request path may depend on it.
+   */
+  list?(cursor?: string | null): Promise<StorageListing>;
 }
 
 /** Single-key convenience wrapper around {@link StorageProvider.delete}. */
@@ -88,7 +144,9 @@ function sizeLimitsBytes(): Record<"image" | "video" | "audio" | "document", num
   };
 }
 
-export function isAllowedContentType(contentType: string): contentType is keyof typeof ALLOWED_CONTENT_TYPES {
+export function isAllowedContentType(
+  contentType: string,
+): contentType is keyof typeof ALLOWED_CONTENT_TYPES {
   return Object.prototype.hasOwnProperty.call(ALLOWED_CONTENT_TYPES, contentType);
 }
 

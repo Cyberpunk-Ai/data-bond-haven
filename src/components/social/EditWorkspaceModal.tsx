@@ -34,7 +34,12 @@ interface EditWorkspaceModalProps {
  * itself is re-checked server-side by the "workspaces owner update" RLS
  * policy, so a stolen UI session still can't edit a team it doesn't manage.
  */
-export function EditWorkspaceModal({ isOpen, workspace, onClose, onSave }: EditWorkspaceModalProps) {
+export function EditWorkspaceModal({
+  isOpen,
+  workspace,
+  onClose,
+  onSave,
+}: EditWorkspaceModalProps) {
   const [form, setForm] = useState({
     name: workspace.name,
     bio: workspace.bio,
@@ -55,7 +60,14 @@ export function EditWorkspaceModal({ isOpen, workspace, onClose, onSave }: EditW
         avatarUrl: workspace.avatarUrl,
       });
     }
-  }, [isOpen, workspace.id, workspace.name, workspace.bio, workspace.logoEmoji, workspace.avatarUrl]);
+  }, [
+    isOpen,
+    workspace.id,
+    workspace.name,
+    workspace.bio,
+    workspace.logoEmoji,
+    workspace.avatarUrl,
+  ]);
 
   if (!isOpen) return null;
 
@@ -104,7 +116,7 @@ export function EditWorkspaceModal({ isOpen, workspace, onClose, onSave }: EditW
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4"
+        className="w-full max-w-md max-h-[92dvh] overflow-y-auto rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -196,7 +208,9 @@ export function EditWorkspaceModal({ isOpen, workspace, onClose, onSave }: EditW
               placeholder="What does this team post about?"
               className="w-full rounded-2xl bg-muted/40 border border-border px-3.5 py-2.5 text-sm outline-none resize-none focus:border-brand"
             />
-            <p className="mt-1 text-right text-[11px] text-muted-foreground">{form.bio.length}/280</p>
+            <p className="mt-1 text-right text-[11px] text-muted-foreground">
+              {form.bio.length}/280
+            </p>
           </div>
 
           <div className="flex items-center gap-3 pt-1">

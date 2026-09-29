@@ -43,7 +43,12 @@ function latestBackupDir() {
   if (!dirs.length) die("backups/ is empty.");
   return join(root, dirs[dirs.length - 1]);
 }
-const dir = args.find((a) => !a.startsWith("--")) ? join(repoRoot, args.find((a) => !a.startsWith("--"))) : latestBackupDir();
+const dir = args.find((a) => !a.startsWith("--"))
+  ? join(
+      repoRoot,
+      args.find((a) => !a.startsWith("--")),
+    )
+  : latestBackupDir();
 if (!existsSync(join(dir, "manifest.json"))) die(`Not a backup folder: ${dir}`);
 
 const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
@@ -57,7 +62,9 @@ console.log(`Tables:  ${manifest.tables.length}, buckets: ${manifest.buckets.len
 if (!yes) {
   console.log(`Mode:    VALIDATE ONLY (nothing changes). Add --yes to restore.`);
 } else {
-  console.log(`Mode:    RESTORE (${[!skipSchema && "schema", !skipData && "data", !skipStorage && "storage"].filter(Boolean).join(" + ") || "nothing"})`);
+  console.log(
+    `Mode:    RESTORE (${[!skipSchema && "schema", !skipData && "data", !skipStorage && "storage"].filter(Boolean).join(" + ") || "nothing"})`,
+  );
 }
 
 const sql = postgres(url, { max: 1, connect_timeout: 20, idle_timeout: 60 });
@@ -87,7 +94,10 @@ if (schemaSql && !skipSchema) {
     const script =
       `create schema ${tmp};\nset search_path to ${tmp}, public, extensions;\n` +
       schemaSql
-        .replace(/^set search_path to public[^\n]*$/m, `set search_path to ${tmp}, public, extensions;`)
+        .replace(
+          /^set search_path to public[^\n]*$/m,
+          `set search_path to ${tmp}, public, extensions;`,
+        )
         .replace(/\bpublic\./g, `"${tmp}".`);
     try {
       // Run every statement, then roll back — proves the DDL applies cleanly
@@ -115,7 +125,9 @@ if (schemaSql && !skipSchema) {
 // ---------------------------------------------------------------------------
 const dataDir = join(dir, "data");
 if (existsSync(dataDir)) {
-  const files = manifest.tables.filter((t) => t.rows != null && existsSync(join(dataDir, `${t.name}.json`)));
+  const files = manifest.tables.filter(
+    (t) => t.rows != null && existsSync(join(dataDir, `${t.name}.json`)),
+  );
   if (!yes) {
     const total = files.reduce((s, t) => s + (t.rows || 0), 0);
     console.log(`Data check: ${files.length} table files present, ${total} rows expected.`);
@@ -130,7 +142,9 @@ if (existsSync(dataDir)) {
     const placed = new Set();
     let remaining = files.map((t) => t.name);
     while (remaining.length) {
-      const pass = remaining.filter((n) => [...deps[n]].every((d) => placed.has(d) || remaining.indexOf(d) === -1 || deps[d].has(n)));
+      const pass = remaining.filter((n) =>
+        [...deps[n]].every((d) => placed.has(d) || remaining.indexOf(d) === -1 || deps[d].has(n)),
+      );
       const picked = pass.length ? pass : [remaining[0]]; // cycle -> force one
       for (const n of picked) {
         order.push(n);
@@ -187,48 +201,64 @@ if (!skipStorage && existsSync(storageDir)) {
   if (!yes) {
     const objs = manifest.buckets.reduce((s, b) => s + (b.objects || []).length, 0);
     const onDisk = objs > 0 && existsSync(join(storageDir, manifest.buckets[0].name));
-    console.log(`Storage check: ${objs} object(s) listed${onDisk ? ", files present" : ", files NOT downloaded (listing-only backup)"}.`);
+    console.log(
+      `Storage check: ${objs} object(s) listed${onDisk ? ", files present" : ", files NOT downloaded (listing-only backup)"}.`,
+    );
   } else {
-  const MIME = {
-    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
-    ".gif": "image/gif", ".mp4": "video/mp4", ".webm": "video/webm", ".mp3": "audio/mpeg",
-    ".wav": "audio/wav", ".ogg": "audio/ogg", ".m4a": "audio/mp4", ".pdf": "application/pdf",
-    ".txt": "text/plain", ".json": "application/json",
-  };
+    const MIME = {
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png": "image/png",
+      ".webp": "image/webp",
+      ".gif": "image/gif",
+      ".mp4": "video/mp4",
+      ".webm": "video/webm",
+      ".mp3": "audio/mpeg",
+      ".wav": "audio/wav",
+      ".ogg": "audio/ogg",
+      ".m4a": "audio/mp4",
+      ".pdf": "application/pdf",
+      ".txt": "text/plain",
+      ".json": "application/json",
+    };
 
-  let uploaded = 0;
-  let failed = 0;
-  for (const bucket of manifest.buckets) {
-    const bdir = join(storageDir, bucket.name);
-    if (!existsSync(bdir)) continue;
-    // Ensure the bucket exists.
-    try {
-      await apiFetch(env, "/storage/v1/bucket", {
-        method: "POST",
-        body: JSON.stringify({ id: bucket.name, name: bucket.name, public: bucket.public }),
-      });
-    } catch {
-      /* exists */
-    }
-    for (const key of bucket.objects || []) {
-      const file = join(bdir, ...key.split("/"));
-      if (!existsSync(file)) continue;
-      const ext = key.slice(key.lastIndexOf(".")).toLowerCase();
+    let uploaded = 0;
+    let failed = 0;
+    for (const bucket of manifest.buckets) {
+      const bdir = join(storageDir, bucket.name);
+      if (!existsSync(bdir)) continue;
+      // Ensure the bucket exists.
       try {
-        const body = new Uint8Array(readFileSync(file));
-        await apiFetch(env, `/storage/v1/object/${bucket.name}/${key}`, {
+        await apiFetch(env, "/storage/v1/bucket", {
           method: "POST",
-          headers: { "Content-Type": MIME[ext] || "application/octet-stream", "x-upsert": "true" },
-          body,
+          body: JSON.stringify({ id: bucket.name, name: bucket.name, public: bucket.public }),
         });
-        uploaded++;
-      } catch (e) {
-        failed++;
-        if (failed <= 5) console.warn(`  storage ${bucket.name}/${key}: ${String(e.message).slice(0, 120)}`);
+      } catch {
+        /* exists */
+      }
+      for (const key of bucket.objects || []) {
+        const file = join(bdir, ...key.split("/"));
+        if (!existsSync(file)) continue;
+        const ext = key.slice(key.lastIndexOf(".")).toLowerCase();
+        try {
+          const body = new Uint8Array(readFileSync(file));
+          await apiFetch(env, `/storage/v1/object/${bucket.name}/${key}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": MIME[ext] || "application/octet-stream",
+              "x-upsert": "true",
+            },
+            body,
+          });
+          uploaded++;
+        } catch (e) {
+          failed++;
+          if (failed <= 5)
+            console.warn(`  storage ${bucket.name}/${key}: ${String(e.message).slice(0, 120)}`);
+        }
       }
     }
-  }
-  console.log(`Storage: ${uploaded} uploaded, ${failed} failed.`);
+    console.log(`Storage: ${uploaded} uploaded, ${failed} failed.`);
   }
 } else if (!existsSync(storageDir)) {
   console.log("Storage: no downloaded objects in this backup (listing-only).");
@@ -241,7 +271,9 @@ try {
 await sql.end();
 
 if (!yes) {
-  console.log(`\nValidation OK. To actually restore:  node scripts/db-restore.mjs "${dir.replace(repoRoot + "\\", "")}" --yes`);
+  console.log(
+    `\nValidation OK. To actually restore:  node scripts/db-restore.mjs "${dir.replace(repoRoot + "\\", "")}" --yes`,
+  );
 } else {
   console.log("\nRestore complete.");
 }

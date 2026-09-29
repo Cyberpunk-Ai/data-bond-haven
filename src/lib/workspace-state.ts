@@ -107,10 +107,16 @@ async function hydrate(force = false) {
   // Workspaces the caller owns, plus workspaces they're an active member of.
   const [{ data: owned }, { data: memberOf }] = await Promise.all([
     db.from("workspaces").select("*").order("created_at"),
-    db.from("workspace_members").select("workspace_id").eq("user_id", userId).eq("status", "active"),
+    db
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", userId)
+      .eq("status", "active"),
   ]);
   const ids = new Set<string>([...(owned ?? []).map((r: any) => r.id)]);
-  const extraIds = (memberOf ?? []).map((r: any) => r.workspace_id).filter((id: string) => !ids.has(id));
+  const extraIds = (memberOf ?? [])
+    .map((r: any) => r.workspace_id)
+    .filter((id: string) => !ids.has(id));
   let rows = (owned ?? []) as Record<string, any>[];
   if (extraIds.length) {
     const { data: extra } = await db.from("workspaces").select("*").in("id", extraIds);
@@ -136,11 +142,17 @@ async function hydrate(force = false) {
         email: String(m.email),
         avatar_url: null,
         role: (m.role ?? "Viewer") as WorkspaceRole,
-        status: (m.status === "active" ? "active" : m.status === "declined" ? "declined" : "invited") as WorkspaceMember["status"],
+        status: (m.status === "active"
+          ? "active"
+          : m.status === "declined"
+            ? "declined"
+            : "invited") as WorkspaceMember["status"],
         userId: m.user_id ?? null,
       }));
     const myRole: WorkspaceRole | null =
-      row.owner_id === userId ? "Owner" : (rowMembers.find((m) => m.userId === userId)?.role ?? null);
+      row.owner_id === userId
+        ? "Owner"
+        : (rowMembers.find((m) => m.userId === userId)?.role ?? null);
     return {
       id: String(row.id),
       name: String(row.name),
@@ -277,7 +289,12 @@ export function useWorkspace() {
       if (!userId) throw new Error("Sign in to create a workspace.");
       const { data, error } = await db
         .from("workspaces")
-        .insert({ name, owner_id: userId, logo_emoji: logoEmoji, ...(avatarUrl ? { avatar_url: avatarUrl } : {}) })
+        .insert({
+          name,
+          owner_id: userId,
+          logo_emoji: logoEmoji,
+          ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+        })
         .select("id")
         .maybeSingle();
       if (error || !data?.id) throw new Error(error?.message ?? "Could not create that workspace.");
@@ -294,18 +311,29 @@ export function useWorkspace() {
       persistActiveId(activeWsId);
       listeners.forEach((fn) => fn());
     },
-    async updateWorkspaceProfile(patch: { name?: string; bio?: string; avatarUrl?: string | null; logoEmoji?: string }) {
+    async updateWorkspaceProfile(patch: {
+      name?: string;
+      bio?: string;
+      avatarUrl?: string | null;
+      logoEmoji?: string;
+    }) {
       if (!activeWsId || activeWsId === PERSONAL_ID) throw new Error("Choose a workspace first.");
       await applyWorkspaceProfilePatch(activeWsId, patch);
     },
     // Same edit, keyed by workspace id — lets the team profile page edit the
     // team it is showing even when a different workspace is active in the
     // composer. RLS ("workspaces owner update") still enforces Owner/Admin.
-    async updateWorkspaceFor(workspaceId: string, patch: { name?: string; bio?: string; avatarUrl?: string | null; logoEmoji?: string }) {
+    async updateWorkspaceFor(
+      workspaceId: string,
+      patch: { name?: string; bio?: string; avatarUrl?: string | null; logoEmoji?: string },
+    ) {
       await applyWorkspaceProfilePatch(workspaceId, patch);
     },
     async respondToInvite(memberId: string, accept: boolean) {
-      const { error } = await db.rpc("respond_workspace_invite", { _member_id: memberId, _accept: accept });
+      const { error } = await db.rpc("respond_workspace_invite", {
+        _member_id: memberId,
+        _accept: accept,
+      });
       if (error) throw new Error(error.message);
       await hydrate(true);
     },

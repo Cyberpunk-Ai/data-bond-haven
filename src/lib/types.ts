@@ -269,7 +269,20 @@ export interface Conversation {
 }
 
 export type NotificationType =
-  "like" | "repost" | "comment" | "reply" | "follow" | "mention" | "space" | "tip" | "payout" | "system" | "story_like" | "message" | "workspace_invite" | "workspace";
+  | "like"
+  | "repost"
+  | "comment"
+  | "reply"
+  | "follow"
+  | "mention"
+  | "space"
+  | "tip"
+  | "payout"
+  | "system"
+  | "story_like"
+  | "message"
+  | "workspace_invite"
+  | "workspace";
 
 export interface Notification {
   id: string;
@@ -308,7 +321,11 @@ export interface Story {
   created_at: string;
   expires_at: string;
   view_count: number;
-  liked?: boolean;
+  /**
+   * Whether the *viewer* liked this story. `getStories()` hydrates it from
+   * `story_likes` so the heart matches `likes_count`, which already includes
+   * their like. One field on purpose: a second `liked` flag let the two disagree.
+   */
   likedByMe?: boolean;
   likes_count?: number;
   location?: string;

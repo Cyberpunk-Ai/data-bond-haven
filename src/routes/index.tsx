@@ -213,7 +213,11 @@ function Nav() {
 
           <div className="hidden items-center space-x-8 text-sm font-bold text-foreground/80 md:flex">
             {links.map((l) => (
-              <a key={l.href} href={l.href} className="transition-colors hover:text-brand">
+              <a
+                key={l.href}
+                href={l.href}
+                className="inline-flex min-h-9 items-center transition-colors hover:text-brand"
+              >
                 {l.label}
               </a>
             ))}
@@ -320,7 +324,7 @@ function Nav() {
               <>
                 <Link
                   to="/auth"
-                  className="text-sm font-bold text-foreground/80 transition-colors hover:text-brand"
+                  className="inline-flex min-h-9 items-center text-sm font-bold text-foreground/80 transition-colors hover:text-brand"
                 >
                   Log in
                 </Link>
@@ -751,7 +755,7 @@ function Community() {
           </ul>
           <a
             href="#cta"
-            className="inline-flex items-center gap-2 font-bold text-brand transition-all hover:gap-3"
+            className="inline-flex min-h-9 items-center gap-2 font-bold text-brand transition-all hover:gap-3"
           >
             Explore Spaces <ArrowRight className="h-4 w-4" />
           </a>
@@ -773,8 +777,8 @@ function Creators() {
             Turn your passion into a <span className="gradient-text">paycheck</span>
           </h2>
           <p className="text-xl text-muted-foreground">
-            Subscriptions, tips, and brand deals — with analytics that show exactly what resonates.
-            Keep up to 95% of what you earn.
+            Subscriptions, tips, and brand deals — with analytics that show exactly what
+            resonates. Keep up to 95% of what you earn.
           </p>
           <div className="grid grid-cols-2 gap-6">
             <div className="glass-panel rounded-3xl p-6 shadow-soft">
@@ -956,23 +960,27 @@ function Pricing() {
           </p>
         </Reveal>
         <div className="mb-16 flex items-center justify-center gap-4">
-          <span className={`text-sm font-semibold ${!annual ? "text-foreground" : "text-muted-foreground"}`}>
+          <span
+            className={`inline-flex min-h-9 items-center text-sm font-semibold ${!annual ? "text-foreground" : "text-muted-foreground"}`}
+          >
             Monthly
           </span>
           <button
             onClick={() => setAnnual(!annual)}
             aria-label="Toggle annual billing"
-            className={`relative h-7 w-12 rounded-full transition-colors ${
+            className={`relative h-9 w-14 cursor-pointer rounded-full transition-colors ${
               annual ? "bg-brand" : "bg-muted-foreground/30"
             }`}
           >
             <span
-              className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                annual ? "left-6" : "left-1"
+              className={`absolute top-2 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                annual ? "left-7" : "left-2"
               }`}
             />
           </button>
-          <span className={`text-sm font-semibold ${annual ? "text-foreground" : "text-muted-foreground"}`}>
+          <span
+            className={`inline-flex min-h-9 items-center text-sm font-semibold ${annual ? "text-foreground" : "text-muted-foreground"}`}
+          >
             Annual
             <span className="ml-2 rounded-full bg-brand/15 px-2 py-0.5 text-xs font-bold text-brand">
               Save 20%
@@ -1069,7 +1077,7 @@ function Cta() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="Enter your email"
-                className="h-14 flex-1 rounded-full bg-white/10 px-6 text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-white/40"
+                className="h-14 w-full rounded-full bg-white/10 px-6 text-base text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-white/40 sm:flex-1"
               />
               <button
                 type="submit"
@@ -1114,7 +1122,7 @@ function Index() {
 
   if (redirecting) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="flex min-h-dvh items-center justify-center bg-background">
         <span className="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
       </div>
     );

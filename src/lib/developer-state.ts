@@ -47,7 +47,6 @@ function commit(next: DeveloperState) {
   listeners.forEach((fn) => fn());
 }
 
-
 async function hydrate() {
   const userId = signedInProfileId();
   if (!userId) {
@@ -115,7 +114,9 @@ export function useDeveloper() {
   }
 
   async function addWebhook(url: string, description: string, events: string[]) {
-    const row = await insertOwnedRow("webhooks", { url, events, active: true, description }).catch(() => null);
+    const row = await insertOwnedRow("webhooks", { url, events, active: true, description }).catch(
+      () => null,
+    );
     const hook: Webhook = {
       id: String(row?.id ?? `wh_${Date.now()}`),
       url,

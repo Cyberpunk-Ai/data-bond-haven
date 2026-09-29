@@ -5,7 +5,11 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { requirePlanCapability, UpgradeRequiredError } from "@/lib/plan-guard.server";
 
 async function myProfileId(supabase: any, userId: string): Promise<string> {
-  const { data } = await supabase.from("profiles").select("id").eq("auth_user_id", userId).maybeSingle();
+  const { data } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("auth_user_id", userId)
+    .maybeSingle();
   if (!data) throw new Error("Profile not found");
   return data.id as string;
 }
@@ -48,7 +52,12 @@ export const createApiKey = createServerFn({ method: "POST" })
       .select("id,created_at")
       .single();
     if (error) throw new Error("Could not create key");
-    return { id: row.id as string, token, last4: token.slice(-4), createdAt: row.created_at as string };
+    return {
+      id: row.id as string,
+      token,
+      last4: token.slice(-4),
+      createdAt: row.created_at as string,
+    };
   });
 
 /** Queues a test event to one of the caller's webhooks and dispatches it immediately. */
@@ -67,7 +76,11 @@ export const sendTestWebhook = createServerFn({ method: "POST" })
     await (supabaseAdmin as any).from("webhook_deliveries").insert({
       webhook_id: hook.id,
       event: "ping",
-      payload: { event: "ping", created_at: new Date().toISOString(), data: { message: "Hello from your webhook" } },
+      payload: {
+        event: "ping",
+        created_at: new Date().toISOString(),
+        data: { message: "Hello from your webhook" },
+      },
     });
     const { dispatchDueWebhooks } = await import("./api-auth.server");
     return dispatchDueWebhooks(10);

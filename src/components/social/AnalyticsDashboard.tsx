@@ -131,7 +131,9 @@ export function AnalyticsDashboard({ workspaceId }: { workspaceId?: string }) {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-xl font-black">{workspaceId ? "Team Analytics" : "Creator Analytics"}</h2>
+            <h2 className="text-xl font-black">
+              {workspaceId ? "Team Analytics" : "Creator Analytics"}
+            </h2>
             <span
               className={cn(
                 "px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wide",
@@ -430,31 +432,32 @@ export function AnalyticsDashboard({ workspaceId }: { workspaceId?: string }) {
                 {data && data.topPosts.length > 0 ? (
                   <>
                     <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2 xl:grid-cols-3">
-                      {(showAllPosts ? data.topPosts : data.topPosts.slice(0, POSTS_PREVIEW_COUNT)).map(
-                        (post, idx) => (
-                          <div
-                            key={post.id}
-                            className="rounded-2xl border border-border/60 bg-muted/20 p-3.5 space-y-2 hover:bg-muted/40 transition-colors"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-xs sm:text-sm font-bold text-foreground line-clamp-1">
-                                {post.title}
-                              </p>
-                              <span className="text-[0.65rem] font-extrabold px-2 py-0.5 rounded bg-brand/10 text-brand whitespace-nowrap">
-                                Rank #{idx + 1}
-                              </span>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                              <span>{post.views.toLocaleString()} views</span>
-                              <span>{post.likes} likes</span>
-                              <span>{post.reposts} reposts</span>
-                              <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                                {post.ctr} engagement
-                              </span>
-                            </div>
+                      {(showAllPosts
+                        ? data.topPosts
+                        : data.topPosts.slice(0, POSTS_PREVIEW_COUNT)
+                      ).map((post, idx) => (
+                        <div
+                          key={post.id}
+                          className="rounded-2xl border border-border/60 bg-muted/20 p-3.5 space-y-2 hover:bg-muted/40 transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs sm:text-sm font-bold text-foreground line-clamp-1">
+                              {post.title}
+                            </p>
+                            <span className="text-[0.65rem] font-extrabold px-2 py-0.5 rounded bg-brand/10 text-brand whitespace-nowrap">
+                              Rank #{idx + 1}
+                            </span>
                           </div>
-                        ),
-                      )}
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                            <span>{post.views.toLocaleString()} views</span>
+                            <span>{post.likes} likes</span>
+                            <span>{post.reposts} reposts</span>
+                            <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                              {post.ctr} engagement
+                            </span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                     {data.topPosts.length > POSTS_PREVIEW_COUNT && (
                       <button

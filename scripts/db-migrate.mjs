@@ -138,7 +138,9 @@ async function main() {
           on conflict (version) do update set checksum = excluded.checksum`;
         console.log(`baselined ${f.name} (not executed)`);
       }
-      console.log(`\nRecorded ${pending.length} existing migrations as applied without running them.`);
+      console.log(
+        `\nRecorded ${pending.length} existing migrations as applied without running them.`,
+      );
       await reloadPostgrestSchema(sql);
       return;
     }

@@ -111,7 +111,7 @@ export function ReportModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 [scrollbar-width:thin]"
+        className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 [scrollbar-width:thin]"
         onClick={(e) => e.stopPropagation()}
       >
         {submitted ? (

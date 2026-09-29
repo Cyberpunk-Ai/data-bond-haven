@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Sparkles, X, Loader2, Wand2, Copy, Check, Lock, Zap } from "lucide-react";
 import { generateAIDraft } from "@/lib/api-client";
 import { friendlyError } from "@/lib/error-messages";
+import { usePlatform } from "@/lib/platform-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { cn } from "@/lib/utils";
 
@@ -58,6 +59,7 @@ const tonePresets: TonePreset[] = [
 
 export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: AiDraftModalProps) {
   const { currentPlan, planDetails, usage, recordAiDraftUsage, isPlus, isPro } = usePlan();
+  const { aiEnabled } = usePlatform();
   const [customPrompt, setCustomPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ content: string; suggestedTags: string[] } | null>(null);
@@ -71,6 +73,12 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
   const isLimitReached = usedToday >= maxDrafts;
 
   async function handleGenerate(promptToUse: string, requiredTier?: "free" | "plus" | "pro") {
+    // The Composer hides this panel when the subsystem is off; the guard is for
+    // a toggle that flips while the modal is already open.
+    if (!aiEnabled) {
+      setError("AI drafting is paused platform-wide right now. Try again later.");
+      return;
+    }
     if (requiredTier === "pro" && !isPro) {
       openUpgradeModal("Unlock Pro Industry Analysis & Unlimited AI");
       return;
@@ -122,7 +130,7 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div
-        className="glass-panel relative w-full max-w-lg overflow-hidden rounded-3xl p-6 shadow-2xl border border-border/80 bg-card/95"
+        className="glass-panel relative w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-3xl p-6 shadow-2xl border border-border/80 bg-card/95 custom-scrollbar"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -254,7 +262,7 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
             />
             <button
               onClick={() => handleGenerate(customPrompt || "Share a creative thought for today")}
-              disabled={loading || isLimitReached}
+              disabled={loading || isLimitReached || !aiEnabled}
               className="flex items-center gap-1.5 rounded-2xl bg-gradient-to-r from-brand to-brand-pink px-4 py-2.5 text-sm font-bold text-white shadow-soft hover:shadow-glow transition-all active:scale-95 disabled:opacity-50"
             >
               {loading ? (

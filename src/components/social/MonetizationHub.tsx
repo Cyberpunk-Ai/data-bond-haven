@@ -63,9 +63,7 @@ export function MonetizationHub() {
   const platformFee = `${feePercent}% platform fee`;
   const hasDestination = payoutDestination.configured;
   const inFlight = !!openPayout;
-  const openAmount = openPayout
-    ? payouts.find((p) => p.id === openPayout.id)?.amount
-    : undefined;
+  const openAmount = openPayout ? payouts.find((p) => p.id === openPayout.id)?.amount : undefined;
 
   const handlePayoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -225,7 +223,7 @@ export function MonetizationHub() {
           <p className="text-muted-foreground">
             Withdrawals are sent automatically to your payout account. We verify the account with
             our payment provider once, then store only an encrypted payout token and the last four
-            digits 
+            digits
           </p>
         </div>
       </div>
@@ -386,7 +384,7 @@ export function MonetizationHub() {
 
       {isPayoutModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-xl space-y-5">
+          <div className="w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto custom-scrollbar rounded-3xl border border-border bg-card p-6 shadow-xl space-y-5">
             <div>
               <h3 className="text-lg font-black">Withdraw your earnings</h3>
               <p className="text-xs text-muted-foreground">
@@ -424,10 +422,7 @@ export function MonetizationHub() {
               </div>
 
               {(() => {
-                const gross = Math.min(
-                  Math.max(Number(withdrawAmount) || 0, 0),
-                  pendingBalance,
-                );
+                const gross = Math.min(Math.max(Number(withdrawAmount) || 0, 0), pendingBalance);
                 if (!(gross > 0)) return null;
                 const fee = Math.round(gross * (feePercent / 100) * 100) / 100;
                 return (
@@ -443,8 +438,7 @@ export function MonetizationHub() {
                       </span>
                     </div>
                     <p className="text-[10px] text-muted-foreground">
-                      The fee is charged only on withdrawal — tips you receive are credited in
-                      full.
+                      The fee is charged only on withdrawal — tips you receive are credited in full.
                     </p>
                   </div>
                 );

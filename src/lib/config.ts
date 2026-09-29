@@ -1,9 +1,12 @@
 /**
- * Single source of truth for environment-swappable configuration.
+ * Every browser tunable (brand, composer/feed limits, feature flags) reads from
+ * `import.meta.env.VITE_*` with a safe default, so the same build can be
+ * re-pointed at a different deployment without code edits.
  *
- * Every tunable (brand, limits, feature flags, storage bucket, AI model,
- * pagination) reads from `import.meta.env.VITE_*` with a safe default, so the
- * same build can be re-pointed at a different deployment without code edits.
+ * Server-only resources (object storage, AI keys and models, TURN, payments,
+ * upload caps) are deliberately absent: the browser must never learn them, and
+ * the server never trusts a browser-supplied copy. Storage config lives in
+ * `src/lib/storage/`, the rest in `src/lib/env.server.ts`.
  */
 
 type EnvRecord = Record<string, string | boolean | undefined>;
@@ -32,22 +35,14 @@ export const appConfig = {
     tagline: str("VITE_APP_TAGLINE", "Where creators gather, talk and get paid."),
     supportEmail: str("VITE_SUPPORT_EMAIL", "support@spaces1.com"),
   },
-  storage: {
-    bucket: str("VITE_MEDIA_BUCKET", "media"),
-    maxUploadMb: num("VITE_MAX_UPLOAD_MB", 25),
-  },
-  ai: {
-    textModel: str("VITE_AI_TEXT_MODEL", "google/gemini-2.5-flash"),
-    imageModel: str("VITE_AI_IMAGE_MODEL", "google/gemini-2.5-flash-image"),
-  },
   feed: {
     pageSize: num("VITE_FEED_PAGE_SIZE", 20),
     maxPageSize: num("VITE_FEED_MAX_PAGE_SIZE", 100),
-    storyTtlHours: num("VITE_STORY_TTL_HOURS", 24),
   },
   limits: {
-    postLength: num("VITE_MAX_POST_LENGTH", 500),
-    storyTextLength: num("VITE_MAX_STORY_LENGTH", 220),
+    // Composer cap. The server's own ceiling is higher (post-edit.functions.ts
+    // rejects > 5000 chars) so this stays a UX choice, not a security boundary.
+    postLength: num("VITE_MAX_POST_LENGTH", 1000),
   },
   geocoder: {
     url: str("VITE_GEOCODER_URL", "https://nominatim.openstreetmap.org/search"),
@@ -73,8 +68,3 @@ export const appConfig = {
 } as const;
 
 export type AppConfig = typeof appConfig;
-
-/** Convenience helper so components can branch on a flag by name. */
-export function isFeatureEnabled(feature: keyof AppConfig["features"]): boolean {
-  return appConfig.features[feature];
-}

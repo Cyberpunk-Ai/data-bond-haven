@@ -21,7 +21,7 @@ export function getScrollContainer(): HTMLElement | null {
 /** Current vertical scroll offset of the app's real scrolling element. */
 export function getScrollY(): number {
   const el = getScrollContainer();
-  return el ? el.scrollTop : (typeof window !== "undefined" ? window.scrollY : 0);
+  return el ? el.scrollTop : typeof window !== "undefined" ? window.scrollY : 0;
 }
 
 /** Smoothly return the app's real scrolling element to the top. */

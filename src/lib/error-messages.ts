@@ -13,7 +13,8 @@
 const GENERIC = "Something didn't work on our end. Please try again.";
 const OFFLINE = "You seem to be offline. Check your connection and try again.";
 const UNAVAILABLE = "This feature is temporarily unavailable. Please try again shortly.";
-const FORBIDDEN = "You don't have permission to do that. If it keeps happening, check your account.";
+const FORBIDDEN =
+  "You don't have permission to do that. If it keeps happening, check your account.";
 const CONFLICT = "That already exists. Try a different value and retry.";
 const RATE_LIMIT = "You're doing that a bit too fast — wait a moment and try again.";
 
@@ -41,7 +42,9 @@ export function friendlyError(err: unknown, fallback: string = GENERIC): string 
         const first = (issues[0] as { message?: unknown }).message;
         const human =
           typeof first === "string" && first && !TECHNICAL.test(first) ? first : fallback;
-        return issues.length > 1 ? `${human} (+${issues.length - 1} more check${issues.length - 1 > 1 ? "es" : ""})` : human;
+        return issues.length > 1
+          ? `${human} (+${issues.length - 1} more check${issues.length - 1 > 1 ? "es" : ""})`
+          : human;
       }
       return fallback;
     } catch {
@@ -50,12 +53,17 @@ export function friendlyError(err: unknown, fallback: string = GENERIC): string 
   }
 
   const m = msg.toLowerCase();
-  if (/failed to fetch|networkerror|network request failed|err_network|error connecting|timed? ?out/.test(m))
+  if (
+    /failed to fetch|networkerror|network request failed|err_network|error connecting|timed? ?out/.test(
+      m,
+    )
+  )
     return OFFLINE;
   if (/rate limit|too many requests|slow down/.test(m)) return RATE_LIMIT;
   if (/permission denied|row-level security|not authorized|authorization/.test(m)) return FORBIDDEN;
   if (/duplicate key|unique constraint|is not unique|already exists/.test(m)) return CONFLICT;
-  if (/environment variable|not configured|missing secret|\.dev\.vars/i.test(msg)) return UNAVAILABLE;
+  if (/environment variable|not configured|missing secret|\.dev\.vars/i.test(msg))
+    return UNAVAILABLE;
   if (TECHNICAL.test(msg)) {
     // Keep the real cause findable by developers without showing it to users.
     console.error("[friendlyError] technical message hidden from UI:", msg);

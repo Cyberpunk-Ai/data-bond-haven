@@ -14,6 +14,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { AppShell } from "@/components/social/AppShell";
+import { useMounted } from "@/hooks/use-mounted";
 import { useAuth } from "@/lib/auth-state";
 import { type PlanTier } from "@/lib/plans";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
@@ -48,6 +49,11 @@ function PricingPage() {
   const { isLoggedIn } = useAuth();
   const { currentPlan, cancelSubscription } = usePlan();
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  // Server-rendered for a guest, but a returning visitor already has a session
+  // on the client: without this gate the plan buttons change identity during
+  // hydration (React error #418) and the whole card grid re-renders.
+  const mounted = useMounted();
+  const authed = mounted && isLoggedIn;
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -175,7 +181,7 @@ function PricingPage() {
 
   return (
     <AppShell title="Plans & Perks">
-      <div className="relative isolate overflow-hidden min-h-[calc(100vh-4rem)]">
+      <div className="relative isolate overflow-hidden min-h-[calc(100dvh-4rem)]">
         {/* Creative Ambient Background Glows */}
         <div className="pointer-events-none absolute -top-40 left-1/2 -z-10 -translate-x-1/2 transform-gpu blur-3xl sm:-top-80">
           <div
@@ -207,7 +213,7 @@ function PricingPage() {
               <button
                 type="button"
                 onClick={() => setAnnual(false)}
-                className={`text-sm font-semibold transition-colors cursor-pointer ${
+                className={`inline-flex min-h-9 items-center text-sm font-semibold transition-colors cursor-pointer ${
                   !annual ? "text-foreground font-bold" : "text-muted-foreground"
                 }`}
               >
@@ -218,13 +224,13 @@ function PricingPage() {
                 type="button"
                 onClick={() => setAnnual(!annual)}
                 aria-label="Toggle annual billing"
-                className={`relative h-7 w-12 rounded-full transition-colors cursor-pointer focus:outline-hidden ${
+                className={`relative h-9 w-14 rounded-full transition-colors cursor-pointer focus:outline-hidden ${
                   annual ? "bg-brand" : "bg-muted-foreground/30"
                 }`}
               >
                 <span
-                  className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-md transition-all ${
-                    annual ? "left-6" : "left-1"
+                  className={`absolute top-2 h-5 w-5 rounded-full bg-white shadow-md transition-all ${
+                    annual ? "left-7" : "left-2"
                   }`}
                 />
               </button>
@@ -232,7 +238,7 @@ function PricingPage() {
               <button
                 type="button"
                 onClick={() => setAnnual(true)}
-                className={`text-sm font-semibold transition-colors cursor-pointer flex items-center ${
+                className={`inline-flex min-h-9 items-center text-sm font-semibold transition-colors cursor-pointer flex items-center ${
                   annual ? "text-foreground font-bold" : "text-muted-foreground"
                 }`}
               >
@@ -248,7 +254,7 @@ function PricingPage() {
           <div className="grid gap-8 md:grid-cols-3 items-stretch">
             {plans.map((p) => {
               const price = annual ? Math.round(p.monthly * 0.8) : p.monthly;
-              const isCurrent = isLoggedIn && currentPlan === p.id;
+              const isCurrent = authed && currentPlan === p.id;
 
               return (
                 <div
@@ -303,7 +309,7 @@ function PricingPage() {
                         <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                         Current Plan
                       </span>
-                    ) : !isLoggedIn ? (
+                    ) : !authed ? (
                       p.cta
                     ) : p.id === "free" ? (
                       "Switch to Free"

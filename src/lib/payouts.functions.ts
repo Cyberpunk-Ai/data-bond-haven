@@ -157,10 +157,19 @@ async function workspaceRow(db: any, workspaceId: string) {
 async function loadPayoutToken(
   db: any,
   scope: { profileId: string; workspaceId?: string | null },
-): Promise<{ recipientCode: string; bankName: string | null; last4: string | null; currency: string | null } | null> {
+): Promise<{
+  recipientCode: string;
+  bankName: string | null;
+  last4: string | null;
+  currency: string | null;
+} | null> {
   const { decryptRecipient } = await import("@/lib/payout-vault.server");
   const raw = scope.workspaceId
-    ? await db.from("workspace_payout_details").select("*").eq("workspace_id", scope.workspaceId).maybeSingle()
+    ? await db
+        .from("workspace_payout_details")
+        .select("*")
+        .eq("workspace_id", scope.workspaceId)
+        .maybeSingle()
     : await db
         .from("monetization_settings")
         .select("paystack_details")
@@ -170,7 +179,9 @@ async function loadPayoutToken(
   if (!row) return null;
   const blob = scope.workspaceId ? row.recipient_encrypted : row.paystack_details?.recipient;
   const bankName = scope.workspaceId ? row.bank_name : (row.paystack_details?.bank_name ?? null);
-  const last4 = scope.workspaceId ? row.account_last4 : (row.paystack_details?.account_last4 ?? null);
+  const last4 = scope.workspaceId
+    ? row.account_last4
+    : (row.paystack_details?.account_last4 ?? null);
   const currency = scope.workspaceId ? row.currency : (row.paystack_details?.currency ?? null);
   if (!blob || !blob.iv) return null;
   try {
@@ -204,7 +215,11 @@ async function loadPayoutSecret(
 } | null> {
   const { decryptRecipient } = await import("@/lib/payout-vault.server");
   const raw = scope.workspaceId
-    ? await db.from("workspace_payout_details").select("*").eq("workspace_id", scope.workspaceId).maybeSingle()
+    ? await db
+        .from("workspace_payout_details")
+        .select("*")
+        .eq("workspace_id", scope.workspaceId)
+        .maybeSingle()
     : await db
         .from("monetization_settings")
         .select("paystack_details")
@@ -220,7 +235,8 @@ async function loadPayoutSecret(
       recipientCode: s.recipient_code ?? "",
       bankCode: s.bank_code ?? null,
       accountNumber: s.account_number ?? null,
-      accountLast4: s.account_number_last4 ?? (s.account_number ? s.account_number.slice(-4) : null),
+      accountLast4:
+        s.account_number_last4 ?? (s.account_number ? s.account_number.slice(-4) : null),
       holderName: s.holder_name ?? null,
       bankName: s.bank_name ?? null,
       currency: s.currency ?? null,
@@ -232,7 +248,9 @@ async function loadPayoutSecret(
 }
 
 /** A masked, UI-safe view of a stored payout destination. */
-function maskedDestination(dest: { bankName: string | null; last4: string | null; currency: string | null } | null) {
+function maskedDestination(
+  dest: { bankName: string | null; last4: string | null; currency: string | null } | null,
+) {
   if (!dest) return { configured: false as const, bankName: null, last4: null, currency: null };
   return {
     configured: true as const,
@@ -422,37 +440,41 @@ async function providerBanks(): Promise<{ code: string; name: string; country: s
  */
 export const savePayoutDestination = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: {
-    workspaceId?: string | null;
-    type?: string;
-    bank_code?: string;
-    country?: string;
-    account_number?: string;
-    account_name?: string;
-  }) => {
-    const type = input.type === "mobile_money" ? "mobile_money" : "nuban";
-    const account_number = String(input.account_number ?? "").replace(/\s+/g, "");
-    const account_name = String(input.account_name ?? "").trim();
-    // Free text on purpose: a supporter in Lagos, Nairobi or Manila types their
-    // own bank's name. It is mapped to a provider code and verified below.
-    const bank_code = String(input.bank_code ?? "").trim().replace(/\s+/g, " ");
-    if (!/^\+?[A-Za-z0-9]{6,20}$/.test(account_number)) {
-      throw new Error("Enter a valid account number (6–20 characters).");
-    }
-    if (account_name.length < 2 || account_name.length > 80) {
-      throw new Error("Enter the account holder's full name.");
-    }
-    if (!/^[A-Za-z0-9_()&'. -]{1,60}$/.test(bank_code)) {
-      throw new Error("Enter your bank or mobile-money provider.");
-    }
-    return {
-      workspaceId: input.workspaceId ?? null,
-      type: type as "nuban" | "mobile_money",
-      bank_code,
-      account_number,
-      account_name,
-    };
-  })
+  .inputValidator(
+    (input: {
+      workspaceId?: string | null;
+      type?: string;
+      bank_code?: string;
+      country?: string;
+      account_number?: string;
+      account_name?: string;
+    }) => {
+      const type = input.type === "mobile_money" ? "mobile_money" : "nuban";
+      const account_number = String(input.account_number ?? "").replace(/\s+/g, "");
+      const account_name = String(input.account_name ?? "").trim();
+      // Free text on purpose: a supporter in Lagos, Nairobi or Manila types their
+      // own bank's name. It is mapped to a provider code and verified below.
+      const bank_code = String(input.bank_code ?? "")
+        .trim()
+        .replace(/\s+/g, " ");
+      if (!/^\+?[A-Za-z0-9]{6,20}$/.test(account_number)) {
+        throw new Error("Enter a valid account number (6–20 characters).");
+      }
+      if (account_name.length < 2 || account_name.length > 80) {
+        throw new Error("Enter the account holder's full name.");
+      }
+      if (!/^[A-Za-z0-9_()&'. -]{1,60}$/.test(bank_code)) {
+        throw new Error("Enter your bank or mobile-money provider.");
+      }
+      return {
+        workspaceId: input.workspaceId ?? null,
+        type: type as "nuban" | "mobile_money",
+        bank_code,
+        account_number,
+        account_name,
+      };
+    },
+  )
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context as any;
     const profileId = await myProfileId(supabase, userId);
@@ -507,12 +529,15 @@ export const savePayoutDestination = createServerFn({ method: "POST" })
         throw new Error(
           /invalid_bank_code|bank_code/i.test(message)
             ? "We couldn't match that bank with the payment provider. Enter the exact bank name from your statement."
-            : message || "The payment provider could not verify that account. Please check the details and try again.",
+            : message ||
+                "The payment provider could not verify that account. Please check the details and try again.",
         );
       }
     }
     if (!resolvedName && data.type !== "mobile_money") {
-      throw new Error("The payment provider could not verify that account. Please check the number and bank.");
+      throw new Error(
+        "The payment provider could not verify that account. Please check the number and bank.",
+      );
     }
 
     // 3. When the provider answers with a name, it must match the name the
@@ -546,7 +571,8 @@ export const savePayoutDestination = createServerFn({ method: "POST" })
         }),
       });
       recipientCode = res?.data?.recipient_code as string | undefined;
-      resolvedBankName = resolvedBankName || (res?.data?.details?.bank_name as string | undefined) || "";
+      resolvedBankName =
+        resolvedBankName || (res?.data?.details?.bank_name as string | undefined) || "";
     } catch (err) {
       console.warn("Provider recipient could not be minted (manual payout still OK):", err);
     }
@@ -614,7 +640,9 @@ export const savePayoutDestination = createServerFn({ method: "POST" })
 /** Masked payout destination for the current user or a team they own. */
 export const getPayoutDestination = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { workspaceId?: string | null }) => ({ workspaceId: input?.workspaceId ?? null }))
+  .inputValidator((input: { workspaceId?: string | null }) => ({
+    workspaceId: input?.workspaceId ?? null,
+  }))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context as any;
     const profileId = await myProfileId(supabase, userId);
@@ -678,14 +706,20 @@ export const requestPayout = createServerFn({ method: "POST" })
     const dest = await loadPayoutSecret(db, { profileId, workspaceId: data.workspaceId });
     if (!dest?.accountNumber) {
       throw new Error(
-        isTeam ? "The team owner must add a payout account first." : "Add your payout account first.",
+        isTeam
+          ? "The team owner must add a payout account first."
+          : "Add your payout account first.",
       );
     }
 
     // USD is the unit the creator is shown and the unit they type.
     const amountUsd = round2(data.amount ?? snapshot.pendingBalance);
     if (!(amountUsd > 0)) {
-      throw new Error(isTeam ? "The team doesn't have anything to withdraw yet." : "You don't have anything to withdraw yet.");
+      throw new Error(
+        isTeam
+          ? "The team doesn't have anything to withdraw yet."
+          : "You don't have anything to withdraw yet.",
+      );
     }
     if (amountUsd > snapshot.pendingBalance) {
       throw new Error("That's more than your available balance.");
@@ -914,9 +948,7 @@ export const listPayoutRequests = createServerFn({ method: "GET" })
 
     const rows = (data ?? []) as any[];
     const ids = Array.from(new Set(rows.map((r) => String(r.user_id))));
-    const wsIds = Array.from(
-      new Set(rows.map((r) => r.workspace_id).filter(Boolean) as string[]),
-    );
+    const wsIds = Array.from(new Set(rows.map((r) => r.workspace_id).filter(Boolean) as string[]));
     let people: Record<string, any> = {};
     let teams: Record<string, any> = {};
     if (ids.length) {
@@ -1065,7 +1097,11 @@ export const getPayoutAccount = createServerFn({ method: "GET" })
     try {
       secret = decryptRecipient(row.destination_enc);
     } catch {
-      return { available: false as const, bankName: row.bank_name ?? null, reason: "The stored account could not be read." };
+      return {
+        available: false as const,
+        bankName: row.bank_name ?? null,
+        reason: "The stored account could not be read.",
+      };
     }
 
     await writeAudit(
@@ -1106,18 +1142,24 @@ export const listPaymentActivity = createServerFn({ method: "GET" })
     const [tipsRes, plansRes, payoutsRes] = await Promise.all([
       db
         .from("tips")
-        .select("id, from_user_id, to_user_id, to_workspace_id, amount, exchange_rate, quoted_amount_usd, currency, message, created_at")
+        .select(
+          "id, from_user_id, to_user_id, to_workspace_id, amount, exchange_rate, quoted_amount_usd, currency, message, created_at",
+        )
         .order("created_at", { ascending: false })
         .limit(40),
       db
         .from("payments")
-        .select("id, user_id, plan, billing_cycle, amount, amount_minor, exchange_rate, quoted_amount_usd, currency, status, created_at")
+        .select(
+          "id, user_id, plan, billing_cycle, amount, amount_minor, exchange_rate, quoted_amount_usd, currency, status, created_at",
+        )
         .eq("kind", "plan")
         .order("created_at", { ascending: false })
         .limit(40),
       db
         .from("payouts")
-        .select("id, user_id, workspace_id, amount, amount_usd, exchange_rate, currency, status, created_at")
+        .select(
+          "id, user_id, workspace_id, amount, amount_usd, exchange_rate, currency, status, created_at",
+        )
         .order("created_at", { ascending: false })
         .limit(40),
     ]);
@@ -1136,10 +1178,16 @@ export const listPaymentActivity = createServerFn({ method: "GET" })
 
     const [peopleRows, teamRows] = await Promise.all([
       profileIds.size
-        ? db.from("profiles").select("id, display_name, username").in("id", [...profileIds])
+        ? db
+            .from("profiles")
+            .select("id, display_name, username")
+            .in("id", [...profileIds])
         : Promise.resolve({ data: [] as any[] }),
       wsIds.size
-        ? db.from("workspaces").select("id, name").in("id", [...wsIds])
+        ? db
+            .from("workspaces")
+            .select("id, name")
+            .in("id", [...wsIds])
         : Promise.resolve({ data: [] as any[] }),
     ]);
     const people: Record<string, any> = Object.fromEntries(

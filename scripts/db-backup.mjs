@@ -37,7 +37,7 @@ const storageDir = join(outDir, "storage");
 mkdirSync(outDir, { recursive: true });
 
 const sql = postgres(url, { max: 1, connect_timeout: 20 });
-const q = async (texts, ...args) => (await sql(texts, ...args));
+const q = async (texts, ...args) => await sql(texts, ...args);
 const esc = (s) => String(s).replaceAll("'", "''");
 
 // ---------------------------------------------------------------------------
@@ -65,8 +65,7 @@ const enums = await q`
   from pg_type t join pg_enum e on e.enumtypid = t.oid
   join pg_namespace n on n.oid = t.typnamespace
   where n.nspname = 'public' group by t.typname order by t.typname`;
-for (const e of enums)
-  parts.push(`create type public.${e.typname} as enum (${e.labels});`);
+for (const e of enums) parts.push(`create type public.${e.typname} as enum (${e.labels});`);
 
 // Tables + columns
 const tables = await q`
@@ -111,7 +110,9 @@ for (const t of tables) {
   );
   for (const c of cols)
     if (c.comment)
-      tableDdl.push(`comment on column public."${t.relname}"."${c.attname}" is '${esc(c.comment)}';`);
+      tableDdl.push(
+        `comment on column public."${t.relname}"."${c.attname}" is '${esc(c.comment)}';`,
+      );
 }
 const secTables = "-- ---------- tables ----------\n" + tableDdl.join("\n");
 
@@ -125,7 +126,9 @@ const cons = await q`
   order by con.contype = 'f', rel.relname, con.conname`; // parents before FKs
 const secCons =
   "-- ---------- constraints ----------\n" +
-    cons.map((c) => `alter table public."${c.table}" add constraint "${c.conname}" ${c.def};`).join("\n");
+  cons
+    .map((c) => `alter table public."${c.table}" add constraint "${c.conname}" ${c.def};`)
+    .join("\n");
 
 // Indexes (excluding those backing constraints)
 const idx = await q`
@@ -163,16 +166,18 @@ const secSeqCreate =
     // Identity sequences are created implicitly by CREATE TABLE — pre-creating
     // them would collide.
     .filter((s) => !s.is_identity)
-    .map((s) => `create sequence if not exists public."${s.sequencename}" start ${s.start_value ?? 1};`)
-    .join("\n");
-const secSeqOwn =
-  seqs
-    .filter((s) => s.owned_table && !s.is_identity)
     .map(
       (s) =>
-        `alter sequence public."${s.sequencename}" owned by public."${s.owned_table}"."${s.owned_column}";`,
+        `create sequence if not exists public."${s.sequencename}" start ${s.start_value ?? 1};`,
     )
     .join("\n");
+const secSeqOwn = seqs
+  .filter((s) => s.owned_table && !s.is_identity)
+  .map(
+    (s) =>
+      `alter sequence public."${s.sequencename}" owned by public."${s.owned_table}"."${s.owned_column}";`,
+  )
+  .join("\n");
 
 // Functions & procedures (skip aggregates/unsupported via try)
 const fns = await q`
@@ -197,13 +202,13 @@ const views = await q`
   where n.nspname = 'public' and c.relkind in ('v', 'm') order by c.relname`;
 const secViews =
   "-- ---------- views ----------\n" +
-    views
-      .map((v) =>
-        v.relkind === "m"
-          ? `create materialized view public."${v.relname}" as ${v.def};`
-          : `create view public."${v.relname}" as ${v.def};`,
-      )
-      .join("\n");
+  views
+    .map((v) =>
+      v.relkind === "m"
+        ? `create materialized view public."${v.relname}" as ${v.def};`
+        : `create view public."${v.relname}" as ${v.def};`,
+    )
+    .join("\n");
 
 // Assemble in dependency order: sequences -> tables -> ownership -> functions
 // -> constraints -> indexes -> views (functions come early because views and
@@ -229,11 +234,15 @@ parts.push(
     rls
       .map(
         (r) =>
-          (r.relrowsecurity ? `alter table public."${r.relname}" enable row level security;\n` : "") +
+          (r.relrowsecurity
+            ? `alter table public."${r.relname}" enable row level security;\n`
+            : "") +
           (r.relforcerowsecurity
             ? `alter table public."${r.relname}" force row level security;\n`
             : "") +
-          (r.relreplident === "f" ? `alter table public."${r.relname}" replica identity full;\n` : ""),
+          (r.relreplident === "f"
+            ? `alter table public."${r.relname}" replica identity full;\n`
+            : ""),
       )
       .join(""),
 );
@@ -296,7 +305,9 @@ parts.push(
 );
 
 writeFileSync(join(outDir, "schema.sql"), parts.join("\n\n") + "\n");
-console.log(`schema.sql: ${tables.length} tables, ${fns.length} functions, ${pols.length} policies, ${trgs.length} triggers`);
+console.log(
+  `schema.sql: ${tables.length} tables, ${fns.length} functions, ${pols.length} policies, ${trgs.length} triggers`,
+);
 
 // ---------------------------------------------------------------------------
 // 2. Data — every row of every public table
@@ -352,12 +363,18 @@ try {
       for (;;) {
         const items = await apiFetch(env, `/storage/v1/object/list/${b.name}`, {
           method: "POST",
-          body: JSON.stringify({ prefix, limit: 500, offset, sortBy: { column: "name", order: "asc" } }),
+          body: JSON.stringify({
+            prefix,
+            limit: 500,
+            offset,
+            sortBy: { column: "name", order: "asc" },
+          }),
         });
         if (!Array.isArray(items) || items.length === 0) break;
         for (const it of items) {
           const key = (prefix || "") + it.name;
-          if (!it.id) stack.push(key + "/"); // folder -> recurse
+          if (!it.id)
+            stack.push(key + "/"); // folder -> recurse
           else entry.objects.push(key);
         }
         offset += items.length;
@@ -375,7 +392,9 @@ try {
       }
     }
     manifest.buckets.push(entry);
-    console.log(`bucket ${b.name}: ${entry.objects.length} objects${noStorage ? " (listing only)" : `, ${Math.round(entry.bytes / 1024)} KiB`}`);
+    console.log(
+      `bucket ${b.name}: ${entry.objects.length} objects${noStorage ? " (listing only)" : `, ${Math.round(entry.bytes / 1024)} KiB`}`,
+    );
   }
 } catch (err) {
   console.warn(`storage skipped: ${String(err.message).slice(0, 160)}`);
@@ -384,7 +403,10 @@ try {
 writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
 // Keep a rolling "current schema" for quick inspection / git tracking.
-writeFileSync(join(repoRoot, "backups", "schema-current.sql"), readFileSync(join(outDir, "schema.sql"), "utf8"));
+writeFileSync(
+  join(repoRoot, "backups", "schema-current.sql"),
+  readFileSync(join(outDir, "schema.sql"), "utf8"),
+);
 
 await sql.end();
 console.log(`\nBackup complete: ${outDir.replace(repoRoot, ".")}`);

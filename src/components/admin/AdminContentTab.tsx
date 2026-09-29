@@ -77,7 +77,10 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
       setLoading(true);
       if (contentType === "posts") {
         postsOffsetRef.current = 0;
-        const p = await getAdminPosts({ query: debouncedQuery || undefined }, { limit: POSTS_PAGE, offset: 0 });
+        const p = await getAdminPosts(
+          { query: debouncedQuery || undefined },
+          { limit: POSTS_PAGE, offset: 0 },
+        );
         setPosts(p);
         postsOffsetRef.current = POSTS_PAGE;
         setPostsHasMore(Boolean((p as Post[] & { hasMore?: boolean }).hasMore));
@@ -551,7 +554,7 @@ function ModalShell({ children, onClose }: { children: React.ReactNode; onClose:
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl border border-border bg-card p-5 shadow-2xl"
+        className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-3xl border border-border bg-card p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {children}
@@ -585,9 +588,7 @@ function PostPreviewModal({
             className="h-9 w-9 text-xs"
           />
           <div className="min-w-0">
-            <p className="truncate text-sm font-bold">
-              {author?.display_name || "Unknown member"}
-            </p>
+            <p className="truncate text-sm font-bold">{author?.display_name || "Unknown member"}</p>
             <p className="truncate text-xs text-muted-foreground">
               {author?.username ? `@${author.username}` : `${post.user_id.slice(0, 8)}…`}
             </p>
@@ -609,7 +610,10 @@ function PostPreviewModal({
       {post.tags && post.tags.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {post.tags.map((t) => (
-            <span key={t} className="rounded-md bg-brand/10 px-2 py-0.5 text-[0.7rem] font-semibold text-brand">
+            <span
+              key={t}
+              className="rounded-md bg-brand/10 px-2 py-0.5 text-[0.7rem] font-semibold text-brand"
+            >
               #{t}
             </span>
           ))}
@@ -626,7 +630,8 @@ function PostPreviewModal({
 
       <div className="mt-4 flex flex-wrap items-center gap-4 border-t border-border/60 pt-3 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
-          <Eye className="h-3.5 w-3.5 text-emerald-500" /> {(post.viewCount || 0).toLocaleString()} views
+          <Eye className="h-3.5 w-3.5 text-emerald-500" /> {(post.viewCount || 0).toLocaleString()}{" "}
+          views
         </span>
         <span className="flex items-center gap-1">
           <Heart className="h-3.5 w-3.5 text-rose-500" /> {post.likeCount || 0}
@@ -684,7 +689,7 @@ function StoryPreviewModal({
       {/* Re-render the story itself: gradient or image, veil, text, stickers */}
       <div
         className={cn(
-          "relative mx-auto mt-4 flex aspect-[9/16] max-h-[60vh] w-full max-w-[18rem] flex-col justify-between overflow-hidden rounded-3xl border border-black/15 p-4 text-white shadow-soft bg-gradient-to-br",
+          "relative mx-auto mt-4 flex aspect-[9/16] max-h-[60dvh] w-full max-w-[18rem] flex-col justify-between overflow-hidden rounded-3xl border border-black/15 p-4 text-white shadow-soft bg-gradient-to-br",
           story.gradient || "from-violet-600 to-pink-600",
         )}
       >

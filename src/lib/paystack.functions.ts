@@ -49,6 +49,25 @@ async function paystack(path: string, init?: RequestInit) {
   return paystack(path, init);
 }
 
+/**
+ * Paystack sends the payer's browser back to `<origin>/billing/callback` after
+ * checkout, so this origin is part of a redirect we authored. The browser's own
+ * `window.location.origin` is only a *request*: it is checked against the
+ * deployment's real address (and the `ALLOWED_API_ORIGINS` allowlist) before it
+ * is ever handed to a provider, so a crafted call cannot bounce a paying user
+ * to another domain. Config-free in practice — spaces1.com serves the request,
+ * so spaces1.com is trusted.
+ */
+async function safeCallbackOrigin(candidate: string): Promise<string> {
+  const [{ getRequest }, { trustedCallbackOrigin }] = await Promise.all([
+    import("@tanstack/react-start/server"),
+    import("@/lib/app-origin.server"),
+  ]);
+  const request = getRequest();
+  const headers = request?.headers ?? new Headers();
+  return trustedCallbackOrigin(candidate, headers).origin;
+}
+
 async function profileIdFor(supabase: any, userId: string): Promise<string> {
   const { data } = await supabase
     .from("profiles")
@@ -82,6 +101,7 @@ export const startPaystackCheckout = createServerFn({ method: "POST" })
     const charge = chargeFromUsd(usd, usdRate);
 
     const reference = `sub_${crypto.randomUUID().replace(/-/g, "")}`;
+    const callbackOrigin = await safeCallbackOrigin(data.origin);
 
     const init = await paystack("/transaction/initialize", {
       method: "POST",
@@ -90,7 +110,7 @@ export const startPaystackCheckout = createServerFn({ method: "POST" })
         amount: charge.minorSettlement,
         currency,
         reference,
-        callback_url: `${data.origin}/billing/callback`,
+        callback_url: `${callbackOrigin}/billing/callback`,
         metadata: {
           kind: "plan",
           profile_id: profileId,
@@ -172,7 +192,9 @@ export const startTipCheckout = createServerFn({ method: "POST" })
       // Team tip: resolve the workspace and its owner through the admin client
       // (a supporter need not be a member, so the member-only table read is not
       // enough here).
-      const { data: ws } = await (await admin())
+      const { data: ws } = await (
+        await admin()
+      )
         .from("workspaces")
         .select("id, owner_id")
         .eq("id", data.recipientWorkspaceId)
@@ -195,6 +217,7 @@ export const startTipCheckout = createServerFn({ method: "POST" })
     const email = claims?.email ?? `${profileId}@users.noreply.app`;
     const charge = chargeFromUsd(data.amount, usdRate);
     const reference = `tip_${crypto.randomUUID().replace(/-/g, "")}`;
+    const callbackOrigin = await safeCallbackOrigin(data.origin);
 
     const init = await paystack("/transaction/initialize", {
       method: "POST",
@@ -203,7 +226,7 @@ export const startTipCheckout = createServerFn({ method: "POST" })
         amount: charge.minorSettlement,
         currency,
         reference,
-        callback_url: `${data.origin}/billing/callback`,
+        callback_url: `${callbackOrigin}/billing/callback`,
         metadata: { kind: "tip", profile_id: profileId, recipient_id: recipientId },
       }),
     });

@@ -72,7 +72,7 @@ function OAuthCallback() {
   }, [navigate]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
       <div className="flex flex-col items-center gap-4 text-center">
         <Loader2 className="h-9 w-9 animate-spin text-brand" />
         <p className="text-sm font-semibold text-muted-foreground">{message}</p>

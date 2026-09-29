@@ -135,8 +135,8 @@ export function AdminPayoutsTab() {
         <div>
           <h2 className="text-lg font-black">Payments</h2>
           <p className="text-xs text-muted-foreground">
-            Review withdrawal requests and pay each creator directly using the account on file,
-            then confirm or decline. Every payment event on the platform is on this page.
+            Review withdrawal requests and pay each creator directly using the account on file, then
+            confirm or decline. Every payment event on the platform is on this page.
           </p>
         </div>
         <button
@@ -152,7 +152,10 @@ export function AdminPayoutsTab() {
         <div className="flex items-center gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/5 p-4 text-xs text-rose-600 dark:text-rose-400">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{error}</span>
-          <button onClick={() => void load()} className="ml-auto font-bold underline cursor-pointer">
+          <button
+            onClick={() => void load()}
+            className="ml-auto font-bold underline cursor-pointer"
+          >
             Try again
           </button>
         </div>
@@ -205,7 +208,12 @@ export function AdminPayoutsTab() {
               >
                 <div className="min-w-0 flex items-center gap-2">
                   <span className="text-sm font-bold">{usd(r.amount)}</span>
-                  <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-extrabold capitalize", tone(r.status))}>
+                  <span
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[10px] font-extrabold capitalize",
+                      tone(r.status),
+                    )}
+                  >
                     {r.status}
                   </span>
                   <span className="text-xs text-muted-foreground truncate">
@@ -226,7 +234,9 @@ export function AdminPayoutsTab() {
         <h3 className="text-sm font-black">All payment activity</h3>
         <div className="overflow-hidden rounded-3xl border border-border/80 bg-card">
           {activity.length === 0 ? (
-            <p className="p-8 text-center text-sm text-muted-foreground">No payment activity yet.</p>
+            <p className="p-8 text-center text-sm text-muted-foreground">
+              No payment activity yet.
+            </p>
           ) : (
             <ul className="divide-y divide-border/60">
               {activity.map((a) => {
@@ -234,7 +244,12 @@ export function AdminPayoutsTab() {
                 const Icon = meta.icon;
                 return (
                   <li key={`${a.kind}-${a.id}`} className="flex items-center gap-3 p-3.5">
-                    <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full", meta.tint)}>
+                    <span
+                      className={cn(
+                        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+                        meta.tint,
+                      )}
+                    >
                       <Icon className="h-4 w-4" />
                     </span>
                     <div className="min-w-0 flex-1">
@@ -246,7 +261,9 @@ export function AdminPayoutsTab() {
                         ) : null}
                       </p>
                     </div>
-                    <span className="shrink-0 text-sm font-black tabular-nums">{usd(a.amountUsd)}</span>
+                    <span className="shrink-0 text-sm font-black tabular-nums">
+                      {usd(a.amountUsd)}
+                    </span>
                   </li>
                 );
               })}
@@ -274,10 +291,7 @@ function RequestCard({
   onDecide: (row: Request, decision: "paid" | "declined") => void;
 }) {
   const loaded = account && account !== "loading" ? account : null;
-  const masked = [
-    row.bankName ?? "Account",
-    row.accountLast4 ? `••••${row.accountLast4}` : null,
-  ]
+  const masked = [row.bankName ?? "Account", row.accountLast4 ? `••••${row.accountLast4}` : null]
     .filter(Boolean)
     .join(" ");
 
@@ -286,10 +300,18 @@ function RequestCard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-black" title={`Net transfer settles as ${row.settlementAmount.toFixed(2)} ${row.currency}`}>
+            <span
+              className="text-sm font-black"
+              title={`Net transfer settles as ${row.settlementAmount.toFixed(2)} ${row.currency}`}
+            >
               {usd(row.amount)}
             </span>
-            <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-extrabold capitalize", tone(row.status))}>
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 text-[10px] font-extrabold capitalize",
+                tone(row.status),
+              )}
+            >
               In review
             </span>
           </div>
@@ -333,7 +355,11 @@ function RequestCard({
             onClick={onReveal}
             disabled={account === "loading" || !row.hasDestination}
             className="flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-[11px] font-bold text-muted-foreground hover:bg-card transition-colors disabled:opacity-50 cursor-pointer"
-            title={row.hasDestination ? "Decrypt to pay this account" : "No stored account for this request"}
+            title={
+              row.hasDestination
+                ? "Decrypt to pay this account"
+                : "No stored account for this request"
+            }
           >
             {account === "loading" ? (
               <RefreshCw className="h-3 w-3 animate-spin" />
@@ -367,7 +393,9 @@ function RequestCard({
               onCopy={onCopy}
               mono
             />
-            {loaded.bankCode ? <Field label="Provider code" value={loaded.bankCode} onCopy={onCopy} mono /> : null}
+            {loaded.bankCode ? (
+              <Field label="Provider code" value={loaded.bankCode} onCopy={onCopy} mono />
+            ) : null}
           </dl>
         )}
       </div>

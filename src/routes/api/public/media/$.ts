@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getStorageProvider } from "@/lib/storage/index.server";
+import { readRangeIntent } from "@/lib/media-range.server";
 
 // `stories` moved from public to authed: the rows are already limited to the
 // author's follow network by RLS, and the bytes now enforce the same rule.
@@ -25,18 +26,19 @@ const INLINE_CONTENT_TYPES = new Set([
 ]);
 
 /**
- * Read proxy for private media (Cloudflare R2 when configured, otherwise the
- * Supabase 'media' bucket). Uploaded files are stored privately; this route
- * streams them back so links never expire and no signed URL has to be
- * refreshed client-side.
+ * Read proxy for private media (an S3-compatible store such as Cloudflare R2
+ * when configured, otherwise the Supabase 'media' bucket). Uploaded files are
+ * stored privately; this route streams them back so links never expire and no
+ * signed URL has to be refreshed client-side.
  *
  * Hardened: `messages/` (private DM attachments) requires a valid session
  * AND that the caller is a participant in the conversation the attachment
  * belongs to. Every response is served with `nosniff` plus a content-type
  * allowlist that forces non-media payloads to download instead of rendering
- * inline. Byte-range (`Range: bytes=…`) is honoured with 206/416 responses,
- * which is what makes seeking work in the audio/video players, and private
- * objects are cached `private,` never `public`.
+ * inline. Byte-range (`Range: bytes=…`) is honoured with 206/416 responses and
+ * is passed down to the storage backend, so seeking into a 90-minute replay
+ * fetches the few hundred kilobytes the player asked for instead of buffering
+ * the whole recording in server memory. Private objects are cached `no-store`.
  */
 export const Route = createFileRoute("/api/public/media/$")({
   server: {
@@ -76,8 +78,62 @@ export const Route = createFileRoute("/api/public/media/$")({
           }
         }
 
-        const object = await getStorageProvider().get(path);
+        const provider = getStorageProvider();
+
+        // Public, inline-safe objects can be handed straight to the bucket's
+        // own read-only domain when the operator opted into one — the bytes
+        // then travel from the CDN instead of through this server. Requires an
+        // explicit MEDIA_PUBLIC_CDN=true, because a public bucket domain serves
+        // the whole bucket, not just the folders the app treats as public.
+        if (isPublic && publicCdnEnabled() && provider.publicUrl) {
+          const head = await provider.stat(path);
+          const headType = (head?.contentType ?? "").split(";")[0].trim().toLowerCase();
+          if (head && INLINE_CONTENT_TYPES.has(headType)) {
+            return new Response(null, {
+              status: 302,
+              headers: {
+                location: provider.publicUrl(path)!,
+                "Cache-Control": "public, max-age=31536000, immutable",
+              },
+            });
+          }
+        }
+
+        // A byte range is resolved in two steps: read what the player asked for
+        // now, then validate it against the object's real size once the backend
+        // answers. Suffix ranges (`bytes=-N`) need the size first, so they cost
+        // one cheap HEAD instead of a whole-object download.
+        const intent = readRangeIntent(request.headers.get("range"));
+        let start: number | undefined;
+        let end: number | undefined;
+        if (intent?.suffix !== undefined) {
+          const head = await provider.stat(path);
+          if (!head) return new Response("Not found", { status: 404 });
+          start = Math.max(0, head.size - intent.suffix);
+          end = head.size - 1;
+        } else if (intent) {
+          start = intent.start;
+          end = intent.end;
+        }
+
+        const object =
+          start !== undefined
+            ? await provider.getRange(path, start, end)
+            : await provider.get(path);
         if (!object) {
+          // A ranged miss is ambiguous: the object may be gone, or the range may
+          // simply start past its end (a player that over-read a truncated file).
+          // Some gateways answer those both as an error, so re-check with a HEAD:
+          // 416 is what tells the player to clamp its seek instead of retrying.
+          if (start !== undefined) {
+            const head = await provider.stat(path);
+            if (head && start >= head.size) {
+              return new Response(null, {
+                status: 416,
+                headers: { "Content-Range": `bytes */${head.size}`, "Accept-Ranges": "bytes" },
+              });
+            }
+          }
           return new Response("Not found", { status: 404 });
         }
 
@@ -87,7 +143,8 @@ export const Route = createFileRoute("/api/public/media/$")({
           .toLowerCase();
         const inline = INLINE_CONTENT_TYPES.has(rawType);
         const filename = path.split("/").pop() ?? "media";
-        const bytes = object.body instanceof Uint8Array ? object.body : new Uint8Array(object.body as ArrayBuffer);
+        const bytes = object.body;
+        const total = object.totalSize || bytes.byteLength;
 
         // A private object must never be stored by a shared cache — and not
         // even by the browser for long: story/DM/recording access can be
@@ -108,21 +165,23 @@ export const Route = createFileRoute("/api/public/media/$")({
           "Accept-Ranges": "bytes",
         };
 
-        const range = parseByteRange(request.headers.get("range"), bytes.byteLength);
-        if (range === "unsatisfiable") {
-          return new Response(null, {
-            status: 416,
-            headers: { ...baseHeaders, "Content-Range": `bytes */${bytes.byteLength}` },
-          });
-        }
-        if (range) {
-          const slice = bytes.subarray(range.start, range.end + 1);
-          return new Response(slice as unknown as BodyInit, {
+        // The backend served (part of) a range: answer 206 with the span it
+        // actually covered. An out-of-bounds start becomes 416, which is what
+        // tells a player the file is shorter than it thought.
+        if (start !== undefined && object.partial) {
+          if (start >= total) {
+            return new Response(null, {
+              status: 416,
+              headers: { ...baseHeaders, "Content-Range": `bytes */${total}` },
+            });
+          }
+          const last = Math.min(end ?? total - 1, total - 1);
+          return new Response(bytes as unknown as BodyInit, {
             status: 206,
             headers: {
               ...baseHeaders,
-              "Content-Range": `bytes ${range.start}-${range.end}/${bytes.byteLength}`,
-              "Content-Length": String(slice.byteLength),
+              "Content-Range": `bytes ${start}-${last}/${total}`,
+              "Content-Length": String(bytes.byteLength),
             },
           });
         }
@@ -135,34 +194,11 @@ export const Route = createFileRoute("/api/public/media/$")({
   },
 });
 
-/**
- * Parse a single `Range: bytes=a-b` header against a known object size.
- * Returns null when no range was requested (serve whole), "unsatisfiable"
- * when it cannot be honoured, or the inclusive byte span.
- */
-function parseByteRange(
-  header: string | null,
-  size: number,
-): { start: number; end: number } | "unsatisfiable" | null {
-  const text = header?.trim().toLowerCase();
-  if (!text || !text.startsWith("bytes=")) return null;
-  // Only a single range is supported; a multi-range request serves the whole
-  // object rather than pretending to be a multipart/byteranges server.
-  if (text.split("=")[1]?.includes(",")) return null;
-  const [rawStart, rawEnd] = text.slice(6).split("-");
-  if (rawStart === "" || rawStart === undefined) {
-    // Suffix form `bytes=-N` = the last N bytes.
-    const suffix = Number(rawEnd);
-    if (!Number.isFinite(suffix) || suffix <= 0 || size === 0) return "unsatisfiable";
-    return { start: Math.max(0, size - suffix), end: size - 1 };
-  }
-  const start = Number(rawStart);
-  if (!Number.isFinite(start) || start < 0 || start >= size) return "unsatisfiable";
-  const end = rawEnd === undefined || rawEnd === "" ? size - 1 : Number(rawEnd);
-  if (!Number.isFinite(end) || end < start) return "unsatisfiable";
-  return { start, end: Math.min(end, size - 1) };
+/** Only ever enabled deliberately — a public bucket domain is readable by anyone. */
+function publicCdnEnabled(): boolean {
+  const value = process.env["MEDIA_PUBLIC_CDN"];
+  return value === "true" || value === "1";
 }
 
 // The per-folder read rules live in src/lib/media-authz.server.ts so that this
 // reader and the /api/media/token issuer cannot drift apart.
-

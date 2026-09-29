@@ -132,7 +132,7 @@ function AdminPage() {
 
   if (access !== "granted") {
     return (
-      <div className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center gap-3 px-6 text-center">
+      <div className="mx-auto flex min-h-[60dvh] max-w-md flex-col items-center justify-center gap-3 px-6 text-center">
         <h1 className="text-2xl font-extrabold">
           {access === "checking" ? "Checking access…" : "Admin access required"}
         </h1>
@@ -208,7 +208,10 @@ function AdminPage() {
         <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="h-28 animate-pulse rounded-2xl border border-border bg-card" />
+              <div
+                key={i}
+                className="h-28 animate-pulse rounded-2xl border border-border bg-card"
+              />
             ))}
           </div>
           <div className="h-64 animate-pulse rounded-2xl border border-border bg-card" />

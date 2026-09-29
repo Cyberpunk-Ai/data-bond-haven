@@ -117,7 +117,10 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       mutedAuthors?: string[];
       boostedTags?: string[];
     };
-    const preferredTags = new Set<string>([...(prefs.interests ?? []), ...(prefs.boostedTags ?? [])]);
+    const preferredTags = new Set<string>([
+      ...(prefs.interests ?? []),
+      ...(prefs.boostedTags ?? []),
+    ]);
     const mutedAuthors = new Set<string>(prefs.mutedAuthors ?? []);
     for (const tag of preferredTags) tagAffinity.set(tag, (tagAffinity.get(tag) ?? 0) + 5);
 
@@ -180,7 +183,9 @@ export const getForYouPosts = createServerFn({ method: "GET" })
 
     // "For you" recommends OTHER people's content: your own posts live on your
     // profile and the Latest tab, so they never occupy recommendation slots.
-    const rows = [...byId.values()].filter((r) => r.user_id !== myId && !mutedAuthors.has(r.user_id));
+    const rows = [...byId.values()].filter(
+      (r) => r.user_id !== myId && !mutedAuthors.has(r.user_id),
+    );
 
     const personalised = engagedIds.length > 0 || firstDegree.size > 0 || preferredTags.size > 0;
     if (!personalised) {
@@ -236,10 +241,7 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       ];
       const ownerPlan = new Map<string, string>();
       if (ownerIds.length) {
-        const { data: op } = await supabase
-          .from("profiles")
-          .select("id, plan")
-          .in("id", ownerIds);
+        const { data: op } = await supabase.from("profiles").select("id, plan").in("id", ownerIds);
         for (const p of op ?? []) ownerPlan.set(p.id, p.plan);
       }
       for (const w of wsRows ?? []) {
@@ -251,9 +253,7 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     // Ranking epoch: bucket "now" to a 10-minute window so scores (and thus
     // order) are stable while a viewer scrolls/paginates through a session.
     // An explicit refresh opts out and ranks with the live clock.
-    const epoch = data.refresh
-      ? Date.now()
-      : Math.floor(Date.now() / (10 * 60_000)) * 10 * 60_000;
+    const epoch = data.refresh ? Date.now() : Math.floor(Date.now() / (10 * 60_000)) * 10 * 60_000;
 
     const scored: Array<{ row: any; score: number }> = rows
       .filter((row: any) => (impressionCount.get(row.id) ?? 0) < 3 || engagedWeight.has(row.id))
@@ -298,9 +298,7 @@ export const getForYouPosts = createServerFn({ method: "GET" })
           !secondDegree.has(row.user_id) &&
           !authorAffinity.has(row.user_id) &&
           !tagsArr.some((tag) => tagAffinity.has(tag));
-        const discovery = outsideKnownWorld
-          ? jitter01(`${myId}:${row.id}:${epoch}`) * 1.4
-          : 0;
+        const discovery = outsideKnownWorld ? jitter01(`${myId}:${row.id}:${epoch}`) * 1.4 : 0;
 
         const base = authorScore + tagScore + relationship + quality + discovery;
         // Paid team workspaces boost by the workspace (or its owner's) plan;
@@ -579,7 +577,8 @@ export const getRecommendedSpaces = createServerFn({ method: "GET" })
     const candidates = (spaces ?? []).filter((s: any) => !mutedAuthors.has(s.host_id));
 
     const personalised = firstDegree.size > 0 || interestTokens.length > 0;
-    if (!personalised) return { ranked: [] as { id: string; score: number }[], personalised: false };
+    if (!personalised)
+      return { ranked: [] as { id: string; score: number }[], personalised: false };
 
     const scored = candidates.map((s: any) => {
       const relationship = firstDegree.has(s.host_id) ? 3 : secondDegree.has(s.host_id) ? 1.4 : 0;

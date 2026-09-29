@@ -89,7 +89,13 @@ export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalP
     loadEarnings({})
       .then((res: any) => setEarnings(res))
       .catch(() =>
-        setEarnings({ pendingBalance: 0, currency: "USD", minimumPayout: 1, feePercent: 5, tips: [] }),
+        setEarnings({
+          pendingBalance: 0,
+          currency: "USD",
+          minimumPayout: 1,
+          feePercent: 5,
+          tips: [],
+        }),
       );
   }, [isOpen, isSelf]);
 
@@ -141,7 +147,7 @@ export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalP
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 [scrollbar-width:thin]"
+        className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl border border-border/80 bg-card p-6 shadow-2xl animate-in zoom-in-95 duration-200 [scrollbar-width:thin]"
         onClick={(e) => e.stopPropagation()}
       >
         {isSelf ? (
@@ -208,9 +214,7 @@ export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalP
                         ) : null}
                       </div>
                       <div className="text-right">
-                        <p className="font-extrabold text-amber-500">
-                          {usd(s.amount)}
-                        </p>
+                        <p className="font-extrabold text-amber-500">{usd(s.amount)}</p>
                         <p className="text-[10px] text-muted-foreground">
                           {new Date(s.createdAt).toLocaleDateString()}
                         </p>
@@ -240,12 +244,12 @@ export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalP
                 }}
                 className="w-full rounded-2xl bg-gradient-to-r from-brand to-brand-pink py-3 text-sm font-extrabold text-white shadow-soft hover:shadow-glow transition-all cursor-pointer active:scale-98 disabled:opacity-50"
               >
-                Request Withdrawal ({usd(
+                Request Withdrawal (
+                {usd(
                   Math.max(
-                    (earnings?.pendingBalance ?? 0) *
-                      (1 - (earnings?.feePercent ?? 5) / 100),
+                    (earnings?.pendingBalance ?? 0) * (1 - (earnings?.feePercent ?? 5) / 100),
                     0,
-                  )
+                  ),
                 )}
                 )
               </button>
@@ -263,7 +267,10 @@ export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalP
             <h3 className="text-xl font-extrabold">Tip Sent Successfully!</h3>
             <p className="text-sm text-muted-foreground">
               You sent <strong className="text-foreground">${effectiveAmount.toFixed(2)}</strong> to{" "}
-              <strong className="text-foreground">{isTeam ? displayName : `@${recipient.username}`}</strong>.
+              <strong className="text-foreground">
+                {isTeam ? displayName : `@${recipient.username}`}
+              </strong>
+              .
             </p>
           </div>
         ) : (
@@ -311,7 +318,8 @@ export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalP
                 <Sparkles className="h-3.5 w-3.5" /> Support This {isTeam ? "Team" : "Creator"}
               </span>
               <p className="text-xs text-muted-foreground">
-                100% of your tip goes directly to the {isTeam ? "team" : "creator"} with zero hidden fees.
+                100% of your tip goes directly to the {isTeam ? "team" : "creator"} with zero hidden
+                fees.
               </p>
             </div>
 
@@ -319,7 +327,9 @@ export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalP
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center justify-between">
                 <span>Select Tip Amount</span>
-                <span className="font-semibold normal-case tracking-normal">Min {formatTip(MIN_TIP)}</span>
+                <span className="font-semibold normal-case tracking-normal">
+                  Min {formatTip(MIN_TIP)}
+                </span>
               </label>
               <div className="grid grid-cols-5 gap-2">
                 {PRESET_AMOUNTS.map((amt) => {

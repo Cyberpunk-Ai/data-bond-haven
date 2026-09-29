@@ -1,6 +1,6 @@
 /**
  * Small helpers that back the client-side feature stores with real rows in the
- * Lovable Cloud database. Each store keeps its instant, optimistic local state
+ * Supabase database. Each store keeps its instant, optimistic local state
  * and uses these helpers to hydrate once per session and write through.
  */
 import { supabase } from "@/integrations/supabase/client";

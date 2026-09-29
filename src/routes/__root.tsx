@@ -24,22 +24,38 @@ function NotFoundComponent() {
     { to: "/contact", label: "Get help" },
   ] as const;
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-6">
-      <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <span className="select-none text-[38vw] font-black leading-none tracking-tighter text-foreground/[0.04]">404</span>
+    <div className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-background px-6">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 flex items-center justify-center"
+      >
+        <span className="select-none text-[38vw] font-black leading-none tracking-tighter text-foreground/[0.04]">
+          404
+        </span>
       </div>
       <div className="relative max-w-md text-center">
         <p className="text-xs font-bold uppercase tracking-[0.25em] text-brand">Lost in space</p>
-        <h1 className="mt-3 text-4xl font-extrabold tracking-tight text-foreground sm:text-5xl">This page drifted off.</h1>
-        <p className="mt-4 text-muted-foreground">The link may be broken, or the page may have been removed. Try one of these instead.</p>
+        <h1 className="mt-3 text-4xl font-extrabold tracking-tight text-foreground sm:text-5xl">
+          This page drifted off.
+        </h1>
+        <p className="mt-4 text-muted-foreground">
+          The link may be broken, or the page may have been removed. Try one of these instead.
+        </p>
         <div className="mt-8 grid grid-cols-2 gap-2">
           {links.map((l) => (
-            <Link key={l.to} to={l.to} className="rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground transition-colors hover:border-brand/50">
+            <Link
+              key={l.to}
+              to={l.to}
+              className="rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground transition-colors hover:border-brand/50"
+            >
               {l.label}
             </Link>
           ))}
         </div>
-        <Link to="/" className="mt-6 inline-flex rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90">
+        <Link
+          to="/"
+          className="mt-6 inline-flex rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+        >
           Back to home
         </Link>
       </div>
@@ -55,7 +71,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   }, [error]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
         <h1 className="text-xl font-semibold tracking-tight text-foreground">
           This page didn't load

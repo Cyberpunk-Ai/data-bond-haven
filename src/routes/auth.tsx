@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
 import { setLoggedOut, useAuth, consumeRestrictedReason } from "@/lib/auth-state";
+import { usePlatform } from "@/lib/platform-state";
 import { friendlyError } from "@/lib/error-messages";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +52,10 @@ function friendlyAuthError(message: string): string {
     return "Too many attempts. Please wait a minute and try again.";
   if (m.includes("unsupported provider") || m.includes("provider is not enabled"))
     return "Google sign-in isn't available right now. Use your email and password instead.";
+  // Sign-ups closed by the console: the database refuses the new auth row and
+  // GoTrue reports that as an opaque "database error", so translate it here.
+  if (m.includes("database error") || m.includes("saving new user"))
+    return "New sign-ups are paused right now. Please try again shortly.";
   // Never surface raw provider/technical text — degrade gracefully.
   return friendlyError(message, "We couldn't complete that step. Please try again.");
 }
@@ -69,6 +74,11 @@ function AuthPage() {
   const navigate = useNavigate();
   const { user, isLoggedIn } = useAuth();
   const { email: prefillEmail } = Route.useSearch();
+  // "New User Registration" is a platform switch, not a suggestion: when the
+  // console turns it off (or the platform is in maintenance) the sign-up path
+  // closes here, and the database still refuses the insert for anything that
+  // reaches it anyway.
+  const { registrationOpen } = usePlatform();
 
   const [mode, setMode] = useState<"signin" | "signup">(prefillEmail ? "signup" : "signin");
   const [email, setEmail] = useState(prefillEmail ?? "");
@@ -87,6 +97,12 @@ function AuthPage() {
     });
     return () => data.subscription.unsubscribe();
   }, []);
+
+  // Landing on /auth from a "Join" button while sign-ups are closed must not
+  // strand the visitor on a form that cannot work.
+  useEffect(() => {
+    if (!registrationOpen) setMode((m) => (m === "signup" ? "signin" : m));
+  }, [registrationOpen]);
 
   // If an admin ban signed us out mid-session, explain why on this screen.
   useEffect(() => {
@@ -129,6 +145,11 @@ function AuthPage() {
     setCheckInbox(false);
     try {
       if (mode === "signup") {
+        if (!registrationOpen) {
+          setBusy(false);
+          toast.error("New sign-ups are paused right now. Please try again shortly.");
+          return;
+        }
         const { data, error } = await supabase.auth.signUp({
           email: address,
           password,
@@ -252,14 +273,16 @@ function AuthPage() {
       setNewPassword("");
       void navigate({ to: "/" });
     } catch (err) {
-      toast.error(err instanceof Error ? friendlyAuthError(err.message) : "Could not update password");
+      toast.error(
+        err instanceof Error ? friendlyAuthError(err.message) : "Could not update password",
+      );
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
+    <main className="flex min-h-dvh items-center justify-center bg-background px-4 py-12">
       <div className="w-full max-w-sm rounded-3xl border border-border/80 bg-card p-6 shadow-soft transition-all">
         {/* Header */}
         <div className="mb-6 flex items-center gap-2.5">
@@ -369,28 +392,41 @@ function AuthPage() {
           <>
             {/* Mode Selector */}
             <div className="mb-5 flex rounded-2xl bg-muted/40 p-1">
-              {(["signin", "signup"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => {
-                    setMode(m);
-                    setCheckInbox(false);
-                    // Drop any error toast from the other tab so it can't read
-                    // as a signup failure (or vice versa) while the form changes.
-                    toast.dismiss();
-                  }}
-                  className={cn(
-                    "flex-1 rounded-xl px-3 py-1.5 text-xs font-bold transition-all cursor-pointer",
-                    mode === m
-                      ? "bg-card text-foreground shadow-xs"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {m === "signin" ? "Sign in" : "Create account"}
-                </button>
-              ))}
+              {(["signin", "signup"] as const).map((m) => {
+                const locked = m === "signup" && !registrationOpen;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    disabled={locked}
+                    title={locked ? "New sign-ups are paused by the platform team" : undefined}
+                    onClick={() => {
+                      if (locked) return;
+                      setMode(m);
+                      setCheckInbox(false);
+                      // Drop any error toast from the other tab so it can't read
+                      // as a signup failure (or vice versa) while the form changes.
+                      toast.dismiss();
+                    }}
+                    className={cn(
+                      "flex min-h-11 flex-1 items-center justify-center rounded-xl px-3 text-xs font-bold transition-all cursor-pointer",
+                      mode === m
+                        ? "bg-card text-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground",
+                      locked && "cursor-not-allowed opacity-50",
+                    )}
+                  >
+                    {m === "signin" ? "Sign in" : "Create account"}
+                  </button>
+                );
+              })}
             </div>
+
+            {!registrationOpen && (
+              <p className="mb-4 rounded-2xl border border-border/60 bg-muted/40 px-3 py-2 text-[11px] font-semibold text-muted-foreground">
+                New sign-ups are paused right now — signing in works as usual. Check back shortly.
+              </p>
+            )}
 
             {/* Google Sign-in */}
             <button
@@ -437,14 +473,14 @@ function AuthPage() {
                 ) : checkInbox === "reset" ? (
                   <>
                     We sent a password-reset link to{" "}
-                    <span className="font-bold text-foreground">{email}</span>. Open it on this device
-                    to choose a new password.
+                    <span className="font-bold text-foreground">{email}</span>. Open it on this
+                    device to choose a new password.
                   </>
                 ) : (
                   <>
                     We sent a sign-in link to{" "}
-                    <span className="font-bold text-foreground">{email}</span>. Open it on this device
-                    to finish signing in.
+                    <span className="font-bold text-foreground">{email}</span>. Open it on this
+                    device to finish signing in.
                   </>
                 )}
               </div>
@@ -503,7 +539,7 @@ function AuthPage() {
                       type="button"
                       onClick={handleMagicEmail}
                       disabled={busy}
-                      className="text-[11px] font-semibold text-brand hover:underline cursor-pointer disabled:opacity-60"
+                      className="inline-flex min-h-9 items-center px-1 text-xs font-semibold text-brand hover:underline cursor-pointer disabled:opacity-60"
                     >
                       Email me a sign-in link
                     </button>
@@ -537,7 +573,7 @@ function AuthPage() {
                     type="button"
                     onClick={handleForgotPassword}
                     disabled={busy}
-                    className="text-[11px] font-semibold text-brand hover:underline cursor-pointer disabled:opacity-60"
+                    className="inline-flex min-h-9 items-center px-1 text-xs font-semibold text-brand hover:underline cursor-pointer disabled:opacity-60"
                   >
                     Forgot password?
                   </button>

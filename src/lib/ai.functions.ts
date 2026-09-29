@@ -2,8 +2,21 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { requireFlag } from "@/lib/feature-flags.server";
 import { PLAN_DETAILS, type PlanTier } from "@/lib/plans";
 import { env } from "@/lib/env.server";
+
+/**
+ * The console's "AI Drafting & Gemini Services" switch, enforced before a token
+ * is ever spent: a disabled subsystem must not quietly fall back to a paid call.
+ * Quotas and key errors below stay the business of those functions.
+ */
+function requireAiEnabled() {
+  return requireFlag(
+    "ai_generation_enabled",
+    "AI drafting is turned off platform-wide right now. Try again later.",
+  );
+}
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -68,7 +81,9 @@ async function chat(system: string, user: string): Promise<string> {
     throw new Error("The AI assistant isn't configured yet. Add an AI key to enable it.");
   }
   if (!gatewayUrl) {
-    throw new Error("AI_GATEWAY_URL is not configured — set it to any OpenAI-compatible chat completions endpoint.");
+    throw new Error(
+      "AI_GATEWAY_URL is not configured — set it to any OpenAI-compatible chat completions endpoint.",
+    );
   }
 
   // Model and gateway are environment-configurable so the same build can be
@@ -135,6 +150,7 @@ export const aiDraftPost = createServerFn({ method: "POST" })
       .parse(data),
   )
   .handler(async ({ data, context }) => {
+    await requireAiEnabled();
     const quota = await consumeQuota(context.userId);
 
     const raw = await chat(
@@ -163,6 +179,7 @@ export const aiStoryCaption = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: unknown) => z.object({ prompt: z.string().min(1).max(300) }).parse(data))
   .handler(async ({ data, context }) => {
+    await requireAiEnabled();
     const quota = await consumeQuota(context.userId);
 
     const raw = await chat(
@@ -198,6 +215,7 @@ export const aiSummarizeSpace = createServerFn({ method: "POST" })
       .parse(data),
   )
   .handler(async ({ data, context }) => {
+    await requireAiEnabled();
     const quota = await consumeQuota(context.userId);
 
     const transcript = data.messages.slice(-80).join("\n");

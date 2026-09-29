@@ -80,7 +80,9 @@ async function isAuthorizedForStoryMedia(
   const { data: edge } = await db
     .from("follows")
     .select("follower_id")
-    .or(`and(follower_id.eq.${profileId},target_id.eq.${authorId}),and(follower_id.eq.${authorId},target_id.eq.${profileId})`)
+    .or(
+      `and(follower_id.eq.${profileId},target_id.eq.${authorId}),and(follower_id.eq.${authorId},target_id.eq.${profileId})`,
+    )
     .limit(1)
     .maybeSingle();
   return Boolean(edge);
