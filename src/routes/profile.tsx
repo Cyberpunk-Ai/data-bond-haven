@@ -1,6 +1,6 @@
 import { useCurrentUserId } from "@/hooks/useCurrentUserId";
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
   CalendarDays,
   Link2,
@@ -30,7 +30,7 @@ import { currentUser as defaultUser, getProfile, fetchProfile } from "@/lib/prof
 import { getProfileTabPosts } from "@/lib/profile.functions";
 import type { Post, Profile } from "@/lib/types";
 import {
-  getPosts,
+  getPostsPage,
   getCurrentUser,
   getUserProfile,
   toggleFollowUser,
@@ -109,6 +109,11 @@ function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [replies, setReplies] = useState<any[]>([]);
   const [repliesLoading, setRepliesLoading] = useState(false);
+  // Profile posts stream in one 20-post chunk at a time via the same cursor
+  // the feed uses; "Load more" walks older pages instead of re-fetching all.
+  const [postsCursor, setPostsCursor] = useState<string | null>(null);
+  const [loadingMorePosts, setLoadingMorePosts] = useState(false);
+  const authorIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     setUserProfile(resolvedProfile);
@@ -123,6 +128,8 @@ function ProfilePage() {
 
   useEffect(() => {
     setLoading(true);
+    setPostsCursor(null);
+    authorIdRef.current = null;
     // Resolve the profile first, then fetch only that author's posts instead of
     // pulling the whole feed and filtering client-side.
     const profilePromise: Promise<string | null> = isMe
@@ -147,13 +154,35 @@ function ProfilePage() {
         : Promise.resolve(null);
 
     profilePromise
-      .then((authorId) => (authorId ? getPosts({ userId: authorId }) : []))
-      .then((data) => {
-        if (Array.isArray(data)) setAllPosts(data);
+      .then(async (authorId) => {
+        if (!authorId) return { posts: [], nextCursor: null };
+        authorIdRef.current = authorId;
+        return getPostsPage({ userId: authorId });
+      })
+      .then((page) => {
+        if (Array.isArray(page.posts)) {
+          setAllPosts(page.posts);
+          setPostsCursor(page.nextCursor);
+        }
       })
       .catch((err) => console.warn("Failed loading profile details:", err))
       .finally(() => setLoading(false));
   }, [isMe, targetId]);
+
+  async function loadMoreProfilePosts() {
+    const authorId = authorIdRef.current;
+    if (!authorId || !postsCursor || loadingMorePosts) return;
+    setLoadingMorePosts(true);
+    try {
+      const page = await getPostsPage({ userId: authorId, before: postsCursor });
+      if (page.posts.length) setAllPosts((prev) => [...prev, ...page.posts]);
+      setPostsCursor(page.nextCursor);
+    } catch {
+      setPostsCursor(null);
+    } finally {
+      setLoadingMorePosts(false);
+    }
+  }
 
   // The "Replies" tab is its own targeted server query (comments this profile
   // made, joined to their parent post) rather than a client filter of the feed
@@ -564,6 +593,19 @@ function ProfilePage() {
                       : `@${userProfile.username} hasn't published anything in this section yet.`}
                   </p>
                 </Panel>
+              )}
+              {(tab === "Posts" || tab === "Media") && postsCursor && (
+                <div className="flex justify-center pt-1">
+                  <button
+                    type="button"
+                    disabled={loadingMorePosts}
+                    onClick={() => void loadMoreProfilePosts()}
+                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all active:scale-95 cursor-pointer disabled:opacity-60"
+                  >
+                    <Loader2 className={cn("h-3.5 w-3.5", loadingMorePosts && "animate-spin")} />
+                    Load more posts
+                  </button>
+                </div>
               )}
             </>
           )}

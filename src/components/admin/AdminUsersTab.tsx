@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Search,
   Filter,
@@ -35,6 +35,13 @@ interface AdminUsersTabProps {
 export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps) {
   const [users, setUsers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
+  // Directory pages arrive 50 rows at a time; "Load more" walks the next
+  // offset instead of shipping the whole member table to every console view.
+  const USERS_PAGE = 50;
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const offsetRef = useRef(0);
+  const roleMapRef = useRef<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>("all");
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>("all");
@@ -42,28 +49,60 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
   const [editingUser, setEditingUser] = useState<Profile | null>(null);
   const [actionSuccessMessage, setActionSuccessMessage] = useState<string | null>(null);
 
+  const currentFilters = () => ({
+    query: searchQuery || undefined,
+    role: selectedRoleFilter !== "all" ? selectedRoleFilter : undefined,
+    status: selectedStatusFilter !== "all" ? selectedStatusFilter : undefined,
+    verified: selectedVerifiedFilter === "all" ? undefined : selectedVerifiedFilter === "true",
+  });
+
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const res = await getAdminUsers({
-        query: searchQuery || undefined,
-        role: selectedRoleFilter !== "all" ? selectedRoleFilter : undefined,
-        status: selectedStatusFilter !== "all" ? selectedStatusFilter : undefined,
-        verified: selectedVerifiedFilter === "all" ? undefined : selectedVerifiedFilter === "true",
-      });
-      let roleMap: Record<string, string> = {};
+      offsetRef.current = 0;
+      const res = await getAdminUsers(currentFilters(), { limit: USERS_PAGE, offset: 0 });
       try {
-        roleMap = (await listAccessLevels()) as Record<string, string>;
+        roleMapRef.current = (await listAccessLevels()) as Record<string, string>;
       } catch {
-        roleMap = {};
+        roleMapRef.current = {};
       }
+      const roleMap = roleMapRef.current;
       setUsers(
         res.map((u: Profile) => ({ ...u, role: (roleMap[u.id] as UserRole) ?? u.role ?? "user" })),
       );
+      offsetRef.current = USERS_PAGE;
+      setHasMore(Boolean((res as Profile[] & { hasMore?: boolean }).hasMore));
     } catch (err) {
       console.error("Failed to load admin users", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMoreUsers = async () => {
+    if (loadingMore || !hasMore) return;
+    try {
+      setLoadingMore(true);
+      const res = await getAdminUsers(currentFilters(), {
+        limit: USERS_PAGE,
+        offset: offsetRef.current,
+      });
+      const roleMap = roleMapRef.current;
+      const chunk = res.map((u: Profile) => ({
+        ...u,
+        role: (roleMap[u.id] as UserRole) ?? u.role ?? "user",
+      }));
+      setUsers((prev) => {
+        const seen = new Set(prev.map((u) => u.id));
+        return [...prev, ...chunk.filter((u: Profile) => !seen.has(u.id))];
+      });
+      offsetRef.current += USERS_PAGE;
+      setHasMore(Boolean((res as Profile[] & { hasMore?: boolean }).hasMore));
+    } catch (err) {
+      console.error("Failed to load more admin users", err);
+      setHasMore(false);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -449,6 +488,20 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
             </tbody>
           </table>
         </div>
+
+        {hasMore && (
+          <div className="flex justify-center pt-3">
+            <button
+              type="button"
+              disabled={loadingMore}
+              onClick={() => void loadMoreUsers()}
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-5 py-2 text-xs font-bold text-brand transition-all active:scale-95 cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", loadingMore && "animate-spin")} />
+              Load {USERS_PAGE} more users
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Role Assignment Modal */}

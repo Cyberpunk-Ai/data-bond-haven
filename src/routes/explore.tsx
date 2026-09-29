@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Flame,
   TrendingUp,
@@ -24,7 +24,7 @@ import { UserBadge } from "@/components/social/UserBadge";
 import { compact } from "@/lib/formatters";
 import { currentUser, profileRegistry, getProfile } from "@/lib/profile-service";
 import type { Post, Profile, Topic, TrendingTag } from "@/lib/types";
-import { getPosts, getUsers, globalSearch, getTopics, getTrendingTags } from "@/lib/api-client";
+import { getPostsPage, getCreatorsPage, globalSearch, getTopics, getTrendingTags } from "@/lib/api-client";
 import { getWhoToFollow } from "@/lib/recommendations.functions";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +56,12 @@ export const Route = createFileRoute("/explore")({
 
 const filters = ["Top", "People", "Topics", "Media"] as const;
 
+// Chunk sizes: one small page is fetched/rendered at a time — the wide 100-row
+// pulls used to dominate explore's payload for lists that show 10-12 rows.
+const EXPLORE_POSTS_CHUNK = 30;
+const EXPLORE_TOP_STEP = 10;
+const EXPLORE_PEOPLE_CHUNK = 12;
+
 function ExplorePage() {
   const search = Route.useSearch();
   const [filter, setFilter] = useState<(typeof filters)[number]>(() => {
@@ -77,6 +83,17 @@ function ExplorePage() {
   });
   const [topicList, setTopicList] = useState<Topic[]>([]);
   const [tagsList, setTagsList] = useState<TrendingTag[]>([]);
+  // Progressive-reveal counters + the post cursor for "load more" chunks.
+  const [topVisible, setTopVisible] = useState(EXPLORE_TOP_STEP);
+  const [peopleVisible, setPeopleVisible] = useState(EXPLORE_PEOPLE_CHUNK);
+  const [mediaVisible, setMediaVisible] = useState(EXPLORE_PEOPLE_CHUNK);
+  const [postsCursor, setPostsCursor] = useState<string | null>(null);
+  const [loadingMorePosts, setLoadingMorePosts] = useState(false);
+  const [loadingMorePeople, setLoadingMorePeople] = useState(false);
+  const [peopleExhausted, setPeopleExhausted] = useState(false);
+  // How far we have walked the creator directory (independent of the ranker's
+  // list, which only seeds the first chunk).
+  const peopleWalkRef = useRef(0);
 
   // Sync state if search params change
   useEffect(() => {
@@ -94,17 +111,23 @@ function ExplorePage() {
 
   // Signed-in visitors get the personalised "who to follow" ranker (same
   // affinity/graph/interest signals that drive the For-you feed); guests and
-  // any ranker failure fall back to the plain creator directory.
+  // any ranker failure fall back to the plain creator directory. Both paths
+  // load ONE chunk; "Load more creators" walks the directory from here.
   function loadPeople(isActive?: () => boolean) {
     const ok = () => !isActive || isActive();
-    const apply = (profiles: Profile[]) =>
-      ok() && setMatchedPeople(profiles.filter((p) => p.id && p.id !== currentUser.id));
+    const apply = (profiles: Profile[]) => {
+      if (!ok()) return;
+      setMatchedPeople(profiles.filter((p) => p.id && p.id !== currentUser.id));
+      setPeopleVisible(EXPLORE_PEOPLE_CHUNK);
+      setPeopleExhausted(false);
+      peopleWalkRef.current = 0;
+    };
     const fallback = () =>
-      getUsers()
-        .then((res) => res?.profiles?.length > 0 && apply(res.profiles))
+      getCreatorsPage({ limit: EXPLORE_PEOPLE_CHUNK * 2 })
+        .then((profiles) => profiles.length > 0 && apply(profiles))
         .catch(() => {});
     if (currentUser.id && currentUser.id !== "guest") {
-      getWhoToFollow({ data: { limit: 20 } })
+      getWhoToFollow({ data: { limit: EXPLORE_PEOPLE_CHUNK * 2 } })
         .then((res) => {
           const list = ((res?.profiles ?? []) as Profile[]).filter((p) => p?.id);
           if (list.length) apply(list);
@@ -116,15 +139,38 @@ function ExplorePage() {
     fallback();
   }
 
-  useEffect(() => {
-    // Wide pool so the "Top" ranking has real trending candidates instead of
-    // just the newest page the feed already shows.
-    getPosts({ limit: 100 })
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) setAllPosts(data);
-      })
-      .catch(() => {});
+  // Walks the directory one small page at a time, skipping rows already in the
+  // list (the ranker's first chunk overlaps the directory). Stops when the
+  // server hands back a short page — the directory is exhausted.
+  async function loadMoreCreators() {
+    setLoadingMorePeople(true);
+    try {
+      const existing = new Set(matchedPeople.map((p) => p.id));
+      const fresh: Profile[] = [];
+      for (let guard = 0; guard < 3 && fresh.length < EXPLORE_PEOPLE_CHUNK; guard++) {
+        const chunk = await getCreatorsPage({ limit: EXPLORE_PEOPLE_CHUNK, offset: peopleWalkRef.current });
+        peopleWalkRef.current += chunk.length;
+        for (const p of chunk) {
+          if (!p.id || p.id === currentUser.id || existing.has(p.id)) continue;
+          if (fresh.some((f) => f.id === p.id)) continue;
+          existing.add(p.id);
+          fresh.push(p);
+        }
+        if (chunk.length < EXPLORE_PEOPLE_CHUNK) break;
+      }
+      if (fresh.length === 0) setPeopleExhausted(true);
+      else setMatchedPeople((prev) => [...prev, ...fresh]);
+      setPeopleVisible((v) => v + EXPLORE_PEOPLE_CHUNK);
+    } catch {
+      setPeopleExhausted(true);
+    } finally {
+      setLoadingMorePeople(false);
+    }
+  }
 
+  useEffect(() => {
+    // No post fetch here: the query/tag effect below runs on mount too and
+    // used to make this a duplicate 100-row request on every page view.
     loadPeople();
 
     getTopics()
@@ -152,6 +198,8 @@ function ExplorePage() {
     const term = debouncedQuery.trim();
     let active = true;
     setLoading(true);
+    setTopVisible(EXPLORE_TOP_STEP);
+    setMediaVisible(EXPLORE_PEOPLE_CHUNK);
 
     // Free-text search wins: pull matching posts/people from the server.
     if (term) {
@@ -174,10 +222,13 @@ function ExplorePage() {
 
     // No query: load the selected tag's posts from the server (so clicking a
     // trend/topic opens the relevant results, not just the cached feed), or the
-    // full feed when nothing is selected.
-    getPosts(selectedTag ? { tag: selectedTag, limit: 100 } : { limit: 100 })
-      .then((data) => {
-        if (active && Array.isArray(data)) setAllPosts(data);
+    // first feed chunk when nothing is selected. Older pages come via the
+    // "Show more" cursor instead of an up-front 100-row pull.
+    getPostsPage({ limit: EXPLORE_POSTS_CHUNK, tag: selectedTag ?? undefined })
+      .then((page) => {
+        if (!active) return;
+        if (page.posts.length > 0) setAllPosts(page.posts);
+        setPostsCursor(page.nextCursor);
       })
       .catch(() => {})
       .finally(() => {
@@ -188,6 +239,31 @@ function ExplorePage() {
       active = false;
     };
   }, [debouncedQuery, selectedTag]);
+
+  // "Show more" for the ranked Top list: reveal the next slice from the pool
+  // we already hold, and only hit the server when the pool runs dry.
+  async function loadMoreTopPosts() {
+    if (sortedTopPosts.length > topVisible) {
+      setTopVisible((v) => v + EXPLORE_TOP_STEP);
+      return;
+    }
+    if (!postsCursor || loadingMorePosts) return;
+    setLoadingMorePosts(true);
+    try {
+      const page = await getPostsPage({
+        limit: EXPLORE_POSTS_CHUNK,
+        tag: selectedTag ?? undefined,
+        before: postsCursor ?? undefined,
+      });
+      if (page.posts.length) setAllPosts((prev) => [...prev, ...page.posts]);
+      setPostsCursor(page.nextCursor);
+      setTopVisible((v) => v + EXPLORE_TOP_STEP);
+    } catch {
+      setPostsCursor(null);
+    } finally {
+      setLoadingMorePosts(false);
+    }
+  }
 
   // Client-side quick filter for creators when query changes
   const filteredCreators = useMemo(() => {
@@ -470,7 +546,7 @@ function ExplorePage() {
                   <div key={n} className="glass-panel animate-pulse rounded-3xl p-5 h-36" />
                 ))
               ) : filteredCreators.length > 0 ? (
-                (filter === "Top" ? filteredCreators.slice(0, 4) : filteredCreators).map((p, i) => (
+                (filter === "Top" ? filteredCreators.slice(0, 4) : filteredCreators.slice(0, peopleVisible)).map((p, i) => (
                   <div
                     key={p.id}
                     style={{ animationDelay: `${i * 50}ms` }}
@@ -537,6 +613,25 @@ function ExplorePage() {
                   </button>
                 </div>
               )}
+
+              {/* People tab: the directory arrives one chunk at a time. */}
+              {filter === "People" && !peopleExhausted && filteredCreators.length > 0 && (
+                <div className="col-span-1 sm:col-span-2 flex justify-center mt-1">
+                  <button
+                    type="button"
+                    disabled={loadingMorePeople}
+                    onClick={() => void loadMoreCreators()}
+                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-soft disabled:opacity-60 disabled:hover:scale-100"
+                  >
+                    {loadingMorePeople ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Users className="h-3.5 w-3.5" />
+                    )}
+                    Load more creators
+                  </button>
+                </div>
+              )}
             </div>
           </section>
         )}
@@ -551,8 +646,9 @@ function ExplorePage() {
             {loading ? (
               <FeedSkeleton />
             ) : mediaPosts.length > 0 ? (
+              <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {mediaPosts.map((p, i) => {
+                {mediaPosts.slice(0, mediaVisible).map((p, i) => {
                   const author = getProfile(p.user_id);
                   return (
                     <article
@@ -645,6 +741,18 @@ function ExplorePage() {
                   );
                 })}
               </div>
+              {mediaVisible < mediaPosts.length && (
+                <div className="flex justify-center mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setMediaVisible((v) => v + EXPLORE_PEOPLE_CHUNK)}
+                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-soft"
+                  >
+                    <ImageIcon className="h-3.5 w-3.5" /> Load more media
+                  </button>
+                </div>
+              )}
+              </>
             ) : (
               <Panel className="text-center py-12">
                 <ImageIcon className="h-8 w-8 text-muted-foreground mx-auto mb-2 opacity-60" />
@@ -668,16 +776,37 @@ function ExplorePage() {
                 <FeedSkeleton />
               ) : (
                 <>
-                  {sortedTopPosts.slice(0, 10).map((p, i) => (
-                    <PostCard key={p.id} post={p} index={i} />
-                  ))}
-                  {sortedTopPosts.length === 0 && (
-                    <Panel className="text-center py-10">
-                      <p className="text-sm text-muted-foreground">
-                        No posts matching your criteria.
-                      </p>
-                    </Panel>
-                  )}
+                  {
+                /* Top tab reveals 10 posts per tap; the server is only asked
+                   for a fresh chunk once the loaded pool runs out. */
+              }
+              {sortedTopPosts.slice(0, topVisible).map((p, i) => (
+                <PostCard key={p.id} post={p} index={i} />
+              ))}
+              {sortedTopPosts.length === 0 && (
+                <Panel className="text-center py-10">
+                  <p className="text-sm text-muted-foreground">
+                    No posts matching your criteria.
+                  </p>
+                </Panel>
+              )}
+              {(topVisible < sortedTopPosts.length || postsCursor) && (
+                <div className="flex justify-center pt-1">
+                  <button
+                    type="button"
+                    disabled={loadingMorePosts}
+                    onClick={() => void loadMoreTopPosts()}
+                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-soft disabled:opacity-60 disabled:hover:scale-100"
+                  >
+                    {loadingMorePosts ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <TrendingUp className="h-3.5 w-3.5" />
+                    )}
+                    Show more top posts
+                  </button>
+                </div>
+              )}
                 </>
               )}
             </div>

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   getAdminReports,
+  getAdminReportById,
   updateReportStatus,
   forceDeletePostAdmin,
   updateUserAdmin,
@@ -27,6 +28,7 @@ import type { ModerationReport, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
+import { ReportTargetModal } from "@/components/admin/ReportTargetModal";
 
 interface AdminModerationTabProps {
   activeRole: UserRole;
@@ -39,6 +41,8 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
   const [selectedStatus, setSelectedStatus] = useState<string>("pending");
   const [selectedType, setSelectedType] = useState<string>("all");
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  // Click-to-view: the live reported object opened beside the queue card.
+  const [viewing, setViewing] = useState<ModerationReport | null>(null);
 
   const fetchReports = async () => {
     try {
@@ -60,8 +64,22 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
   }, [selectedStatus, selectedType]);
 
   useRealtime({
-    "report:created": (newReport: ModerationReport) => {
-      setReports((prev) => [newReport, ...prev]);
+    "report:created": async (payload: Partial<ModerationReport> & { id?: string }) => {
+      // Realtime only carries a minimal "a report exists" signal (reporter
+      // identity must never ride the public channel). Hydrate the full row
+      // through the RLS-gated read before adding it to the queue, otherwise
+      // the card renders with missing reason/status and an Invalid Date.
+      if (!payload?.id) return;
+      if (selectedType !== "all" && payload.target_type && payload.target_type !== selectedType)
+        return;
+      try {
+        const full = await getAdminReportById(payload.id);
+        if (!full) return;
+        if (selectedStatus !== "all" && full.status !== selectedStatus) return;
+        setReports((prev) => (prev.some((r) => r.id === full.id) ? prev : [full, ...prev]));
+      } catch {
+        /* queue refreshes on next filter change / manual refresh anyway */
+      }
     },
     "report:updated": (updatedReport: ModerationReport) => {
       setReports((prev) => prev.map((r) => (r.id === updatedReport.id ? updatedReport : r)));
@@ -263,24 +281,31 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
                       </span>
                     </div>
 
-                    {/* Reported Target Preview */}
-                    <div className="rounded-2xl border border-border/80 bg-foreground/5 p-3.5">
+                    {/* Reported Target Preview — click to load the live content */}
+                    <button
+                      type="button"
+                      onClick={() => setViewing(report)}
+                      title="View the reported content"
+                      className="group block w-full text-left rounded-2xl border border-border/80 bg-foreground/5 p-3.5 transition-colors hover:border-brand/50 hover:bg-brand/5"
+                    >
                       <div className="flex items-center justify-between text-[0.72rem] text-muted-foreground mb-1">
                         <span>
                           Target Preview (ID:{" "}
                           <code className="font-mono text-foreground">{report.target_id}</code>)
                         </span>
-                        {report.author_name && (
-                          <span>
-                            Author:{" "}
-                            <strong className="text-foreground">{report.author_name}</strong>
-                          </span>
-                        )}
+                        <span className="flex items-center gap-1 font-bold text-brand opacity-70 group-hover:opacity-100 transition-opacity">
+                          <Eye className="h-3 w-3" /> View content
+                        </span>
                       </div>
                       <p className="text-xs font-medium text-foreground italic">
-                        "{report.target_preview || "(Target payload attached in review context)"}"
+                        &quot;{report.target_preview || "(Target payload attached in review context)"}&quot;
                       </p>
-                    </div>
+                      {report.author_name && (
+                        <p className="mt-1 text-[0.7rem] text-muted-foreground">
+                          Author: <strong className="text-foreground">{report.author_name}</strong>
+                        </p>
+                      )}
+                    </button>
 
                     {/* Reporter context & notes */}
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -306,8 +331,16 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
                   </div>
 
                   {/* Right Column: Moderation Action Controls */}
+                  <div className="flex flex-wrap lg:flex-col items-stretch gap-2 shrink-0 lg:w-56 pt-2 lg:pt-0 border-t lg:border-t-0 lg:border-l border-border/60 lg:pl-4">
+                    <button
+                      onClick={() => setViewing(report)}
+                      className="flex items-center justify-center gap-1.5 rounded-2xl border border-brand/40 bg-brand/10 px-3 py-2 text-xs font-bold text-brand hover:bg-brand/20 active:scale-[0.98]"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                      <span>View Reported</span>
+                    </button>
                   {canModerate && (
-                    <div className="flex flex-wrap lg:flex-col items-stretch gap-2 shrink-0 lg:w-56 pt-2 lg:pt-0 border-t lg:border-t-0 lg:border-l border-border/60 lg:pl-4">
+                    <>
                       {report.status !== "resolved" && (
                         <>
                           <button
@@ -361,14 +394,18 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
                           <span>Dismiss Report</span>
                         </button>
                       )}
-                    </div>
+                    </>
                   )}
+                  </div>
                 </div>
               </div>
             );
           })
         )}
       </div>
+
+      {/* Click-to-view: the live reported post / profile / comment / story */}
+      {viewing && <ReportTargetModal report={viewing} onClose={() => setViewing(null)} />}
     </div>
   );
 }

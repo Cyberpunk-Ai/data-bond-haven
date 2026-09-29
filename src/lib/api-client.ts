@@ -962,6 +962,32 @@ export async function getUsers(): Promise<{ profiles: Profile[] }> {
   return { profiles: uniqueProfiles };
 }
 
+/**
+ * Paged slice of the creator directory. The "view all creators" grid asks for
+ * one chunk at a time instead of pulling the whole table into memory.
+ * Ordered by newest join so pages are stable while more members arrive.
+ */
+export async function getCreatorsPage(
+  options: { limit?: number; offset?: number } = {},
+): Promise<Profile[]> {
+  const limit = Math.min(options.limit ?? 12, 50);
+  const offset = Math.max(0, options.offset ?? 0);
+  try {
+    const { data } = await db
+      .from("profiles")
+      .select("*")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    const profiles = ((data ?? []) as any[]).map(rowToProfile).filter((p: Profile) => p?.id);
+    cacheProfiles(profiles);
+    return profiles;
+  } catch (err) {
+    console.warn("getCreatorsPage notice:", err);
+    return [];
+  }
+}
+
 export const USERNAME_REGEX = /^[a-z0-9_]{3,18}$/;
 
 /** Strip a leading @, trim and lowercase — the canonical handle form. */
@@ -1757,14 +1783,18 @@ export async function deleteMessage(messageId: string) {
   return { id: messageId };
 }
 
-export async function getNotifications(): Promise<Notification[]> {
+export async function getNotifications(
+  options: { limit?: number; offset?: number } = {},
+): Promise<Notification[]> {
   if (!isDbId(me())) return [];
+  const limit = Math.min(options.limit ?? 50, 100);
+  const offset = Math.max(0, options.offset ?? 0);
   const { data, error } = await db
     .from("notifications")
     .select("*")
     .eq("recipient_id", me())
     .order("created_at", { ascending: false })
-    .limit(50);
+    .range(offset, offset + limit - 1);
   if (error) {
     console.warn("getNotifications notice:", error.message);
     return [];
@@ -1820,7 +1850,13 @@ export async function sendFeedFeedback(payload: FeedFeedbackPayload) {
 /* -------------------------------------------------------------- discovery */
 
 export async function getTrendingTags(): Promise<{ trendingTags: TrendingTag[] }> {
-  const { data } = await db.from("posts").select("tags").limit(300);
+  // Recency-ordered: the tag counter used to sample an arbitrary 300 rows, so
+  // "trending" mixed in years-old posts and changed page to page.
+  const { data } = await db
+    .from("posts")
+    .select("tags")
+    .order("created_at", { ascending: false })
+    .limit(300);
   const counts = new Map<string, number>();
   for (const row of (data ?? []) as any[]) {
     for (const tag of row.tags ?? []) counts.set(tag, (counts.get(tag) ?? 0) + 1);
@@ -1944,6 +1980,24 @@ export async function getAdminReports(filters: { status?: string; target_type?: 
   return (data ?? []) as ModerationReport[];
 }
 
+/**
+ * Full single report row for the staff queue. Realtime only broadcasts a
+ * minimal "a report exists" signal (identity/preview must never go public),
+ * so moderation views re-hydrate the row through this RLS-gated read.
+ */
+export async function getAdminReportById(id: string): Promise<ModerationReport | null> {
+  if (!isDbId(id)) return null;
+  const { data } = await db.from("reports").select("*").eq("id", id).maybeSingle();
+  return (data ?? null) as ModerationReport | null;
+}
+
+/** Live comment row by id for the moderation click-to-view preview. */
+export async function getCommentById(id: string): Promise<Record<string, any> | null> {
+  if (!isDbId(id)) return null;
+  const { data } = await db.from("comments").select("*").eq("id", id).maybeSingle();
+  return (data ?? null) as Record<string, any> | null;
+}
+
 export async function updateReportStatus(
   reportId: string,
   status: string,
@@ -1963,8 +2017,18 @@ export async function updateReportStatus(
 
 export async function getAdminUsers(
   filters: { query?: string; role?: string; status?: string; verified?: boolean } = {},
+  page: { limit?: number; offset?: number } = {},
 ) {
-  let q = db.from("profiles").select("*").limit(200);
+  // One chunk of the directory instead of 200 rows per keystroke; order makes
+  // the offset pages stable. `hasMore` rides on the array so callers can show
+  // a "Load more" button without a breaking return-shape change.
+  const limit = Math.min(page.limit ?? 50, 200);
+  const offset = Math.max(0, page.offset ?? 0);
+  let q = db
+    .from("profiles")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
   if (filters.status) q = q.eq("status", filters.status);
   if (typeof filters.verified === "boolean") q = q.eq("verified", filters.verified);
   const { data } = await q;
@@ -1996,7 +2060,9 @@ export async function getAdminUsers(
         p.display_name.toLowerCase().includes(needle) || p.username.toLowerCase().includes(needle),
     );
   }
-  return profiles;
+  const list = profiles as Profile[] & { hasMore?: boolean };
+  list.hasMore = rawRows.length === limit;
+  return list;
 }
 
 export async function updateUserAdmin(
@@ -2023,19 +2089,27 @@ export async function updateUserAdmin(
   return profile as Profile;
 }
 
-export async function getAdminPosts(filters: { query?: string } = {}) {
+export async function getAdminPosts(
+  filters: { query?: string } = {},
+  page: { limit?: number; offset?: number } = {},
+) {
   // Narrow server-side: the console used to pull 200 rows and filter them in
-  // JS on every keystroke.
+  // JS on every keystroke. Now it also pages — 50 per chunk with a cursor the
+  // table can walk via "Load more".
+  const limit = Math.min(page.limit ?? 50, 200);
+  const offset = Math.max(0, page.offset ?? 0);
   let builder = db
     .from("posts")
     .select("*")
     .order("created_at", { ascending: false })
-    .limit(200);
+    .range(offset, offset + limit - 1);
   if (filters.query) builder = builder.ilike("content", `%${filters.query}%`);
   const { data } = await builder;
   const posts = (data ?? []).map((row: any) => rowToPost(row));
   await hydrateAuthors(posts.map((p: Post) => p.user_id));
-  return posts;
+  const list = posts as Post[] & { hasMore?: boolean };
+  list.hasMore = posts.length === limit;
+  return list;
 }
 
 export async function forceDeletePostAdmin(postId: string, _actorId?: string) {
@@ -2110,124 +2184,138 @@ export async function updateAdminSettings(settings: SystemSettings, _actorId?: s
 export async function syncSupabaseDatabase() {
   const started = Date.now();
   const tables = ["profiles", "posts", "stories", "spaces", "reports", "audit_logs"];
+  // One parallel batch instead of six sequential head-counts.
+  const results = await Promise.all(
+    tables.map((table) => db.from(table).select("id", { count: "exact", head: true })),
+  );
   const counts: Record<string, number> = {};
-  for (const table of tables) {
-    const { count } = await db.from(table).select("id", { count: "exact", head: true });
-    counts[table] = count ?? 0;
-  }
+  tables.forEach((table, i) => (counts[table] = results[i].count ?? 0));
   return { counts, durationMs: Date.now() - started };
 }
 
-export async function getAdminOverview(): Promise<AdminOverviewData> {
+let overviewCache: { at: number; data: AdminOverviewData } | null = null;
+const OVERVIEW_TTL_MS = 45_000;
+
+/** Soft-failing head-count: the overview must render even if one table can't
+ *  be counted right now (timeout, RLS hiccup); a failed count reads as 0. */
+async function safeCount(query: PromiseLike<{ count: number | null }>): Promise<number> {
+  try {
+    return (await query).count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+export async function getAdminOverview(
+  options: { force?: boolean } = {},
+): Promise<AdminOverviewData> {
+  // Switching admin tabs used to re-run ~20 aggregations every time the
+  // overview remounted. A short TTL keeps revisits instant; the header
+  // refresh button passes `force` for up-to-the-second numbers.
+  if (!options.force && overviewCache && Date.now() - overviewCache.at < OVERVIEW_TTL_MS) {
+    return overviewCache.data;
+  }
   const started = Date.now();
-  const [{ counts }, reports] = await Promise.all([
+  const since = new Date(Date.now() - 86_400_000).toISOString();
+
+  // Every section is independent — fan out and join. Sequential awaits here
+  // cost a full network round trip per stat on the slowest page in the app.
+  const [
+    { counts },
+    reports,
+    liveSpaces,
+    impressions,
+    likes,
+    comments,
+    reposts,
+    suspended,
+    verified,
+    recentPosts,
+    logs,
+    tipData,
+  ] = await Promise.all([
     syncSupabaseDatabase(),
     getAdminReports({ status: "pending" }),
+    safeCount(db.from("spaces").select("id", { count: "exact", head: true }).eq("live", true)),
+    safeCount(db.from("post_impressions").select("post_id", { count: "exact", head: true })),
+    safeCount(db.from("likes").select("post_id", { count: "exact", head: true })),
+    safeCount(db.from("comments").select("id", { count: "exact", head: true })),
+    safeCount(db.from("reposts").select("post_id", { count: "exact", head: true })),
+    safeCount(db.from("profiles").select("id", { count: "exact", head: true }).eq("status", "suspended")),
+    safeCount(db.from("profiles").select("id", { count: "exact", head: true }).eq("verified", true)),
+    (async () => {
+      try {
+        const r = await db
+          .from("posts")
+          .select("user_id")
+          .gte("created_at", since)
+          .limit(2000);
+        return (r.data ?? []) as any[];
+      } catch {
+        return [] as any[];
+      }
+    })(),
+    getAdminAuditLogs({ limit: 8 }).catch(() => []),
+    Promise.all([db.rpc("admin_tip_stats"), db.rpc("admin_recent_tips", { _limit: 6 })])
+      .then(([{ data: statsRow }, { data: tipsRows }]) => ({
+        stats: (statsRow ?? [])[0] as any,
+        rows: (tipsRows ?? []) as any[],
+      }))
+      .catch((err) => {
+        console.warn("Tip stats unavailable:", err);
+        return null;
+      }),
   ]);
-  const { count: liveSpaces } = await db
-    .from("spaces")
-    .select("id", { count: "exact", head: true })
-    .eq("live", true);
-  const { count: impressions } = await db
-    .from("post_impressions")
-    .select("post_id", { count: "exact", head: true });
-  const { count: likes } = await db.from("likes").select("post_id", { count: "exact", head: true });
-  const { count: comments } = await db
-    .from("comments")
-    .select("id", { count: "exact", head: true });
-  const { count: reposts } = await db
-    .from("reposts")
-    .select("post_id", { count: "exact", head: true });
-  const { count: suspended } = await db
-    .from("profiles")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "suspended");
-  const { count: verified } = await db
-    .from("profiles")
-    .select("id", { count: "exact", head: true })
-    .eq("verified", true);
 
   // Real 24h-active count: distinct authors who posted in the last day.
-  let active24h = 0;
-  try {
-    const since = new Date(Date.now() - 86_400_000).toISOString();
-    const { data: recent } = await db
-      .from("posts")
-      .select("user_id")
-      .gte("created_at", since)
-      .limit(2000);
-    active24h = new Set((recent ?? []).map((r: any) => r.user_id)).size;
-  } catch {
-    active24h = 0;
-  }
+  const active24h = new Set(recentPosts.map((r: any) => r.user_id)).size;
 
   // Recent moderation / system activity straight from the audit trail so the
   // overview reflects what is actually happening across the site (was a gap).
-  let recent_activity: AdminOverviewData["recent_activity"] = [];
-  try {
-    const logs = await getAdminAuditLogs({ limit: 8 });
-    recent_activity = logs.map((l) => ({
-      id: l.id,
-      actor_name: l.actor_name || "System",
-      action: l.action,
-      target_type: l.target_type,
-      details: l.details,
-      severity: l.severity,
-      created_at: l.created_at,
-    }));
-  } catch {
-    recent_activity = [];
-  }
+  const recent_activity = logs.map((l) => ({
+    id: l.id,
+    actor_name: l.actor_name || "System",
+    action: l.action,
+    target_type: l.target_type,
+    details: l.details,
+    severity: l.severity,
+    created_at: l.created_at,
+  }));
 
-  // Tipping activity for the overview (staff-guarded inside the DB functions;
-  // non-staff callers and failures simply leave the section empty).
-  let tipStats: { count: number; amount: number; currency: string } = {
-    count: 0,
-    amount: 0,
-    currency: "NGN",
-  };
-  let recentTips: AdminOverviewData["recent_tips"] = [];
-  try {
-    const [{ data: statsRow }, { data: tipsRows }] = await Promise.all([
-      await db.rpc("admin_tip_stats"),
-      await db.rpc("admin_recent_tips", { _limit: 6 }),
-    ]);
-    const s = (statsRow ?? [])[0] as any;
-    if (s) {
-      tipStats = {
-        count: Number(s.count ?? 0),
-        amount: Number(s.amount ?? 0),
-        currency: String(s.currency ?? "NGN"),
-      };
-    }
-    recentTips = ((tipsRows ?? []) as any[]).map((t) => ({
-      id: String(t.id),
-      tipper: String(t.tipper ?? "Member"),
-      recipient: String(t.recipient ?? "Member"),
-      amount: Number(t.amount ?? 0),
-      currency: String(t.currency ?? "NGN"),
-      message: String(t.message ?? ""),
-      created_at: String(t.created_at),
-    }));
-  } catch (err) {
-    console.warn("Tip stats unavailable:", err);
-  }
+  // Tipping activity (staff-guarded inside the DB functions; non-staff
+  // callers and failures simply leave the section empty).
+  const tipStats = tipData?.stats
+    ? {
+        count: Number(tipData.stats.count ?? 0),
+        amount: Number(tipData.stats.amount ?? 0),
+        currency: String(tipData.stats.currency ?? "NGN"),
+      }
+    : { count: 0, amount: 0, currency: "NGN" };
+  const recentTips: AdminOverviewData["recent_tips"] = (tipData?.rows ?? []).map((t) => ({
+    id: String(t.id),
+    tipper: String(t.tipper ?? "Member"),
+    recipient: String(t.recipient ?? "Member"),
+    amount: Number(t.amount ?? 0),
+    currency: String(t.currency ?? "NGN"),
+    message: String(t.message ?? ""),
+    created_at: String(t.created_at),
+  }));
 
-  return {
+  const data: AdminOverviewData = {
     stats: {
       total_users: counts.profiles ?? 0,
       active_24h_users: active24h,
       total_posts: counts.posts ?? 0,
       total_stories: counts.stories ?? 0,
       total_spaces: counts.spaces ?? 0,
-      live_spaces_count: liveSpaces ?? 0,
-      total_impressions: impressions ?? 0,
-      total_likes: likes ?? 0,
-      total_comments: comments ?? 0,
-      total_reposts: reposts ?? 0,
+      live_spaces_count: liveSpaces,
+      total_impressions: impressions,
+      total_likes: likes,
+      total_comments: comments,
+      total_reposts: reposts,
       pending_reports_count: reports.length,
-      suspended_users_count: suspended ?? 0,
-      verified_creators_count: verified ?? 0,
+      suspended_users_count: suspended,
+      verified_creators_count: verified,
       total_tips_count: tipStats.count,
       total_tips_amount: tipStats.amount,
       tips_currency: tipStats.currency,
@@ -2247,16 +2335,13 @@ export async function getAdminOverview(): Promise<AdminOverviewData> {
       stories_mb: 0,
       spaces_audio_mb: 0,
     },
-    charts: await buildAdminCharts({
-      likes: likes ?? 0,
-      comments: comments ?? 0,
-      reposts: reposts ?? 0,
-      impressions: impressions ?? 0,
-    }),
+    charts: await buildAdminCharts({ likes, comments, reposts, impressions }),
     recent_activity,
     recent_reports: reports.slice(0, 5),
     recent_tips: recentTips,
   };
+  overviewCache = { at: Date.now(), data };
+  return data;
 }
 
 async function buildAdminCharts(totals: {

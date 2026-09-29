@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Phone, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -12,7 +12,7 @@ import {
 } from "@/lib/browser-notifications";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { getPreferences } from "@/lib/preferences-state";
-import { getUsers } from "@/lib/api-client";
+import { fetchProfile } from "@/lib/profile-service";
 import { ensurePresenceJoined } from "@/lib/presence";
 import {
   answerCall,
@@ -103,6 +103,14 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
   const [activeCall, setActiveCall] = useState<ActiveCallState | null>(null);
   const [incomingCall, setIncomingCall] = useState<IncomingCallState | null>(null);
   const stopStatusRef = useRef<() => void>(() => {});
+  // Calls this device already resolved locally (answered/declined/cancelled/
+  // timed out). Their DB echo arrives on our own status subscription; the set
+  // keeps that echo from firing a second toast or a contradicting state change.
+  const handledRef = useRef<Set<string>>(new Set());
+  const activeCallRef = useRef<ActiveCallState | null>(null);
+  useEffect(() => {
+    activeCallRef.current = activeCall;
+  }, [activeCall]);
 
   // Presence should be alive anywhere in the app, not just on the messages page.
   useEffect(() => {
@@ -121,8 +129,8 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function resolveCaller(callerId: string) {
-      const res = await getUsers().catch(() => null);
-      return (res?.profiles || []).find((u) => u.id === callerId) || null;
+      // Single cached row lookup — ringing should not pull a page of profiles.
+      return (await fetchProfile(callerId).catch(() => null)) ?? null;
     }
 
     void (async () => {
@@ -144,6 +152,36 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
       stop();
     };
   }, [user?.id]);
+
+  // Shared status watcher for whichever side we're on: promotes the caller's
+  // modal from "ringing" to "active" when the callee picks up, and tears the
+  // modal down when the call reaches a terminal state on any device.
+  const watchCall = useCallback((callId: string) => {
+    stopStatusRef.current();
+    stopStatusRef.current = subscribeCallStatus(callId, (call) => {
+      if (call.status === "active") {
+        setActiveCall((c) => (c && c.callId === callId ? { ...c, status: "active" } : c));
+        return;
+      }
+      if (call.status === "declined" || call.status === "ended" || call.status === "missed") {
+        if (handledRef.current.delete(callId)) return; // our own write — already handled
+        const stillCurrent = activeCallRef.current?.callId === callId;
+        setActiveCall((c) => (c && c.callId === callId ? null : c));
+        if (stillCurrent) {
+          toast.info(
+            call.status === "declined"
+              ? "Call declined"
+              : call.status === "missed"
+                ? "No answer"
+                : "Call ended",
+          );
+        }
+      }
+    });
+  }, []);
+
+  // Unmount safety: never leave a realtime channel hanging.
+  useEffect(() => () => stopStatusRef.current(), []);
 
   // Ring + auto-miss while a call is ringing for this device.
   useEffect(() => {
@@ -183,11 +221,29 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
     window.addEventListener("message", onAction);
 
     const timer = setTimeout(() => {
+      // Nobody picked up on this device: mark it missed and stop ringing.
+      handledRef.current.add(incomingCall.callId);
       void markCallMissed(incomingCall.callId).catch(() => {});
       setIncomingCall(null);
     }, RING_TIMEOUT_MS);
+
+    // The caller can hang up mid-ring, or the callee can answer on another
+    // device — the ring must stop the moment the call resolves anywhere.
+    const stopStatus = subscribeCallStatus(incomingCall.callId, (call) => {
+      if (call.status === "ringing") return;
+      if (handledRef.current.delete(incomingCall.callId)) return; // our own accept/decline
+      setIncomingCall(null);
+      toast.info(
+        call.status === "active"
+          ? "Call answered on another device"
+          : call.status === "declined"
+            ? "Call declined on another device"
+            : "Missed call",
+      );
+    });
     return () => {
       stopRing();
+      stopStatus();
       window.removeEventListener("message", onAction);
       clearTimeout(timer);
     };
@@ -200,26 +256,18 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
         const row = await createCall(target.id, type);
         if (!row) return;
         setActiveCall({ user: target, type, callId: row.id, role: "caller", status: "ringing" });
-        stopStatusRef.current();
-        stopStatusRef.current = subscribeCallStatus(row.id, (call) => {
-          if (call.status === "active") {
-            setActiveCall((c) => (c && c.callId === row.id ? { ...c, status: "active" } : c));
-          } else if (call.status === "declined" || call.status === "ended" || call.status === "missed") {
-            toast.info(
-              call.status === "declined" ? "Call declined" : call.status === "missed" ? "No answer" : "Call ended",
-            );
-            setActiveCall((c) => (c && c.callId === row.id ? null : c));
-          }
-        });
+        watchCall(row.id);
         setTimeout(() => {
-          setActiveCall((c) => {
-            if (c?.callId === row.id && c.status === "ringing") {
-              void markCallMissed(row.id);
-              toast.info("No answer");
-              return null;
-            }
-            return c;
-          });
+          const c = activeCallRef.current;
+          if (c?.callId === row.id && c.status === "ringing") {
+            // Guarded write: if the callee answered in the last few hundred ms,
+            // this no-ops instead of killing a live call.
+            handledRef.current.add(row.id);
+            void markCallMissed(row.id).catch(() => {});
+            stopStatusRef.current();
+            toast.info("No answer");
+            setActiveCall(null);
+          }
         }, RING_TIMEOUT_MS);
       } catch {
         toast.error("Couldn't start the call.");
@@ -230,13 +278,28 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
   async function acceptIncomingCall() {
     if (!incomingCall) return;
     const { callId, user: caller, type } = incomingCall;
-    await answerCall(callId);
-    setActiveCall({ user: caller, type, callId, role: "callee", status: "active" });
+    // Stop the ring instantly; the DB write decides whether the call opens.
     setIncomingCall(null);
+    try {
+      const answered = await answerCall(callId);
+      if (!answered) {
+        handledRef.current.add(callId);
+        toast.info("This call is no longer available.");
+        return;
+      }
+      handledRef.current.add(callId);
+      setActiveCall({ user: caller, type, callId, role: "callee", status: "active" });
+      // The callee needs the same status feed as the caller: when the other
+      // side hangs up, this window must close instead of sitting on a dead peer.
+      watchCall(callId);
+    } catch {
+      toast.error("Couldn't connect the call.");
+    }
   }
 
   async function declineIncomingCall() {
     if (!incomingCall) return;
+    handledRef.current.add(incomingCall.callId);
     await declineCall(incomingCall.callId).catch(() => {});
     setIncomingCall(null);
   }
@@ -256,7 +319,17 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
           role={activeCall.role}
           callStatus={activeCall.status}
           onClose={() => {
-            if (activeCall.callId) void endCall(activeCall.callId, 0);
+            if (activeCall.callId) {
+              handledRef.current.add(activeCall.callId);
+              stopStatusRef.current();
+              // Cancelling while it still rings marks it missed — that DB write
+              // (not the timeout on the other device) stops their ringing.
+              void (
+                activeCall.status === "ringing"
+                  ? markCallMissed(activeCall.callId)
+                  : endCall(activeCall.callId, 0)
+              ).catch(() => {});
+            }
             setActiveCall(null);
           }}
         />

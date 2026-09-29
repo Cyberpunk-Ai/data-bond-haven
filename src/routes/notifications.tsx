@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect, type MouseEvent as ReactMouseEvent } from "react";
+import { useState, useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Heart,
   UserPlus,
@@ -99,6 +99,10 @@ const fallbackMeta = { icon: BellOff, tint: "from-slate-500 to-zinc-500" };
 
 const filters = ["All", "Mentions", "Follows", "Likes", "Tips", "Spaces"] as const;
 
+// One page of the notification history in flight at a time; older rows are
+// pulled on demand instead of shipping the whole archive up front.
+const NOTIF_CHUNK = 50;
+
 function NotificationsPage() {
   const navigate = useNavigate();
   const [items, setItems] = useState<Notification[]>([]);
@@ -106,25 +110,58 @@ function NotificationsPage() {
   // Start in the loading state so the first paint shows the skeleton instead of
   // flashing an empty "no notifications" panel before the effect resolves.
   const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const offsetRef = useRef(0);
 
   useEffect(() => {
     setLoading(true);
-    getNotifications()
+    getNotifications({ limit: NOTIF_CHUNK, offset: 0 })
       .then((data) => {
-        if (Array.isArray(data)) setItems(data);
+        if (Array.isArray(data)) {
+          setItems(data);
+          offsetRef.current = data.length;
+          setHasMore(data.length === NOTIF_CHUNK);
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  async function loadMore() {
+    if (!hasMore || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const data = await getNotifications({ limit: NOTIF_CHUNK, offset: offsetRef.current });
+      if (Array.isArray(data)) {
+        offsetRef.current += data.length;
+        setHasMore(data.length === NOTIF_CHUNK);
+        if (data.length) {
+          setItems((prev) => {
+            const seen = new Set(prev.map((n) => n.id));
+            return [...prev, ...data.filter((n) => !seen.has(n.id))];
+          });
+        }
+      }
+    } catch {
+      setHasMore(false);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   // Belt to the realtime braces: if the tab was hidden while the socket was
   // down, re-pull the persistent timeline the moment it is visible again.
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
-      getNotifications()
+      getNotifications({ limit: NOTIF_CHUNK, offset: 0 })
         .then((data) => {
-          if (Array.isArray(data)) setItems(data);
+          if (Array.isArray(data)) {
+            setItems(data);
+            offsetRef.current = data.length;
+            setHasMore(data.length === NOTIF_CHUNK);
+          }
         })
         .catch(() => {});
     };
@@ -335,6 +372,20 @@ function NotificationsPage() {
                 </div>
               );
             })}
+
+            {hasMore && visible.length > 0 && (
+              <div className="flex justify-center pt-1">
+                <button
+                  type="button"
+                  disabled={loadingMore}
+                  onClick={() => void loadMore()}
+                  className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all active:scale-95 cursor-pointer disabled:opacity-60"
+                >
+                  <Loader2 className={`h-3.5 w-3.5 ${loadingMore ? "animate-spin" : ""}`} />
+                  Load older notifications
+                </button>
+              </div>
+            )}
 
             {visible.length === 0 && (
               <Panel className="flex flex-col items-center gap-3 py-12 text-center">

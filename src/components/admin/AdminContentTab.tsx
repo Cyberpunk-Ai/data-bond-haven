@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   FileText,
   Radio,
@@ -52,6 +52,12 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
   // exact content members see (full text, media, stats) before moderating.
   const [previewPost, setPreviewPost] = useState<Post | null>(null);
   const [previewStory, setPreviewStory] = useState<Story | null>(null);
+  // Posts page in 50-row chunks; the moderation table no longer ships the
+  // newest 200 rows on every tab open or keystroke.
+  const POSTS_PAGE = 50;
+  const [postsHasMore, setPostsHasMore] = useState(false);
+  const [loadingMorePosts, setLoadingMorePosts] = useState(false);
+  const postsOffsetRef = useRef(0);
   // The Author column used to print raw profile UUIDs. getAdminPosts() already
   // hydrates the shared profile cache for every author, so resolve names from
   // it (batched, no per-row fetch).
@@ -70,8 +76,11 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
     try {
       setLoading(true);
       if (contentType === "posts") {
-        const p = await getAdminPosts({ query: debouncedQuery || undefined });
+        postsOffsetRef.current = 0;
+        const p = await getAdminPosts({ query: debouncedQuery || undefined }, { limit: POSTS_PAGE, offset: 0 });
         setPosts(p);
+        postsOffsetRef.current = POSTS_PAGE;
+        setPostsHasMore(Boolean((p as Post[] & { hasMore?: boolean }).hasMore));
       } else if (contentType === "spaces") {
         const res = await getSpaces();
         setSpaces(res.spaces || []);
@@ -89,6 +98,27 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
   useEffect(() => {
     fetchContent();
   }, [contentType, debouncedQuery]);
+
+  const loadMorePosts = async () => {
+    if (loadingMorePosts || !postsHasMore) return;
+    try {
+      setLoadingMorePosts(true);
+      const p = await getAdminPosts(
+        { query: debouncedQuery || undefined },
+        { limit: POSTS_PAGE, offset: postsOffsetRef.current },
+      );
+      setPosts((prev) => {
+        const seen = new Set(prev.map((x) => x.id));
+        return [...prev, ...p.filter((x: Post) => !seen.has(x.id))];
+      });
+      postsOffsetRef.current += POSTS_PAGE;
+      setPostsHasMore(Boolean((p as Post[] & { hasMore?: boolean }).hasMore));
+    } catch {
+      setPostsHasMore(false);
+    } finally {
+      setLoadingMorePosts(false);
+    }
+  };
 
   useRealtime({
     "post:deleted": ({ id }: { id: string }) => {
@@ -318,6 +348,20 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
               )}
             </tbody>
           </table>
+
+          {postsHasMore && (
+            <div className="flex justify-center pt-3">
+              <button
+                type="button"
+                disabled={loadingMorePosts}
+                onClick={() => void loadMorePosts()}
+                className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-5 py-2 text-xs font-bold text-brand transition-all active:scale-95 cursor-pointer disabled:opacity-60"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", loadingMorePosts && "animate-spin")} />
+                Load {POSTS_PAGE} more posts
+              </button>
+            </div>
+          )}
         </div>
       )}
 

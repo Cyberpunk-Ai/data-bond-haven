@@ -1,13 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState, lazy, Suspense } from "react";
 
-import { AdminAuditLogsTab } from "@/components/admin/AdminAuditLogsTab";
-import { AdminContentTab } from "@/components/admin/AdminContentTab";
 import { AdminHeader } from "@/components/admin/AdminHeader";
-import { AdminModerationTab } from "@/components/admin/AdminModerationTab";
-import { AdminPayoutsTab } from "@/components/admin/AdminPayoutsTab";
-import { AdminSystemSettingsTab } from "@/components/admin/AdminSystemSettingsTab";
-import { AdminUsersTab } from "@/components/admin/AdminUsersTab";
 import { getAdminOverview } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-state";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,8 +9,31 @@ import { currentUser } from "@/lib/profile-service";
 import type { AdminOverviewData, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+// Every console tab is its own chunk: opening the admin page no longer pulls
+// the moderation, users, payouts, audit and settings code (plus their table /
+// chart dependencies) down to staff who came for one tab.
 const AdminOverviewTab = lazy(() =>
   import("@/components/admin/AdminOverviewTab").then((m) => ({ default: m.AdminOverviewTab })),
+);
+const AdminUsersTab = lazy(() =>
+  import("@/components/admin/AdminUsersTab").then((m) => ({ default: m.AdminUsersTab })),
+);
+const AdminContentTab = lazy(() =>
+  import("@/components/admin/AdminContentTab").then((m) => ({ default: m.AdminContentTab })),
+);
+const AdminModerationTab = lazy(() =>
+  import("@/components/admin/AdminModerationTab").then((m) => ({ default: m.AdminModerationTab })),
+);
+const AdminPayoutsTab = lazy(() =>
+  import("@/components/admin/AdminPayoutsTab").then((m) => ({ default: m.AdminPayoutsTab })),
+);
+const AdminAuditLogsTab = lazy(() =>
+  import("@/components/admin/AdminAuditLogsTab").then((m) => ({ default: m.AdminAuditLogsTab })),
+);
+const AdminSystemSettingsTab = lazy(() =>
+  import("@/components/admin/AdminSystemSettingsTab").then((m) => ({
+    default: m.AdminSystemSettingsTab,
+  })),
 );
 
 export const Route = createFileRoute("/admin")({
@@ -96,10 +113,12 @@ function AdminPage() {
     };
   }, [profile]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     setRefreshing(true);
     try {
-      setOverview(await getAdminOverview());
+      // `force` skips the short overview cache — the header refresh button
+      // should always re-run the aggregations, tab switches should not.
+      setOverview(await getAdminOverview({ force }));
     } catch {
       setOverview(null);
     } finally {
@@ -155,7 +174,7 @@ function AdminPage() {
           if (activeRole === "admin") setActiveRole(next);
         }}
         systemHealth={overview?.stats.system_health}
-        onRefresh={load}
+        onRefresh={() => void load(true)}
         isRefreshing={refreshing}
       />
 
@@ -203,23 +222,27 @@ function AdminPage() {
           <p className="text-sm font-bold">We couldn't load the dashboard stats.</p>
           <p className="mt-1 text-xs text-muted-foreground">Check your connection and try again.</p>
           <button
-            onClick={() => void load()}
+            onClick={() => void load(true)}
             className="mt-4 rounded-full bg-brand px-4 py-2 text-xs font-bold text-white hover:opacity-90 transition-opacity cursor-pointer"
           >
             Try again
           </button>
         </div>
       )}
-      {tab === "users" && <AdminUsersTab activeRole={activeRole} currentUserId={profile.id} />}
-      {tab === "content" && <AdminContentTab activeRole={activeRole} currentUserId={profile.id} />}
-      {tab === "moderation" && (
-        <AdminModerationTab activeRole={activeRole} currentUserId={profile.id} />
-      )}
-      {tab === "withdrawals" && <AdminPayoutsTab />}
-      {tab === "audit" && <AdminAuditLogsTab activeRole={activeRole} />}
-      {tab === "settings" && (
-        <AdminSystemSettingsTab activeRole={activeRole} currentUserId={profile.id} />
-      )}
+      <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl bg-muted/40" />}>
+        {tab === "users" && <AdminUsersTab activeRole={activeRole} currentUserId={profile.id} />}
+        {tab === "content" && (
+          <AdminContentTab activeRole={activeRole} currentUserId={profile.id} />
+        )}
+        {tab === "moderation" && (
+          <AdminModerationTab activeRole={activeRole} currentUserId={profile.id} />
+        )}
+        {tab === "withdrawals" && <AdminPayoutsTab />}
+        {tab === "audit" && <AdminAuditLogsTab activeRole={activeRole} />}
+        {tab === "settings" && (
+          <AdminSystemSettingsTab activeRole={activeRole} currentUserId={profile.id} />
+        )}
+      </Suspense>
     </div>
   );
 }

@@ -28,18 +28,30 @@ export async function createCall(calleeId: string, kind: CallKind): Promise<Call
   return data as unknown as CallRow;
 }
 
-export async function answerCall(callId: string) {
-  await supabase
+/**
+ * Transitions are guarded on the current status so a late click can never
+ * resurrect a call that already ended, and the boolean tells the UI whether
+ * the transition it requested actually won the race (e.g. answering a call the
+ * caller already cancelled should stop the ring instead of joining a dead room).
+ */
+export async function answerCall(callId: string): Promise<boolean> {
+  const { data } = await supabase
     .from("calls")
     .update({ status: "active", answered_at: new Date().toISOString() })
-    .eq("id", callId);
+    .eq("id", callId)
+    .eq("status", "ringing")
+    .select("id");
+  return (data?.length ?? 0) > 0;
 }
 
-export async function declineCall(callId: string) {
-  await supabase
+export async function declineCall(callId: string): Promise<boolean> {
+  const { data } = await supabase
     .from("calls")
     .update({ status: "declined", ended_at: new Date().toISOString() })
-    .eq("id", callId);
+    .eq("id", callId)
+    .eq("status", "ringing")
+    .select("id");
+  return (data?.length ?? 0) > 0;
 }
 
 export async function endCall(callId: string, seconds: number) {
@@ -50,7 +62,8 @@ export async function endCall(callId: string, seconds: number) {
       ended_at: new Date().toISOString(),
       duration_seconds: Math.max(0, Math.round(seconds)),
     })
-    .eq("id", callId);
+    .eq("id", callId)
+    .in("status", ["ringing", "active"]);
 }
 
 /** Fires whenever someone starts ringing this device's signed-in user. */
@@ -91,11 +104,16 @@ export function subscribeCallStatus(callId: string, onChange: (call: CallRow) =>
   };
 }
 
-export async function markCallMissed(callId: string) {
-  await supabase
+export async function markCallMissed(callId: string): Promise<boolean> {
+  // Guarded on "ringing": the caller's timeout must never flip a call the
+  // callee already picked up over to "missed".
+  const { data } = await supabase
     .from("calls")
     .update({ status: "missed", ended_at: new Date().toISOString() })
-    .eq("id", callId);
+    .eq("id", callId)
+    .eq("status", "ringing")
+    .select("id");
+  return (data?.length ?? 0) > 0;
 }
 
 /** A call that started ringing for us moments ago, recovered after a refresh. */

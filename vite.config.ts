@@ -74,7 +74,19 @@ export default defineConfig(({ command, mode }) => {
     // does (Docker, VPS, Render, Railway, Lovable, ...). Deploy targets that
     // need a different runtime override it via env, e.g.
     //   NITRO_PRESET=cloudflare-module npm run build
-    ...(command === "build" ? [nitro({ defaultPreset: "node-server" })] : []),
+    // compressPublicAssets bakes gzip + brotli copies of every hashed JS/CSS
+    // asset at build time and the server negotiates Accept-Encoding from
+    // there — no per-request compression CPU, and JS/CSS travel ~70-85%
+    // smaller. (Image/video bandwidth is already handled by the immutable
+    // Cache-Control on the /api/public/media proxy.)
+    ...(command === "build"
+      ? [
+          nitro({
+            defaultPreset: "node-server",
+            compressPublicAssets: { brotli: true, gzip: true },
+          }),
+        ]
+      : []),
     viteReact(),
   ],
   };
