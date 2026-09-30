@@ -76,10 +76,6 @@ export function resolveS3Config(): S3Config | null {
   };
 }
 
-export function s3IsConfigured(): boolean {
-  return resolveS3Config() !== null;
-}
-
 /** Named for display only — a human should recognise the store they picked. */
 function labelForEndpoint(endpoint: string): string {
   const host = endpoint.toLowerCase();

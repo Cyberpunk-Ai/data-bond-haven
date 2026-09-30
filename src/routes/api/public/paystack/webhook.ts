@@ -63,13 +63,19 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
 
         // Best-effort event log for replay defence / auditing. event_id may be
         // absent for some Paystack events; the unique index tolerates nulls.
-        await admin.from("payment_events").insert({
+        const { error: logError } = await admin.from("payment_events").insert({
           provider: "paystack",
           event_id: tx.id != null ? String(tx.id) : null,
           event,
           reference: tx.reference ?? null,
           payload: { event, data: tx },
         });
+        // A duplicate key here is Paystack redelivering the same event — expected,
+        // and the reason this write exists. Anything else is a broken audit trail
+        // and needs to be visible.
+        if (logError && logError.code !== "23505") {
+          console.error("paystack webhook: event log write failed:", logError.message);
+        }
 
         // ---- payouts (transfers) ----
         if (event.startsWith("transfer.")) {
@@ -99,7 +105,7 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
                 updated.amount_usd != null
                   ? `$${Number(updated.amount_usd).toFixed(2)}`
                   : `${updated.currency ?? ""} ${Number(updated.amount ?? 0).toFixed(2)}`.trim();
-              await admin.from("notifications").insert({
+              const { error: noticeError } = await admin.from("notifications").insert({
                 recipient_id: updated.user_id,
                 actor_id: null,
                 type: "payout",
@@ -111,6 +117,12 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
                   ? "/settings?section=workspaces"
                   : "/settings?section=monetization",
               });
+              // The payout row already carries the new status, so the transfer is
+              // correctly recorded either way — but a creator who is never told
+              // their money moved (or didn't) deserves more than a silent drop.
+              if (noticeError) {
+                console.error("paystack webhook: payout notice not stored:", noticeError.message);
+              }
             }
           }
           return new Response("ok");

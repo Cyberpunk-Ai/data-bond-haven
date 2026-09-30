@@ -52,6 +52,9 @@ export const appConfig = {
     // username or credential. Ephemeral ICE servers are fetched from the server
     // at call time (see lib/webrtc/ice.ts + turn.functions.ts) — plan §S4.
     maxMeshSpeakers: num("VITE_SPACES_MESH_MAX", 8),
+    // Opus ceiling for one voice. 64 kbit/s mono is transparent for speech; the
+    // mesh pays for it per uplink, so it stays configurable (useSpaceAudio).
+    audioMaxKbps: num("VITE_SPACES_AUDIO_KBPS", 64),
     sfuProvider: str("VITE_SPACES_SFU_PROVIDER", ""),
     sfuUrl: str("VITE_SPACES_SFU_URL", ""),
     recordingMaxMb: num("VITE_SPACES_RECORDING_MAX_MB", 100),
@@ -66,5 +69,3 @@ export const appConfig = {
     workspaces: bool("VITE_FEATURE_WORKSPACES", true),
   },
 } as const;
-
-export type AppConfig = typeof appConfig;

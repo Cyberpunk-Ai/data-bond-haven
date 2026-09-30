@@ -17,6 +17,7 @@ async function getAdmin() {
   return mod.supabaseAdmin;
 }
 
+/** Admin-only guard: every access-level change in this file goes through it. */
 async function assertAdmin(context: any) {
   const { supabase, userId } = context;
   const { data: isAdmin } = await supabase.rpc("has_role", {
@@ -94,7 +95,15 @@ export const setAccessLevel = createServerFn({ method: "POST" })
 
     const dbRole = toDbRole(data.role);
 
-    await admin.from("user_roles").delete().eq("user_id", target.auth_user_id);
+    const { error: clearError } = await admin
+      .from("user_roles")
+      .delete()
+      .eq("user_id", target.auth_user_id);
+    // Revoking an admin/moderator must actually revoke it: if this delete fails
+    // and only the insert below is checked, the dashboard reports "set to user"
+    // while the old elevated role is still in the table. The insert right after
+    // this already refuses to be ignored — the same applies here.
+    if (clearError) throw new Error(clearError.message);
     if (dbRole) {
       const { error } = await admin
         .from("user_roles")
@@ -183,16 +192,4 @@ export const relocateLegacyMedia = createServerFn({ method: "POST" })
         summary: mod.describeRelocate(report, data.dryRun),
       })),
     };
-  });
-
-/** Does the signed-in person have console access? */
-export const getMyAccessLevel = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
-  .handler(async ({ context }) => {
-    const { supabase, userId } = context as any;
-    const [{ data: isAdmin }, { data: isMod }] = await Promise.all([
-      supabase.rpc("has_role", { _user_id: userId, _role: "admin" }),
-      supabase.rpc("has_role", { _user_id: userId, _role: "moderator" }),
-    ]);
-    return { isAdmin: !!isAdmin, isModerator: !!isMod };
   });

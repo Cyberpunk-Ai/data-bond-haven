@@ -198,10 +198,14 @@ function NotificationsPage() {
   async function handleMarkAllRead() {
     setItems((p) => p.map((n) => ({ ...n, read: true })));
     clearAllUnreadNotifications();
-    toast.success("All notifications marked as read");
     try {
       await markAllNotificationsRead();
-    } catch {}
+      toast.success("All notifications marked as read");
+    } catch (err) {
+      // Optimistic clear stands until the next load resyncs it; confirm only once
+      // the server has agreed, so the toast isn't claiming a write that failed.
+      console.warn("mark all read failed:", err);
+    }
   }
 
   async function handleMarkRead(id: string) {
@@ -212,7 +216,11 @@ function NotificationsPage() {
     setItems((p) => p.map((x) => (x.id === id ? { ...x, read: true } : x)));
     try {
       await markNotificationRead(id);
-    } catch {}
+    } catch (err) {
+      // Opening the post is what the user came for; a flag that didn't stick shows
+      // up again on the next load rather than blocking navigation here.
+      console.warn("mark read failed:", err);
+    }
   }
 
   // Mark read, then route the user to the relevant destination for the type.

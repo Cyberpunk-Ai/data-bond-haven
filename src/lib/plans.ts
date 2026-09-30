@@ -7,6 +7,13 @@ export interface PlanLimitSpecs {
   spacesAudioQuality: string;
   spacesRecording: boolean;
   mediaUploadMaxMb: number;
+  /**
+   * MB of stored Space replays this plan may keep at once. A live broadcast
+   * costs nothing — only a saved recording fills this budget. Mirrors
+   * `plan_limits.spaces_storage_mb` (migration 20260930000093), which is the
+   * copy the server and the database actually enforce.
+   */
+  spacesStorageMb: number;
   analyticsLevel: "Basic" | "Advanced" | "Team / Studio";
   monetization: boolean;
   customBranding: boolean;
@@ -57,6 +64,7 @@ export const PLAN_DETAILS: Record<PlanTier, PlanDetails> = {
       spacesAudioQuality: "Standard Mono",
       spacesRecording: false,
       mediaUploadMaxMb: 10,
+      spacesStorageMb: 250,
       analyticsLevel: "Basic",
       monetization: true,
       customBranding: false,
@@ -98,6 +106,7 @@ export const PLAN_DETAILS: Record<PlanTier, PlanDetails> = {
       spacesAudioQuality: "HD Stereo (128 kbps)",
       spacesRecording: true,
       mediaUploadMaxMb: 100,
+      spacesStorageMb: 1024,
       analyticsLevel: "Advanced",
       monetization: true,
       customBranding: true,
@@ -136,6 +145,7 @@ export const PLAN_DETAILS: Record<PlanTier, PlanDetails> = {
       spacesAudioQuality: "Lossless Spatial (320 kbps)",
       spacesRecording: true,
       mediaUploadMaxMb: 1024,
+      spacesStorageMb: 5120,
       analyticsLevel: "Team / Studio",
       monetization: true,
       customBranding: true,
@@ -157,177 +167,6 @@ export const PLAN_DETAILS: Record<PlanTier, PlanDetails> = {
   },
 };
 
-export interface ComparisonPerk {
-  name: string;
-  description: string;
-  category:
-    "Core Features" | "Analytics & Growth" | "Monetization" | "Spaces & Media" | "Badges & Support";
-  free: string | boolean;
-  plus: string | boolean;
-  pro: string | boolean;
-  highlight?: boolean;
-}
-
-export const COMPARISON_PERKS: ComparisonPerk[] = [
-  // Core Features
-  {
-    name: "Posts & Stories",
-    description: "Publish feeds, updates, and ephemeral 24-hour visual stories",
-    category: "Core Features",
-    free: "Unlimited",
-    plus: "Unlimited",
-    pro: "Unlimited",
-  },
-  {
-    name: "Communities",
-    description: "Join public, topic-based, and creator groups",
-    category: "Core Features",
-    free: "Unlimited",
-    plus: "Unlimited",
-    pro: "Unlimited",
-  },
-  {
-    name: "AI Sparks Drafts",
-    description: "AI-assisted content generation, viral hooks, and rewrites",
-    category: "Core Features",
-    free: "5 / day",
-    plus: "100 / day",
-    pro: "Unlimited",
-    highlight: true,
-  },
-  {
-    name: "Team Workspaces",
-    description: "Shared brand accounts, team member invites, and role controls",
-    category: "Core Features",
-    free: false,
-    plus: false,
-    pro: true,
-    highlight: true,
-  },
-
-  // Analytics & Growth
-  {
-    name: "Analytics Level",
-    description: "Insights into impressions, reach, profile views, and follower growth",
-    category: "Analytics & Growth",
-    free: "Basic view counts",
-    plus: "Advanced Reach & Trends",
-    pro: "Team Studio & Export",
-    highlight: true,
-  },
-  {
-    name: "Audience Demographics",
-    description: "Breakdown of follower geography, active hours, and top interests",
-    category: "Analytics & Growth",
-    free: false,
-    plus: true,
-    pro: true,
-  },
-
-  // Monetization
-  {
-    name: "Monetization Tools",
-    description: "Creator tips, direct fan funding, and subscriber revenue",
-    category: "Monetization",
-    free: true,
-    plus: true,
-    pro: true,
-    highlight: true,
-  },
-  {
-    name: "Withdrawal Fee",
-    description: "Platform take, charged once when you cash out — tips arrive in full",
-    category: "Monetization",
-    free: "5%",
-    plus: "3%",
-    pro: "1%",
-    highlight: true,
-  },
-
-  // Spaces & Media
-  {
-    name: "Live Audio Spaces Capacity",
-    description: "Maximum simultaneous listeners in your hosted rooms",
-    category: "Spaces & Media",
-    free: "10 listeners",
-    plus: "250 listeners",
-    pro: "1,000+ listeners",
-    highlight: true,
-  },
-  {
-    name: "Audio Broadcast Quality",
-    description: "Bitrate and sound fidelity for speakers and musical jams",
-    category: "Spaces & Media",
-    free: "Standard Mono",
-    plus: "HD Stereo (128 kbps)",
-    pro: "Spatial Lossless (320 kbps)",
-  },
-  {
-    name: "Space Recordings",
-    description: "Save past broadcasts for replay and podcast downloads",
-    category: "Spaces & Media",
-    free: false,
-    plus: true,
-    pro: true,
-  },
-  {
-    name: "Media Upload Limit",
-    description: "Maximum file size for photos, 4K videos, and attachments",
-    category: "Spaces & Media",
-    free: "10 MB",
-    plus: "100 MB",
-    pro: "1 GB",
-  },
-
-  // Badges & Support
-  {
-    name: "Profile Badge",
-    description: "Clean authenticity badge displayed across profile, feed, and comments",
-    category: "Badges & Support",
-    free: "Clean Member",
-    plus: "✨ Plus Badge",
-    pro: "👑 Pro Badge",
-    highlight: true,
-  },
-  {
-    name: "Custom Branding",
-    description: "Custom profile gradient auras, highlight cards, and branding accents",
-    category: "Badges & Support",
-    free: false,
-    plus: true,
-    pro: true,
-    highlight: true,
-  },
-  {
-    name: "Developer API Access",
-    description: "REST & Webhook endpoints to publish posts and read analytics programmatically",
-    category: "Badges & Support",
-    free: false,
-    plus: false,
-    pro: true,
-    highlight: true,
-  },
-  {
-    name: "Support Level",
-    description: "Dedicated assistance and resolution channels",
-    category: "Badges & Support",
-    free: "Community Help",
-    plus: "Priority Email",
-    pro: "24/7 Priority Support",
-  },
-];
-
-export interface InvoiceItem {
-  id: string;
-  date: string;
-  amount: number;
-  plan: PlanTier;
-  cycle: BillingCycle;
-  status: "paid" | "refunded" | "pending";
-}
-
-export const SAMPLE_INVOICES: InvoiceItem[] = [];
-
 // --- server functions (plan lifecycle) ---
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
@@ -346,12 +185,27 @@ export const cancelMySubscription = createServerFn({ method: "POST" })
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const admin = supabaseAdmin as any;
-    await admin.from("profiles").update({ plan: "free" }).eq("id", profile.id);
-    await admin
+    // Both writes have to land: the UI reads `profiles.plan` for what the account
+    // can do, `subscriptions` for what it will be billed. Either one failing on
+    // its own silently left a "canceled" screen over a still-charging subscription
+    // (or a free plan that still renewed), and supabase-js reports that as success.
+    const { error: subError } = await admin
       .from("subscriptions")
       .upsert(
         { user_id: profile.id, plan: "free", billing_cycle: "monthly", status: "canceled" },
         { onConflict: "user_id" },
       );
+    if (subError) throw new Error(subError.message || "Could not cancel the subscription.");
+
+    const { error: planError } = await admin
+      .from("profiles")
+      .update({ plan: "free" })
+      .eq("id", profile.id);
+    if (planError) {
+      // Put the billing record back the way it was rather than leave the two rows
+      // disagreeing about what this account pays.
+      await admin.from("subscriptions").update({ status: "active" }).eq("user_id", profile.id);
+      throw new Error(planError.message || "Could not cancel the subscription.");
+    }
     return { plan: "free" as PlanTier };
   });

@@ -78,11 +78,6 @@ export async function insertOwnedRow(table: string, values: Record<string, unkno
   return data as Record<string, any> | null;
 }
 
-export async function updateOwnedRow(table: string, id: string, patch: Record<string, unknown>) {
-  const { error } = await db.from(table).update(patch).eq("id", id);
-  if (error) throw error;
-}
-
 export async function deleteOwnedRow(table: string, id: string) {
   const { error } = await db.from(table).delete().eq("id", id);
   if (error) throw error;

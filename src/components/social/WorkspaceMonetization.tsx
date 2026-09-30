@@ -15,7 +15,7 @@ import {
 import { toast } from "sonner";
 
 import { getWorkspaceEarnings, requestPayout } from "@/lib/payouts.functions";
-import { usd } from "@/lib/formatters";
+import { usd, approxLocal } from "@/lib/formatters";
 import { PayoutAccountModal } from "@/components/social/PayoutAccountModal";
 import { Avatar } from "@/components/social/Avatar";
 import { friendlyError } from "@/lib/error-messages";
@@ -138,8 +138,14 @@ export function WorkspaceMonetization({ workspaceId }: { workspaceId: string }) 
       const res = await withdraw({ data: { amount: amt, workspaceId } });
       setIsWithdrawOpen(false);
       setAmount("");
+      // Same reasoning as the personal hub: the transfer itself clears in the
+      // team's settlement currency, so say so at request time.
+      const local =
+        res.settlementAmount && res.settlementCurrency
+          ? ` ${approxLocal(res.settlementAmount, res.settlementCurrency)}`
+          : "";
       toast.success(
-        `Team withdrawal requested — ${usd(res.netUsd ?? res.amount)}${
+        `Team withdrawal requested — ${usd(res.netUsd ?? res.amount)}${local}${
           res.feeUsd != null ? ` (after a ${usd(res.feeUsd)} fee)` : ""
         } will reach the team's account after review.`,
       );

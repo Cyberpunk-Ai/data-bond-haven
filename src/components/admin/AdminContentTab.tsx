@@ -21,6 +21,7 @@ import {
 import {
   getAdminPosts,
   forceDeletePostAdmin,
+  hidePostAdmin,
   terminateSpaceAdmin,
   getSpaces,
   getStories,
@@ -52,6 +53,9 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
   // exact content members see (full text, media, stats) before moderating.
   const [previewPost, setPreviewPost] = useState<Post | null>(null);
   const [previewStory, setPreviewStory] = useState<Story | null>(null);
+  // One in-flight hide/unhide at a time, so a double click cannot send the
+  // same moderation action twice.
+  const [hidingPostId, setHidingPostId] = useState<string | null>(null);
   // Posts page in 50-row chunks; the moderation table no longer ships the
   // newest 200 rows on every tab open or keystroke.
   const POSTS_PAGE = 50;
@@ -147,6 +151,29 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
       showToast("Post removed by administrator");
     } catch (err: any) {
       toast.error(friendlyError(err, "Couldn't delete that post. Try again."));
+    }
+  };
+
+  /**
+   * Hide (or restore) without deleting — the lighter half of the moderation
+   * toolset the server already supports (`moderatePost` writes an audit entry
+   * either way). A hidden post disappears from every feed but stays on the
+   * author's profile row, so it can be restored if the report was wrong.
+   */
+  const handleToggleHidePost = async (post: Post) => {
+    const nextHidden = !post.hidden;
+    setHidingPostId(post.id);
+    try {
+      await hidePostAdmin(post.id, nextHidden);
+      setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, hidden: nextHidden } : p)));
+      setPreviewPost((prev) =>
+        prev && prev.id === post.id ? { ...prev, hidden: nextHidden } : prev,
+      );
+      showToast(nextHidden ? "Post hidden from all feeds" : "Post restored to feeds");
+    } catch (err: any) {
+      toast.error(friendlyError(err, "Couldn't update that post's visibility. Try again."));
+    } finally {
+      setHidingPostId(null);
     }
   };
 
@@ -283,6 +310,12 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
                   >
                     <td className="px-5 py-3.5 max-w-md">
                       <p className="line-clamp-2 font-medium text-foreground">{post.content}</p>
+                      {post.hidden && (
+                        <span className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[0.62rem] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                          <StopCircle className="h-2.5 w-2.5" />
+                          Hidden
+                        </span>
+                      )}
                       {post.tags && post.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
                           {post.tags.map((t) => (
@@ -334,16 +367,33 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
                     </td>
                     <td className="px-5 py-3.5 text-right">
                       {canDeleteContent && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeletePost(post.id);
-                          }}
-                          className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[0.7rem] font-bold text-rose-700 dark:text-rose-300 hover:bg-rose-500/20"
-                          title="Purge post"
-                        >
-                          Delete
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleToggleHidePost(post);
+                            }}
+                            disabled={hidingPostId === post.id}
+                            className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[0.7rem] font-bold text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 disabled:opacity-60"
+                            title={
+                              post.hidden
+                                ? "Restore this post to all feeds"
+                                : "Hide from feeds without deleting"
+                            }
+                          >
+                            {post.hidden ? "Restore" : "Hide"}
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeletePost(post.id);
+                            }}
+                            className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[0.7rem] font-bold text-rose-700 dark:text-rose-300 hover:bg-rose-500/20"
+                            title="Purge post"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -489,6 +539,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
                 }
               : undefined
           }
+          onHide={canDeleteContent ? () => void handleToggleHidePost(previewPost) : undefined}
         />
       )}
 
@@ -568,11 +619,13 @@ function PostPreviewModal({
   author,
   onClose,
   onDelete,
+  onHide,
 }: {
   post: Post;
   author?: { display_name: string; username: string; avatar_url: string | null };
   onClose: () => void;
   onDelete?: () => void;
+  onHide?: () => void;
 }) {
   const mediaUrls = (post.media_url || post.image_url || "")
     .split(",")
@@ -643,8 +696,23 @@ function PostPreviewModal({
           <Repeat2 className="h-3.5 w-3.5 text-emerald-500" /> {post.repostCount || 0}
         </span>
         <span>{new Date(post.created_at).toLocaleString()}</span>
+        {post.hidden && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[0.62rem] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+            <StopCircle className="h-3 w-3" />
+            Hidden from feeds
+          </span>
+        )}
       </div>
 
+      {onHide && (
+        <button
+          onClick={onHide}
+          className="mt-4 mr-2 flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-bold text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
+        >
+          <StopCircle className="h-3.5 w-3.5" />
+          {post.hidden ? "Restore to feeds" : "Hide from feeds"}
+        </button>
+      )}
       {onDelete && (
         <button
           onClick={onDelete}

@@ -60,6 +60,16 @@ import { friendlyError } from "@/lib/error-messages";
 import { useRealtime } from "@/lib/realtime";
 import { usePlatform } from "@/lib/platform-state";
 import { cn } from "@/lib/utils";
+import { canBroadcast, initialMutedFor, micStateAfterRoleChange } from "@/lib/spaces-stage";
+import {
+  formatBytes,
+  isSpaceStorageExhausted,
+  perRecordingCapBytes,
+  spaceRecordingAllowed,
+  spaceStorageFullMessage,
+} from "@/lib/spaces-storage";
+import { getSpaceStorageState } from "@/lib/spaces-storage.functions";
+import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { ClampText } from "@/components/social/ClampText";
 import { toast } from "sonner";
 
@@ -93,10 +103,31 @@ export function SpaceRoomModal({ space, isOpen, onClose }: SpaceRoomModalProps) 
 function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () => void }) {
   // AI room summaries belong to the AI subsystem the console can switch off.
   const { aiEnabled } = usePlatform();
+  // Recording is a plan feature; broadcasting never is. The tier decides what a
+  // host may keep afterwards, not whether they can go live.
+  const { currentPlan } = usePlan();
+  const canRecordSpace = spaceRecordingAllowed(currentPlan);
+  // How long/take this browser may record before the upload would be refused:
+  // the plan's per-file allowance, clamped by the global safety cap.
+  const recordingCapBytes = perRecordingCapBytes(currentPlan, appConfig.realtime.recordingMaxMb);
+  // Real numbers from the server (plan_limits + media_objects), so the room
+  // never promises a cap the upload endpoint is about to refuse. Null until
+  // loaded, and stays null if the lookup fails — the copy below degrades to the
+  // plan's own figures rather than guessing.
+  const [storage, setStorage] = useState<{
+    usedBytes: number;
+    quotaBytes: number;
+    replays: number;
+  } | null>(null);
+  // Who owns the room is known from the first render, and it decides whether the
+  // microphone comes on: the host is broadcasting a live room, so their voice is
+  // what the room hears. A listener is never even asked for mic access.
+  const isCurrentUserHost = space.host_id === currentUser.id;
   const [activeTab, setActiveTab] = useState<"stage" | "chat" | "manage">("stage");
   const [chatDraft, setChatDraft] = useState("");
-  const [isMuted, setIsMuted] = useState(true);
-  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isMuted, setIsMuted] = useState(() =>
+    initialMutedFor(isCurrentUserHost ? "host" : "listener"),
+  );
   const [handRaised, setHandRaised] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [summary, setSummary] = useState<{ summary: string; keyTakeaways: string[] } | null>(null);
@@ -144,7 +175,6 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   // Use the resolved profile when we have it; otherwise fall back to the cached
   // placeholder so the header never shows a raw UUID once it loads.
   const host = hostProfile ?? getProfile(space.host_id);
-  const isCurrentUserHost = space.host_id === currentUser.id;
   // An ended room with a saved recording is a replay: play the stored audio
   // instead of pretending the live stage is still up. Recordings belong to the
   // host alone — nobody else gets a replay view (mirrors the `spaces public
@@ -224,6 +254,19 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           username: currentUser.username,
           avatar_url: currentUser.avatar_url || undefined,
         });
+      }
+
+      // My own row is the authority on whether I hold the floor: an invited
+      // speaker who reloads must land back on the stage, and anyone else must
+      // stay in the audience with the microphone off.
+      const mine = list.find((p) => p.id === currentUser.id)?.role;
+      const micForRole = micStateAfterRoleChange(mine ?? (isCurrentUserHost ? "host" : "listener"));
+      setIsMuted(micForRole.muted);
+      for (const p of list) {
+        if (p.id === currentUser.id) {
+          p.isMuted = micForRole.muted;
+          p.isSpeaking = micForRole.onStage;
+        }
       }
 
       setParticipants(list);
@@ -306,11 +349,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
         if (data && data.userId) {
           // The host muted (or unmuted) me: force my own mic so the mute is real,
           // not just a UI state on other people's screens.
-          if (data.userId === currentUser.id) {
-            const forcedMuted = !!(data.isMuted ?? data.muted);
-            setIsMuted(forcedMuted);
-            if (forcedMuted) setIsSpeaking(false);
-          }
+          if (data.userId === currentUser.id) setIsMuted(!!(data.isMuted ?? data.muted));
           setParticipants((prev) =>
             prev.map((p) =>
               p.id === data.userId
@@ -337,9 +376,27 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       } else if (event.type === "space:role") {
         const data = event.data || event;
         if (data && data.userId) {
+          // The host handed over (or took back) the floor. The microphone
+          // follows the role so an invited speaker is heard without hunting
+          // for a button, and a demoted one stops transmitting immediately.
+          const next = micStateAfterRoleChange(data.role);
+          if (data.userId === currentUser.id) {
+            setIsMuted(next.muted);
+            setHandRaised(false);
+            if (next.onStage) toast.success("You're on stage — your microphone is live");
+            else toast.info("You're back in the audience");
+          }
           setParticipants((prev) =>
             prev.map((p) =>
-              p.id === data.userId ? { ...p, role: data.role, handRaised: false } : p,
+              p.id === data.userId
+                ? {
+                    ...p,
+                    role: data.role,
+                    handRaised: false,
+                    isMuted: p.id === currentUser.id ? next.muted : p.isMuted,
+                    isSpeaking: p.id === currentUser.id ? next.onStage : p.isSpeaking,
+                  }
+                : p,
             ),
           );
         }
@@ -460,28 +517,43 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   }
 
   async function handleToggleMic() {
+    // The stage owns the microphone. A listener cannot broadcast, whatever their
+    // own screen says — they raise a hand and the host brings them up.
+    if (!canBroadcast(myRole)) {
+      toast.info("Only the host and invited speakers can use the microphone here.");
+      return;
+    }
     const nextMuted = !isMuted;
     setIsMuted(nextMuted);
-    setIsSpeaking(!nextMuted);
 
+    // Muting changes mic state only, never the role. The role used to be
+    // rewritten to "speaker" here, which both promoted listeners locally (the
+    // database still had them as listeners) and rebuilt the whole audio mesh,
+    // so one person's tap dropped everyone else's connection for a moment.
     setParticipants((prev) =>
       prev.map((p) =>
-        p.id === currentUser.id
-          ? {
-              ...p,
-              isMuted: nextMuted,
-              isSpeaking: !nextMuted,
-              role: nextMuted ? p.role : "speaker",
-            }
-          : p,
+        p.id === currentUser.id ? { ...p, isMuted: nextMuted, isSpeaking: !nextMuted } : p,
       ),
     );
 
     try {
       await toggleSpeaking(space.id, !nextMuted, nextMuted);
-    } catch {}
+    } catch (err) {
+      // The write failed: put the local view back. Silently keeping the optimistic
+      // state told people their mic was live while the row still said listener, so
+      // every other client kept them out of the mesh and the badge disagreed with
+      // the database until the next reload.
+      setIsMuted(!nextMuted);
+      setParticipants((prev) =>
+        prev.map((p) =>
+          p.id === currentUser.id ? { ...p, isMuted: !nextMuted, isSpeaking: nextMuted } : p,
+        ),
+      );
+      toast.error(friendlyError(err, "Couldn't change your microphone state. Please try again."));
+      return;
+    }
 
-    toast(nextMuted ? "Microphone muted" : "You are now on stage speaking!");
+    toast(nextMuted ? "Microphone muted" : "You're on stage — your microphone is live");
   }
 
   async function handleToggleHand() {
@@ -489,7 +561,11 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     setHandRaised(nextRaised);
     try {
       await toggleHandRaised(space.id, nextRaised);
-    } catch {}
+    } catch (err) {
+      setHandRaised(!nextRaised);
+      toast.error(friendlyError(err, "Couldn't update your hand. Please try again."));
+      return;
+    }
     toast(nextRaised ? "Hand raised! Host will be notified." : "Hand lowered");
   }
 
@@ -507,7 +583,13 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
 
     try {
       await sendSpaceMessage(space.id, text);
-    } catch {}
+    } catch (err) {
+      // Undo the optimistic bubble and hand the text back to the composer: leaving
+      // it on screen showed a message nobody else ever received.
+      setMessages((prev) => prev.filter((m) => m.id !== newMsg.id));
+      setChatDraft(text);
+      toast.error(friendlyError(err, "Message not sent. Please try again."));
+    }
   }
 
   const promoteToSpeaker = (userId: string) => {
@@ -565,12 +647,40 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     }
   }
 
+  /** The host's replay budget, read from the server. Best-effort: a failed
+   * lookup leaves `storage` null and the room falls back to plan figures — it
+   * must never be a reason a Space cannot be hosted. */
+  async function refreshStorage() {
+    if (!isCurrentUserHost || !canRecordSpace) return;
+    try {
+      const snap = await getSpaceStorageState();
+      setStorage({
+        usedBytes: snap.usedBytes,
+        quotaBytes: snap.quotaBytes,
+        replays: snap.replays,
+      });
+    } catch (err) {
+      console.warn("Space storage read failed:", err);
+    }
+  }
+
+  useEffect(() => {
+    void refreshStorage();
+    // A room's storage state is fetched once per open, for the host only.
+  }, [isCurrentUserHost, canRecordSpace]);
+
   async function handleToggleRecording() {
     if (recordingBusy) return;
     setRecordingBusy(true);
     try {
       if (!isRecordingSpace) {
-        const maxBytes = appConfig.realtime.recordingMaxMb * 1024 * 1024;
+        // Warn before the take, not after: nothing is more frustrating than
+        // losing a recording at the end of a room over budget spent months ago.
+        if (storage && isSpaceStorageExhausted(storage.usedBytes, storage.quotaBytes)) {
+          toast.error(spaceStorageFullMessage(storage.quotaBytes, storage.usedBytes));
+          return;
+        }
+        const maxBytes = perRecordingCapBytes(currentPlan, appConfig.realtime.recordingMaxMb);
         const started = audio.startRecording(maxBytes, () => {
           toast.warning("Recording reached the size limit and was stopped automatically.");
         });
@@ -603,6 +713,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           }
           await finalizeSpaceRecording(space.id, uploaded.url);
           toast.success("Recording saved! It will be available as a replay once the Space ends.");
+          void refreshStorage();
         } else {
           await setSpaceRecording(space.id, false);
           toast.info("Recording stopped");
@@ -639,7 +750,8 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   const audio = useSpaceAudio({
     spaceId: space.id,
     userId: currentUser.id,
-    speaker: myRole !== "listener",
+    // Only the stage publishes audio; listeners receive and stay silent.
+    speaker: canBroadcast(myRole),
     muted: isMuted,
     // Replay viewers must not open WebRTC connections to a dead room.
     enabled: !isReplay,
@@ -1181,6 +1293,48 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
             )}
           </div>
 
+          {/* Storage honesty, for the host who is about to be offered a Record
+              button: a live broadcast writes no bytes at all — only a replay
+              they choose to keep costs storage, and that has a plan budget. */}
+          {!isReplay && isCurrentUserHost && (
+            <div className="mx-3 sm:mx-4 mt-2 flex items-center justify-between gap-2 rounded-xl bg-foreground/5 px-3 py-2 text-[11px] font-semibold text-muted-foreground">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Disc3
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0",
+                    isRecordingSpace ? "text-red-500" : "opacity-60",
+                  )}
+                />
+                <span className="truncate">
+                  {isRecordingSpace
+                    ? `${formatBytes(audio.recordingBytes)} of ${formatBytes(recordingCapBytes)} this take`
+                    : "Live only — broadcasting stores nothing"}
+                </span>
+              </span>
+              {canRecordSpace && storage ? (
+                <span className="shrink-0">
+                  {storage.replays} {storage.replays === 1 ? "replay" : "replays"} ·{" "}
+                  {formatBytes(storage.usedBytes)} of {formatBytes(storage.quotaBytes)}
+                </span>
+              ) : null}
+              {!canRecordSpace && <span className="shrink-0">Replays need an upgrade</span>}
+            </div>
+          )}
+
+          {/* The browser will not play sound until this page has been touched.
+              A listener has nothing to tap and no mic to grant, so without this
+              the room simply looks broken — one tap starts playback. */}
+          {!isReplay && audio.needsGesture && (
+            <button
+              type="button"
+              onClick={audio.unlock}
+              className="mx-3 sm:mx-4 mt-2 flex items-center justify-center gap-2 rounded-full bg-brand px-4 py-2.5 text-xs font-bold text-white shadow-soft hover:bg-brand/90 transition-all active:scale-95 cursor-pointer"
+            >
+              <Volume2 className="h-4 w-4" />
+              Tap to hear this Space
+            </button>
+          )}
+
           {/* Quick Emoji Reaction Toolbar */}
           <div className="flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-3 sm:px-4 border-t border-border/40 bg-foreground/[0.02] overflow-x-auto [scrollbar-width:none]">
             <span className="text-[10px] font-semibold text-muted-foreground mr-1 shrink-0">
@@ -1202,59 +1356,85 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 border-t border-border/60 p-3 sm:p-4 bg-card/60">
             {!isReplay && (
               <div className="flex items-center gap-2">
-                <button
-                  onClick={handleToggleMic}
-                  className={cn(
-                    "flex items-center gap-1.5 sm:gap-2 rounded-full px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs font-bold transition-all active:scale-95 shadow-soft min-h-[38px] sm:min-h-[40px] cursor-pointer",
-                    isMuted
-                      ? "bg-foreground/10 text-foreground hover:bg-foreground/15"
-                      : "bg-emerald-500 text-white hover:bg-emerald-600 shadow-glow",
-                  )}
-                >
-                  {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                  {isMuted ? "Unmute" : "Speaking"}
-                </button>
-
-                <button
-                  onClick={handleToggleHand}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-full px-3 sm:px-4 py-2 sm:py-2.5 text-xs font-bold transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] cursor-pointer",
-                    handRaised
-                      ? "bg-amber-500 text-white"
-                      : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
-                  )}
-                >
-                  <Hand className="h-4 w-4" />
-                  <span className="hidden xs:inline">
-                    {handRaised ? "Hand Raised" : "Raise Hand"}
-                  </span>
-                </button>
+                {/* One control per station. The stage gets the microphone; the
+                    audience gets a hand to raise. A listener is never offered a
+                    microphone at all, so they cannot talk over the broadcast —
+                    the host brings them up when they are ready to be heard. */}
+                {canBroadcast(myRole) ? (
+                  <button
+                    onClick={handleToggleMic}
+                    aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+                    className={cn(
+                      "flex items-center gap-1.5 sm:gap-2 rounded-full px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs font-bold transition-all active:scale-95 shadow-soft min-h-[38px] sm:min-h-[40px] cursor-pointer",
+                      isMuted
+                        ? "bg-foreground/10 text-foreground hover:bg-foreground/15"
+                        : "bg-emerald-500 text-white hover:bg-emerald-600 shadow-glow",
+                    )}
+                  >
+                    {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                    {isMuted ? "Unmute" : isCurrentUserHost ? "Live" : "Speaking"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleToggleHand}
+                    aria-label={handRaised ? "Lower hand" : "Raise hand to ask the host to speak"}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-full px-3 sm:px-4 py-2 sm:py-2.5 text-xs font-bold transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] cursor-pointer",
+                      handRaised
+                        ? "bg-amber-500 text-white"
+                        : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
+                    )}
+                  >
+                    <Hand className="h-4 w-4" />
+                    <span>{handRaised ? "Waiting for the host" : "Raise hand to speak"}</span>
+                  </button>
+                )}
               </div>
             )}
 
             <div className="flex items-center gap-2 ml-auto">
               {isCurrentUserHost && !isReplay ? (
                 <>
-                  <button
-                    type="button"
-                    onClick={handleToggleRecording}
-                    disabled={recordingBusy}
-                    className={cn(
-                      "rounded-full font-bold px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] flex items-center gap-1.5 shadow-soft cursor-pointer disabled:opacity-60",
-                      isRecordingSpace
-                        ? "bg-red-600 text-white hover:bg-red-700"
-                        : "bg-foreground/10 text-foreground hover:bg-foreground/15",
-                    )}
-                  >
-                    {recordingBusy ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Disc3 className="h-3.5 w-3.5" />
-                    )}
-                    <span className="hidden xs:inline">
-                      {isRecordingSpace ? "Stop Recording" : "Record"}
-                    </span>
-                  </button>
+                  {canRecordSpace ? (
+                    <button
+                      type="button"
+                      onClick={handleToggleRecording}
+                      disabled={recordingBusy}
+                      aria-label={
+                        isRecordingSpace ? "Stop recording this Space" : "Record this Space"
+                      }
+                      className={cn(
+                        "rounded-full font-bold px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] flex items-center gap-1.5 shadow-soft cursor-pointer disabled:opacity-60",
+                        isRecordingSpace
+                          ? "bg-red-600 text-white hover:bg-red-700"
+                          : "bg-foreground/10 text-foreground hover:bg-foreground/15",
+                      )}
+                    >
+                      {recordingBusy ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Disc3 className="h-3.5 w-3.5" />
+                      )}
+                      <span className="hidden xs:inline">
+                        {isRecordingSpace ? "Stop Recording" : "Record"}
+                      </span>
+                    </button>
+                  ) : (
+                    // The room broadcasts for free whatever the plan; only saving
+                    // it is paid. Offer the upgrade instead of starting a
+                    // recording that would be refused when the host stops.
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openUpgradeModal("Recording Spaces and keeping them as replays")
+                      }
+                      aria-label="Upgrade to record Spaces and keep them as replays"
+                      className="rounded-full font-bold px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs transition-all active:scale-95 min-h-[38px] sm:min-h-[40px] flex items-center gap-1.5 bg-brand/10 text-brand hover:bg-brand/15 cursor-pointer"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span className="hidden xs:inline">Record · Upgrade</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setShowEndConfirmation(true)}

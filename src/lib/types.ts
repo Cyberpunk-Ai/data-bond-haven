@@ -116,18 +116,11 @@ export interface AdminOverviewData {
       status: "operational" | "degraded" | "maintenance";
       uptime_seconds: number;
       database_latency_ms: number;
-      storage_usage_bytes: number;
       error_rate_percent: number;
       db_driver?: string;
       memory_mb?: number;
       active_sse_clients?: number;
     };
-  };
-  storage_usage_breakdown: {
-    avatars_mb: number;
-    posts_media_mb: number;
-    stories_mb: number;
-    spaces_audio_mb: number;
   };
   charts: AdminCharts;
   recent_activity?: any[];
@@ -141,11 +134,6 @@ export interface AdminOverviewData {
     message: string;
     created_at: string;
   }[];
-}
-
-export interface PollVote {
-  option_id: string;
-  user_id: string;
 }
 
 export interface PollOption {
@@ -196,6 +184,8 @@ export interface Post {
   poll?: Poll | null;
   comments?: PostComment[];
   edited_at?: string | null;
+  /** Staff hid this from every feed without deleting it (`posts.hidden`). */
+  hidden?: boolean;
   /** Set when the post was published on behalf of a team workspace. */
   workspace_id?: string | null;
   /** Hydrated brand identity for workspace posts (shown instead of the member). */

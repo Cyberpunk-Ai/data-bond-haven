@@ -12,9 +12,11 @@ import {
   Terminal,
   Activity,
   Send,
+  Zap,
 } from "lucide-react";
 import { useDeveloper } from "@/lib/developer-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
+import { friendlyError } from "@/lib/error-messages";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -24,6 +26,22 @@ const AVAILABLE_EVENTS = [
   { id: "space.started", label: "space.started", desc: "When an audio room starts" },
   { id: "follower.new", label: "follower.new", desc: "When a new user follows" },
 ];
+
+/** One row of the delivery log, straight from `webhook_deliveries`. */
+interface DeliveryRow {
+  id: string;
+  webhook_id: string;
+  event: string;
+  status: string;
+  attempts: number;
+  response_status: number | null;
+  created_at: string;
+}
+
+// Lazy so the server module never enters the client bundle (src/routes/README).
+async function webhookServerFns() {
+  return import("@/lib/developer.functions");
+}
 
 export function DeveloperPortal() {
   const { isPro } = usePlan();
@@ -45,6 +63,9 @@ export function DeveloperPortal() {
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookDesc, setWebhookDesc] = useState("");
   const [selectedEvents, setSelectedEvents] = useState<string[]>(["post.created", "tip.received"]);
+  const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null);
+  const [deliveries, setDeliveries] = useState<DeliveryRow[] | null>(null);
+  const [showDeliveries, setShowDeliveries] = useState(false);
 
   const [activeCodeLang, setActiveCodeLang] = useState<"curl" | "typescript">("typescript");
 
@@ -67,18 +88,70 @@ export function DeveloperPortal() {
     }
   };
 
-  const handleCreateWebhook = (e: React.FormEvent) => {
+  const handleCreateWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!webhookUrl.startsWith("http")) {
+    // The database enforces `url ~* '^https://'`; an http URL used to be
+    // rejected there and the portal still showed the endpoint as registered.
+    if (!webhookUrl.startsWith("https://")) {
       toast.error("Please enter a valid HTTPS webhook URL");
       return;
     }
-    addWebhook(webhookUrl, webhookDesc || "Spaces Event Listener", selectedEvents);
-    toast.success("Webhook endpoint registered!");
-    setWebhookUrl("");
-    setWebhookDesc("");
-    setIsWebhookModalOpen(false);
+    try {
+      await addWebhook(webhookUrl, webhookDesc || "Spaces Event Listener", selectedEvents);
+      toast.success("Webhook endpoint registered!");
+      setWebhookUrl("");
+      setWebhookDesc("");
+      setIsWebhookModalOpen(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't register that endpoint");
+    }
   };
+
+  /** Queue a signed `ping` to one of the caller's endpoints and flush it now. */
+  async function handleTestWebhook(webhookId: string) {
+    setTestingWebhookId(webhookId);
+    try {
+      const { sendTestWebhook } = await webhookServerFns();
+      const result = await sendTestWebhook({ data: { webhookId } });
+      toast.success(
+        result.delivered > 0
+          ? "Test ping delivered — check your endpoint's logs."
+          : "Test ping queued. Your endpoint didn't accept it (it will be retried).",
+      );
+      if (showDeliveries) await loadDeliveries();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't queue the test ping");
+    } finally {
+      setTestingWebhookId(null);
+    }
+  }
+
+  async function loadDeliveries() {
+    try {
+      const { listWebhookDeliveries } = await webhookServerFns();
+      setDeliveries(await listWebhookDeliveries());
+    } catch (err) {
+      toast.error(friendlyError(err, "Couldn't load the delivery log."));
+    }
+  }
+
+  async function handleRemoveWebhook(id: string) {
+    try {
+      await removeWebhook(id);
+      toast.success("Webhook endpoint removed");
+    } catch (err) {
+      toast.error(friendlyError(err, "Couldn't remove that endpoint."));
+    }
+  }
+
+  async function handleRevokeKey(id: string) {
+    try {
+      await revokeApiKey(id);
+      toast.success("API key revoked");
+    } catch (err) {
+      toast.error(friendlyError(err, "Couldn't revoke that key."));
+    }
+  }
 
   // Point the quickstart at whichever origin the app is served from, so in
   // production it renders the real spaces1.com URL instead of a stale example.
@@ -217,22 +290,26 @@ console.log(posts); // [{ id, content, media_url, like_count, ... }]`;
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(k.fullKey || k.maskedKey);
-                    toast.success("API key copied to clipboard!");
-                  }}
-                  className="flex items-center gap-1 rounded-xl border border-border px-2.5 py-1.5 font-bold hover:bg-muted transition-colors cursor-pointer"
-                >
-                  <Copy className="h-3 w-3" />
-                  <span>Copy</span>
-                </button>
-                {isPro && (
+                {/* The full key exists only in the moment after creation; a
+                    reloaded list holds just the mask, and copying that would
+                    hand the developer a string that cannot authenticate. */}
+                {k.fullKey && (
                   <button
                     onClick={() => {
-                      revokeApiKey(k.id);
-                      toast.success("API key revoked");
+                      const fullKey = k.fullKey;
+                      if (!fullKey) return;
+                      navigator.clipboard.writeText(fullKey);
+                      toast.success("API key copied to clipboard!");
                     }}
+                    className="flex items-center gap-1 rounded-xl border border-border px-2.5 py-1.5 font-bold hover:bg-muted transition-colors cursor-pointer"
+                  >
+                    <Copy className="h-3 w-3" />
+                    <span>Copy</span>
+                  </button>
+                )}
+                {isPro && (
+                  <button
+                    onClick={() => void handleRevokeKey(k.id)}
                     className="rounded-xl border border-border p-1.5 text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -246,21 +323,74 @@ console.log(posts); // [{ id, content, media_url, like_count, ... }]`;
 
       {/* Webhooks Section */}
       <div className="rounded-3xl border border-border/80 bg-card p-5 md:p-6 space-y-4 shadow-soft">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-base font-bold flex items-center gap-2">
             <Webhook className="h-4 w-4 text-orange-500" />
             <span>Webhook Endpoints</span>
           </h3>
-          {isPro && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setIsWebhookModalOpen(true)}
+              onClick={() => {
+                const next = !showDeliveries;
+                setShowDeliveries(next);
+                if (next) void loadDeliveries();
+              }}
               className="flex items-center gap-1 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs font-bold hover:bg-muted transition-colors cursor-pointer"
             >
-              <Plus className="h-3 w-3" />
-              <span>Add Endpoint</span>
+              <Send className="h-3 w-3" />
+              <span>{showDeliveries ? "Hide deliveries" : "Recent deliveries"}</span>
             </button>
-          )}
+            {isPro && (
+              <button
+                onClick={() => setIsWebhookModalOpen(true)}
+                className="flex items-center gap-1 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs font-bold hover:bg-muted transition-colors cursor-pointer"
+              >
+                <Plus className="h-3 w-3" />
+                <span>Add Endpoint</span>
+              </button>
+            )}
+          </div>
         </div>
+
+        {showDeliveries && (
+          <div className="rounded-2xl border border-border/60 bg-muted/20 p-3 max-h-[200px] overflow-y-auto custom-scrollbar">
+            {deliveries === null ? (
+              <p className="text-[0.65rem] font-bold text-muted-foreground">Reading…</p>
+            ) : deliveries.length === 0 ? (
+              <p className="text-[0.65rem] font-bold text-muted-foreground">
+                No deliveries yet — send a test ping below.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {deliveries.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-center justify-between gap-2 text-[0.65rem]"
+                  >
+                    <span className="font-mono font-bold text-foreground">{d.event}</span>
+                    <span className="text-muted-foreground">
+                      {new Date(d.created_at).toLocaleString()}
+                    </span>
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 font-extrabold capitalize",
+                        d.status === "delivered"
+                          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                          : d.status === "failed"
+                            ? "bg-rose-500/15 text-rose-600 dark:text-rose-400"
+                            : "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+                      )}
+                    >
+                      {d.status}
+                      {d.response_status ? ` · ${d.response_status}` : ""}
+                      {d.attempts > 1 ? ` · ${d.attempts} tries` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="divide-y divide-border/60 max-h-[260px] overflow-y-auto custom-scrollbar pr-1">
           {webhooks.map((wh) => (
@@ -284,15 +414,22 @@ console.log(posts); // [{ id, content, media_url, like_count, ... }]`;
                   ))}
                 </div>
                 {isPro && (
-                  <button
-                    onClick={() => {
-                      removeWebhook(wh.id);
-                      toast.success("Webhook endpoint removed");
-                    }}
-                    className="text-rose-500 hover:text-rose-600 text-xs font-semibold"
-                  >
-                    Delete
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => void handleTestWebhook(wh.id)}
+                      disabled={testingWebhookId === wh.id}
+                      className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[0.65rem] font-bold hover:bg-muted transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <Zap className="h-3 w-3 text-amber-500" />
+                      <span>{testingWebhookId === wh.id ? "Sending…" : "Send test"}</span>
+                    </button>
+                    <button
+                      onClick={() => void handleRemoveWebhook(wh.id)}
+                      className="text-rose-500 hover:text-rose-600 text-xs font-semibold"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

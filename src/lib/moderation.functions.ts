@@ -8,11 +8,6 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
-async function getAdmin() {
-  const mod = await import("@/integrations/supabase/client.server");
-  return mod.supabaseAdmin;
-}
-
 /** Server-only feature-flag helpers, imported lazily so the service-role
  *  client behind them never reaches a bundle that ships to a browser. */
 async function getFlags() {
@@ -20,34 +15,19 @@ async function getFlags() {
   return mod;
 }
 
-/** Confirms the caller is an admin or moderator and returns who they are. */
+/** Confirms the caller is an admin or moderator and returns who they are.
+ * Delegates to the single implementation in `staff.server` — this used to be a
+ * copy of it, and copies of an authorization check are how one side drifts. */
 async function assertStaff(context: any) {
-  const { supabase, userId } = context;
-  const [{ data: isAdmin }, { data: isMod }] = await Promise.all([
-    supabase.rpc("has_role", { _user_id: userId, _role: "admin" }),
-    supabase.rpc("has_role", { _user_id: userId, _role: "moderator" }),
-  ]);
-  if (!isAdmin && !isMod) throw new Error("You don't have moderation access.");
-
-  const admin = await getAdmin();
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("id, display_name, username")
-    .eq("auth_user_id", userId)
-    .maybeSingle();
-
-  return {
-    admin,
-    isAdmin: !!isAdmin,
-    actorId: (profile?.id as string | undefined) ?? null,
-    actorName:
-      (profile?.display_name as string | undefined) || (profile?.username as string) || "Staff",
-    actorRole: isAdmin ? "admin" : "moderator",
-  };
+  const { assertStaff: shared } = await import("@/lib/staff.server");
+  return shared(context);
 }
 
 type Staff = Awaited<ReturnType<typeof assertStaff>>;
 
+/** Records a staff action in the audit trail. Delegates to the one implementation
+ * in `staff.server` — payouts, admin and moderation all log through it, and a
+ * second copy is how one of them ends up silently dropping its rows. */
 async function writeAudit(
   staff: Staff,
   action: string,
@@ -56,16 +36,8 @@ async function writeAudit(
   details: string,
   severity: "info" | "warning" | "danger" = "info",
 ) {
-  await staff.admin.from("audit_logs").insert({
-    actor_id: staff.actorId,
-    actor_name: staff.actorName,
-    actor_role: staff.actorRole,
-    action,
-    target_type: targetType,
-    target_id: targetId,
-    details,
-    severity,
-  });
+  const { writeAudit: shared } = await import("@/lib/staff.server");
+  return shared(staff, action, targetType, targetId, details, severity);
 }
 
 /** Suspend, reinstate, verify, warn or change the plan of a member. */
@@ -136,12 +108,15 @@ export const moderateUser = createServerFn({ method: "POST" })
         flagged:
           "Your account has been flagged for review. Please double-check the Community Guidelines.",
       };
-      await staff.admin.from("notifications").insert({
+      const { error: noticeError } = await staff.admin.from("notifications").insert({
         recipient_id: data.profileId,
         actor_id: staff.actorId,
         type: "system",
         body: messageByStatus[data.status] ?? `Your account status is now ${data.status}.`,
       });
+      // The ban is enforced either way; a missing alert just means they find out
+      // at their next sign-in, so record it rather than pretend it was delivered.
+      if (noticeError) console.error("moderation notice not stored:", noticeError.message);
 
       // Enforce the ban/suspension at the auth layer too, not just the profile
       // row: RLS already blocks writes for non-active members, but revoking the
@@ -171,7 +146,7 @@ export const moderateUser = createServerFn({ method: "POST" })
 
     // A plan granted from the console is a real, comped subscription.
     if (data.plan !== undefined) {
-      await staff.admin.from("subscriptions").upsert(
+      const { error: subError } = await staff.admin.from("subscriptions").upsert(
         {
           user_id: data.profileId,
           plan: data.plan,
@@ -183,7 +158,13 @@ export const moderateUser = createServerFn({ method: "POST" })
         },
         { onConflict: "user_id" },
       );
-      await staff.admin.from("notifications").insert({
+      if (subError) {
+        // Half a grant is worse than none: the profile row already carries the new
+        // plan, so the billing record has to agree with it. Say it failed and let
+        // the operator retry — the whole handler is idempotent.
+        throw new Error(subError.message || "Could not record that plan change.");
+      }
+      const { error: planNoticeError } = await staff.admin.from("notifications").insert({
         recipient_id: data.profileId,
         actor_id: staff.actorId,
         type: "system",
@@ -192,6 +173,7 @@ export const moderateUser = createServerFn({ method: "POST" })
             ? "Your plan was changed to Free by the Spaces1 team."
             : `Your account was upgraded to ${data.plan === "pro" ? "Pro" : "Plus"} by the Spaces1 team.`,
       });
+      if (planNoticeError) console.error("plan-change notice not stored:", planNoticeError.message);
     }
 
     const what = Object.entries(patch)

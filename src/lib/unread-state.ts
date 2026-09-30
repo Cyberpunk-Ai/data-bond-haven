@@ -8,7 +8,7 @@ interface UnreadCounts {
   messages: number;
 }
 
-let globalUnread: UnreadCounts = {
+const globalUnread: UnreadCounts = {
   notifications: 0,
   messages: 0,
 };

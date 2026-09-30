@@ -85,14 +85,6 @@ export const profileRegistry: Record<string, Profile> = new Proxy(
   },
 ) as Record<string, Profile>;
 
-/** Merge one profile into the shared cache and notify subscribers. */
-export function updateProfileCache(profile: Profile) {
-  if (!profile?.id) return;
-  profileCache.set(profile.id, profile);
-  if (profile.username) profileCache.set(profile.username, profile);
-  notify();
-}
-
 export function getProfile(idOrUsername?: string | null): Profile {
   if (!idOrUsername || idOrUsername === "guest") return GUEST_PROFILE;
   const found = profileCache.get(idOrUsername);
@@ -103,10 +95,6 @@ export function getProfile(idOrUsername?: string | null): Profile {
     username: idOrUsername,
     display_name: idOrUsername,
   };
-}
-
-export function getCachedProfile(idOrUsername: string): Profile | undefined {
-  return profileCache.get(idOrUsername);
 }
 
 export function rowToProfile(row: Record<string, unknown>): Profile {

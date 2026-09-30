@@ -298,7 +298,7 @@ export function useWorkspace() {
         .select("id")
         .maybeSingle();
       if (error || !data?.id) throw new Error(error?.message ?? "Could not create that workspace.");
-      await db.from("workspace_members").insert({
+      const { error: memberError } = await db.from("workspace_members").insert({
         workspace_id: data.id,
         user_id: userId,
         email: currentUser.email ?? "",
@@ -306,6 +306,13 @@ export function useWorkspace() {
         role: "Owner",
         status: "active",
       });
+      // Nothing creates this row for us (no trigger on workspaces), and without it
+      // `workspace_role()` sees no membership: the creator gets a team they cannot
+      // add anyone to. Undo the workspace instead of leaving an ownerless row.
+      if (memberError) {
+        await db.from("workspaces").delete().eq("id", data.id);
+        throw new Error(memberError.message || "Could not create that workspace.");
+      }
       await hydrate(true);
       activeWsId = String(data.id);
       persistActiveId(activeWsId);

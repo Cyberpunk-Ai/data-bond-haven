@@ -134,7 +134,6 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
   useEffect(() => {
     fetchSettings();
     void handleCheckStorage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useRealtime({

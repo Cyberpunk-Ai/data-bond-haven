@@ -87,9 +87,11 @@ async function loadSessionProfile() {
           setRestrictedReason(
             "Your account has been banned for violating the Spaces1 Community Guidelines.",
           );
-          try {
-            void supabase.auth.signOut();
-          } catch {}
+          // signOut() returns a promise: wrapped in `void`, a rejection sailed past
+          // the try/catch as an unhandled error while the token stayed in storage.
+          void supabase.auth.signOut().catch((err) => {
+            console.warn("sign-out after ban failed:", err);
+          });
           setCurrentUser(null);
           return;
         }
@@ -106,40 +108,25 @@ async function loadSessionProfile() {
   setCurrentUser(null);
 }
 
-/** Merge partial changes into the in-memory session profile (and persist them). */
+/** Merge partial changes into the in-memory session profile.
+ *
+ * Deliberately memory-only. Every field this used to re-write straight to
+ * `profiles` was a second, unvalidated copy of what `updateUserProfile` already
+ * persisted for the same save — no username checks, no error handling, and it
+ * could stamp a stale value over a change the server had just normalized.
+ * Persist through `updateUserProfile`, then mirror it here. */
 export function updateUserSession(patch: Partial<Profile>) {
   const next = { ...currentUser, ...patch } as Profile;
   setCurrentUser(next);
-
-  if (
-    next.id &&
-    next.id !== "guest" &&
-    !next.id.startsWith("local_") &&
-    !next.id.startsWith("google_")
-  ) {
-    void supabase
-      .from("profiles")
-      .update({
-        display_name: next.display_name,
-        bio: next.bio,
-        location: next.location,
-        website: next.website,
-        avatar_url: next.avatar_url,
-      })
-      .eq("id", next.id);
-  }
-}
-
-/** Adopt a freshly authenticated profile into the in-memory session. */
-export function setLoggedIn(profile: Profile) {
-  setCurrentUser(profile);
 }
 
 /** Clear the session and reset the in-memory profile to guest. */
 export function setLoggedOut() {
-  try {
-    void supabase.auth.signOut();
-  } catch {}
+  void supabase.auth.signOut().catch((err) => {
+    // The local session is dropped either way; a stale token is cleared on the
+    // next session check, so log rather than trap.
+    console.warn("sign-out request failed:", err);
+  });
   setCurrentUser(null);
 }
 

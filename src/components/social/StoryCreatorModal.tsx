@@ -64,20 +64,7 @@ const MOODS = [
   "🎧 In the Zone",
   "⚡️ Flow State",
 ];
-const STICKER_OPTIONS = [
-  "✨",
-  "🔥",
-  "☕",
-  "📸",
-  "🎵",
-  "💡",
-  "🚀",
-  "✍️",
-  "🎬",
-  "🤖",
-  "❤️",
-  "🌿",
-];
+const STICKER_OPTIONS = ["✨", "🔥", "☕", "📸", "🎵", "💡", "🚀", "✍️", "🎬", "🤖", "❤️", "🌿"];
 
 const AI_PROMPT_CHIPS = [
   "Studio golden hour light and coffee 🌅",

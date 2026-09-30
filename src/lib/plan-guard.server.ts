@@ -24,6 +24,12 @@ export interface PlanLimits {
   spaces_recording: boolean;
   media_upload_max_mb: number;
   storage_quota_mb: number;
+  /**
+   * Total MB of *stored Space replays* a plan may hold at once. Distinct from
+   * `media_upload_max_mb`, which is the size of one file: a live broadcast
+   * costs nothing, so this budget only fills when a host saves a recording.
+   */
+  spaces_storage_mb: number;
   analytics_level: string;
   monetization: boolean;
   custom_branding: boolean;
@@ -136,6 +142,8 @@ function humanCapability(capability: string): string {
       return "Custom branding";
     case "media_upload_max_mb":
       return "media upload size";
+    case "spaces_storage_mb":
+      return "Space replay storage";
     case "spaces_max_listeners":
       return "live Space listeners";
     case "ai_drafts_per_day":
@@ -143,9 +151,4 @@ function humanCapability(capability: string): string {
     default:
       return capability.replace(/_/g, " ");
   }
-}
-
-/** Narrow an unknown thrown value to a user-facing upgrade message. */
-export function isUpgradeRequired(err: unknown): err is UpgradeRequiredError {
-  return err instanceof UpgradeRequiredError;
 }

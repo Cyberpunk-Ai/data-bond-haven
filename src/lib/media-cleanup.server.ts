@@ -39,7 +39,11 @@ export async function deleteStoredMedia(urls: Array<string | null | undefined>):
     const removed = await provider.delete(keys);
     // Reclaim the DB rows whether or not the object still existed.
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    await (supabaseAdmin as any).from("media_objects").delete().in("path", keys);
+    const { error } = await (supabaseAdmin as any).from("media_objects").delete().in("path", keys);
+    // The bytes are already gone, so a refused delete leaves rows that point at
+    // nothing (and get retried by the next GC sweep). Say so instead of failing
+    // quietly — supabase-js reports a rejected write as a resolved promise.
+    if (error) console.error("deleteStoredMedia: media_objects rows left behind:", error);
     return removed.length;
   } catch (err) {
     console.error("deleteStoredMedia failed:", err);
@@ -126,8 +130,15 @@ export async function runMediaGarbageCollection(graceSeconds = 3600): Promise<Me
     try {
       const provider = getStorageProvider();
       await provider.delete(batch);
-      await db.from("media_objects").delete().in("path", batch);
-      deleted += batch.length;
+      const { error } = await db.from("media_objects").delete().in("path", batch);
+      // Only count the batch as reclaimed if the tracking rows actually went; a
+      // rejected delete would otherwise report objects this sweep did not finish.
+      if (error) {
+        errors += 1;
+        console.error("GC: media_objects rows still present after delete:", error);
+      } else {
+        deleted += batch.length;
+      }
     } catch (err) {
       errors += 1;
       console.error("GC batch failed:", err);

@@ -201,7 +201,10 @@ export function SuggestionsPanel() {
           return true;
         });
         if (unique.length > 0) setPeople(unique.slice(0, 4));
-      } catch {}
+      } catch {
+        // This *is* the fallback path — the server-driven suggestions already
+        // failed once — so an empty panel is the correct end state, not an error.
+      }
     }
   }, [viewerId]);
 

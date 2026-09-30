@@ -777,8 +777,8 @@ function Creators() {
             Turn your passion into a <span className="gradient-text">paycheck</span>
           </h2>
           <p className="text-xl text-muted-foreground">
-            Subscriptions, tips, and brand deals — with analytics that show exactly what
-            resonates. Keep up to 95% of what you earn.
+            Subscriptions, tips, and brand deals — with analytics that show exactly what resonates.
+            Keep up to 95% of what you earn.
           </p>
           <div className="grid grid-cols-2 gap-6">
             <div className="glass-panel rounded-3xl p-6 shadow-soft">

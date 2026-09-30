@@ -103,6 +103,9 @@ export function EditProfileModal({
     setUploadingAvatar(true);
     try {
       const res = await uploadMedia(file, "avatars");
+      // Persist through the same validated path the Save button uses — the
+      // profiles row is what every other device reads the avatar from.
+      await updateUserProfile({ avatar_url: res.url });
       setForm((prev) => ({ ...prev, avatar_url: res.url }));
       updateUserSession({ avatar_url: res.url });
       toast.success("Avatar image uploaded");

@@ -21,7 +21,8 @@ export type SystemNotification = {
   url?: string;
   /** Keep the alert on screen until dismissed/clicked (calls). */
   requireInteraction?: boolean;
-  /** True suppresses the OS sound (we may play our own chime instead). */
+  /** True mutes the OS alert sound. We never play our own — the OS sound is
+   * the only chime, so this stays available for quiet-hours style alerts. */
   silent?: boolean;
   actions?: Array<{ action: string; title: string }>;
 };
@@ -108,40 +109,5 @@ export async function showSystemNotification(n: SystemNotification): Promise<voi
     }
   } catch {
     /* platform refused (mobile browsers without actions, etc.) — ignore */
-  }
-}
-
-/**
- * Short two-tone chime for notification arrival. Deliberately not a ringtone
- * — calls already ring through IncomingCallProvider. Autoplay policies can
- * block audio before any user gesture; failing silently is fine.
- */
-export function playNotifyChime(): void {
-  if (typeof window === "undefined" || typeof document === "undefined") return;
-  try {
-    const Ctx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const play = (freq: number, at: number) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      const t = ctx.currentTime + at;
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.12, t + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-      osc.start(t);
-      osc.stop(t + 0.3);
-    };
-    play(660, 0);
-    play(880, 0.12);
-    setTimeout(() => void ctx.close().catch(() => {}), 900);
-  } catch {
-    /* blocked or unsupported */
   }
 }

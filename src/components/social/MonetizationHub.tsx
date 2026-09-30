@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useMonetization } from "@/lib/monetization-state";
 import { usePlan } from "@/lib/plan-state";
-import { usd } from "@/lib/formatters";
+import { usd, approxLocal } from "@/lib/formatters";
 import { Avatar } from "@/components/social/Avatar";
 import { PayoutAccountModal } from "@/components/social/PayoutAccountModal";
 import { cn } from "@/lib/utils";
@@ -78,8 +78,15 @@ export function MonetizationHub() {
       const record = await requestPayout(amt);
       setIsPayoutModalOpen(false);
       setWithdrawAmount("");
+      // The ledger and the UI speak USD, but the operator transfers in the
+      // creator's settlement currency — naming that figure here is what keeps
+      // the bank slip from being a surprise (see `approxLocal`).
+      const local =
+        record.settlementAmount && record.settlementCurrency
+          ? ` ${approxLocal(record.settlementAmount, record.settlementCurrency)}`
+          : "";
       toast.success(
-        `Withdrawal requested — ${usd(record.netUsd ?? record.amount)}${
+        `Withdrawal requested — ${usd(record.netUsd ?? record.amount)}${local}${
           record.feeUsd != null ? ` (after a ${usd(record.feeUsd)} fee)` : ""
         } will reach your account after review.`,
       );

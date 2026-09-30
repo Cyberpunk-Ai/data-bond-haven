@@ -55,7 +55,7 @@ export async function declineCall(callId: string): Promise<boolean> {
 }
 
 export async function endCall(callId: string, seconds: number) {
-  await supabase
+  const { error } = await supabase
     .from("calls")
     .update({
       status: "ended",
@@ -64,6 +64,9 @@ export async function endCall(callId: string, seconds: number) {
     })
     .eq("id", callId)
     .in("status", ["ringing", "active"]);
+  // Guarded on the current status, so this is a no-op for a call that already
+  // finished — but a rejected write leaves the row `ringing` forever, so say so.
+  if (error) console.error("endCall failed:", error.message);
 }
 
 /** Fires whenever someone starts ringing this device's signed-in user. */

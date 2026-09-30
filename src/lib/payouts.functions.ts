@@ -637,26 +637,6 @@ export const savePayoutDestination = createServerFn({ method: "POST" })
     return { bankName, last4, currency, accountName: holderName };
   });
 
-/** Masked payout destination for the current user or a team they own. */
-export const getPayoutDestination = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((input: { workspaceId?: string | null }) => ({
-    workspaceId: input?.workspaceId ?? null,
-  }))
-  .handler(async ({ data, context }) => {
-    const { supabase, userId } = context as any;
-    const profileId = await myProfileId(supabase, userId);
-    const db = await admin();
-    if (data.workspaceId) {
-      const ws = await workspaceRow(db, data.workspaceId);
-      if (!ws || String(ws.owner_id) !== profileId) {
-        throw new Error("Only the team owner can view the payout account.");
-      }
-    }
-    const dest = await loadPayoutToken(db, { profileId, workspaceId: data.workspaceId });
-    return maskedDestination(dest);
-  });
-
 /**
  * Requests a withdrawal for MANUAL disbursement.
  *
@@ -1038,7 +1018,7 @@ export const reviewPayout = createServerFn({ method: "POST" })
       usdRate: rate,
     });
 
-    await staff.admin.from("notifications").insert({
+    const { error: noticeError } = await staff.admin.from("notifications").insert({
       recipient_id: row.user_id,
       actor_id: staff.actorId,
       type: "payout",
@@ -1047,6 +1027,9 @@ export const reviewPayout = createServerFn({ method: "POST" })
           ? `your withdrawal of $${paidUsd.toFixed(2)} was paid out`
           : `your withdrawal was declined${data.note ? `: ${data.note}` : ""}`,
     });
+    // The decision row and the money moved regardless; a creator who never gets
+    // the alert should at least leave a trace in the server logs.
+    if (noticeError) console.error("payout decision notice not stored:", noticeError.message);
 
     await writeAudit(
       staff,

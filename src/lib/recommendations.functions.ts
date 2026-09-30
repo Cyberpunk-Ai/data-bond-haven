@@ -22,6 +22,45 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
  * is mid-scroll -- only new posts/pages shift the tail of the list.
  */
 
+/**
+ * Feed tuning the client writes (`sendFeedFeedback`) stores camelCase keys —
+ * preferredTags / mutedTags / mutedAuthors — while this ranker historically
+ * only read `interests` / `boostedTags`, so "Interested in #x" and "Not
+ * interested in #x" were persisted and then ignored. Read every alias so one
+ * tuned preference shape can't silently no-op.
+ */
+function readFeedPrefs(raw: unknown): {
+  preferredTags: Set<string>;
+  mutedTags: Set<string>;
+  mutedAuthors: Set<string>;
+} {
+  const p = (raw ?? {}) as Record<string, unknown>;
+  const list = (...keys: string[]) =>
+    keys.flatMap((k) => (Array.isArray(p[k]) ? (p[k] as unknown[]).map(String) : []));
+  const norm = (t: string) => t.toLowerCase().replace(/^#/, "").trim();
+  return {
+    preferredTags: new Set(
+      [...list("preferredTags", "interests", "boostedTags", "preferred_tags")].map(norm),
+    ),
+    mutedTags: new Set([...list("mutedTags", "hidden_tags", "muted_tags")].map(norm)),
+    mutedAuthors: new Set(list("mutedAuthors", "muted_authors")),
+  };
+}
+
+/** Does any tag on a post sit in the viewer's muted list? (case/`#` insensitive) */
+function hasMutedTag(tags: unknown, muted: Set<string>): boolean {
+  if (muted.size === 0 || !Array.isArray(tags)) return false;
+  return tags.some((t) => muted.has(normalizeTag(String(t))));
+}
+
+/** Topics are compared case- and `#`-insensitively everywhere they are matched. */
+function normalizeTag(tag: unknown): string {
+  return String(tag ?? "")
+    .toLowerCase()
+    .replace(/^#/, "")
+    .trim();
+}
+
 function encodeCursor(rank: number, id: string) {
   return Buffer.from(JSON.stringify({ rank, id })).toString("base64url");
 }
@@ -112,16 +151,7 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     const tagAffinity = new Map<string, number>();
 
     // Preference-driven interests from explicit feed tuning (mute/boost tags & authors).
-    const prefs = (feedPrefsRow.data?.prefs ?? {}) as {
-      interests?: string[];
-      mutedAuthors?: string[];
-      boostedTags?: string[];
-    };
-    const preferredTags = new Set<string>([
-      ...(prefs.interests ?? []),
-      ...(prefs.boostedTags ?? []),
-    ]);
-    const mutedAuthors = new Set<string>(prefs.mutedAuthors ?? []);
+    const { preferredTags, mutedTags, mutedAuthors } = readFeedPrefs(feedPrefsRow.data?.prefs);
     for (const tag of preferredTags) tagAffinity.set(tag, (tagAffinity.get(tag) ?? 0) + 5);
 
     if (engagedIds.length) {
@@ -133,7 +163,11 @@ export const getForYouPosts = createServerFn({ method: "GET" })
         const w = engagedWeight.get(p.id) ?? 1;
         authorAffinity.set(p.user_id, (authorAffinity.get(p.user_id) ?? 0) + w);
         for (const tag of (p.tags ?? []) as string[]) {
-          tagAffinity.set(tag, (tagAffinity.get(tag) ?? 0) + w);
+          // Keyed the same way preferredTags is (normalised) so an affinity boost
+          // survives a creator typing "#AI" where the viewer tuned "ai".
+          const norm = normalizeTag(tag);
+          if (!norm) continue;
+          tagAffinity.set(norm, (tagAffinity.get(norm) ?? 0) + w);
         }
       }
     }
@@ -183,11 +217,13 @@ export const getForYouPosts = createServerFn({ method: "GET" })
 
     // "For you" recommends OTHER people's content: your own posts live on your
     // profile and the Latest tab, so they never occupy recommendation slots.
+    // Tags the viewer muted through the post menu are dropped here too.
     const rows = [...byId.values()].filter(
-      (r) => r.user_id !== myId && !mutedAuthors.has(r.user_id),
+      (r) => r.user_id !== myId && !mutedAuthors.has(r.user_id) && !hasMutedTag(r.tags, mutedTags),
     );
 
-    const personalised = engagedIds.length > 0 || firstDegree.size > 0 || preferredTags.size > 0;
+    const personalised =
+      engagedIds.length > 0 || firstDegree.size > 0 || preferredTags.size > 0 || mutedTags.size > 0;
     if (!personalised) {
       // Brand-new viewer: still recency-led, but nudged ±6h by a per-user
       // hash so two fresh accounts don't stare at an identical feed, and
@@ -269,9 +305,11 @@ export const getForYouPosts = createServerFn({ method: "GET" })
         const quality = Math.log1p(velocity * 10) * (0.5 + Math.min(1, rawEngagement / views));
 
         const authorScore = Math.log1p(authorAffinity.get(row.user_id) ?? 0) * 2.2;
+        // Post tags are matched through the same normaliser the affinity map is
+        // keyed with, so `#AI` and `ai` are one topic.
         const tagScore =
           ((row.tags ?? []) as string[]).reduce(
-            (sum, tag) => sum + Math.log1p(tagAffinity.get(tag) ?? 0),
+            (sum, tag) => sum + Math.log1p(tagAffinity.get(normalizeTag(tag)) ?? 0),
             0,
           ) * 1.6;
 
@@ -297,7 +335,7 @@ export const getForYouPosts = createServerFn({ method: "GET" })
           !firstDegree.has(row.user_id) &&
           !secondDegree.has(row.user_id) &&
           !authorAffinity.has(row.user_id) &&
-          !tagsArr.some((tag) => tagAffinity.has(tag));
+          !tagsArr.some((tag) => tagAffinity.has(normalizeTag(tag)));
         const discovery = outsideKnownWorld ? jitter01(`${myId}:${row.id}:${epoch}`) * 1.4 : 0;
 
         const base = authorScore + tagScore + relationship + quality + discovery;
@@ -394,16 +432,7 @@ export const getWhoToFollow = createServerFn({ method: "GET" })
       for (const r of rows ?? []) if (r?.post_id) engagedIds.add(r.post_id);
     }
 
-    const prefs = (feedPrefsRow.data?.prefs ?? {}) as {
-      interests?: string[];
-      mutedAuthors?: string[];
-      boostedTags?: string[];
-    };
-    const mutedAuthors = new Set<string>(prefs.mutedAuthors ?? []);
-    const preferredTags = new Set<string>([
-      ...(prefs.interests ?? []),
-      ...(prefs.boostedTags ?? []),
-    ]);
+    const { preferredTags, mutedTags, mutedAuthors } = readFeedPrefs(feedPrefsRow.data?.prefs);
 
     // Author affinity: engagement weighted by interaction type.
     const authorAffinity = new Map<string, number>();
@@ -470,6 +499,9 @@ export const getWhoToFollow = createServerFn({ method: "GET" })
     const candIds = candidates.map((p: any) => p.id);
     const tagOverlap = new Map<string, number>();
     const lastActive = new Map<string, number>();
+    // Authors whose recent public posts carry a tag this viewer muted are not
+    // suggested back to them — "not interested in #x" should mean that.
+    const mutedTagAuthors = new Set<string>();
     if (candIds.length) {
       const { data: recentPosts } = await supabase
         .from("posts")
@@ -481,10 +513,18 @@ export const getWhoToFollow = createServerFn({ method: "GET" })
       for (const post of recentPosts ?? []) {
         const uid = post.user_id as string;
         if (!lastActive.has(uid)) lastActive.set(uid, new Date(post.created_at).getTime());
+        if (hasMutedTag(post.tags, mutedTags)) {
+          mutedTagAuthors.add(uid);
+          continue;
+        }
         for (const tag of (post.tags ?? []) as string[]) {
-          if (preferredTags.has(tag)) tagOverlap.set(uid, (tagOverlap.get(uid) ?? 0) + 1);
+          if (preferredTags.has(normalizeTag(tag)))
+            tagOverlap.set(uid, (tagOverlap.get(uid) ?? 0) + 1);
         }
       }
+    }
+    if (mutedTagAuthors.size) {
+      candidates = candidates.filter((p: any) => !mutedTagAuthors.has(p.id));
     }
 
     const planFactor = (plan?: string | null) =>
@@ -557,15 +597,8 @@ export const getRecommendedSpaces = createServerFn({ method: "GET" })
       );
     }
 
-    const prefs = (feedPrefsRow.data?.prefs ?? {}) as {
-      interests?: string[];
-      boostedTags?: string[];
-      mutedAuthors?: string[];
-    };
-    const mutedAuthors = new Set<string>(prefs.mutedAuthors ?? []);
-    const interestTokens = [...(prefs.interests ?? []), ...(prefs.boostedTags ?? [])]
-      .map((t) => String(t).toLowerCase().replace(/^#/, ""))
-      .filter(Boolean);
+    const { preferredTags, mutedTags, mutedAuthors } = readFeedPrefs(feedPrefsRow.data?.prefs);
+    const interestTokens = [...preferredTags];
 
     const epoch = Math.floor(Date.now() / (10 * 60_000)) * 10 * 60_000;
     const { data: spaces } = await supabase
@@ -574,7 +607,12 @@ export const getRecommendedSpaces = createServerFn({ method: "GET" })
       .eq("recorded", false)
       .order("created_at", { ascending: false })
       .limit(200);
-    const candidates = (spaces ?? []).filter((s: any) => !mutedAuthors.has(s.host_id));
+    const candidates = (spaces ?? []).filter((s: any) => {
+      if (mutedAuthors.has(s.host_id)) return false;
+      const topic = normalizeTag(String(s.topic ?? ""));
+      // A room about a topic the viewer muted never appears in their list.
+      return !topic || ![...mutedTags].some((t) => topic.includes(t));
+    });
 
     const personalised = firstDegree.size > 0 || interestTokens.length > 0;
     if (!personalised)

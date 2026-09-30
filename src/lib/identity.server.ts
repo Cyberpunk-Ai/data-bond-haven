@@ -41,11 +41,17 @@ export async function verifySessionToken(token: string | null): Promise<string |
   }
 }
 
-/** Read + verify the `Authorization: Bearer …` header of the current request. */
-export async function verifyRequestSession(request: Request): Promise<string | null> {
+/**
+ * Pull the `Authorization: Bearer …` credential off a request, or null.
+ * One parser for every server surface so a header written as `bearer …` or
+ * padded with spaces can't authenticate differently in two places.
+ */
+export function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization");
-  if (!header?.startsWith("Bearer ")) return null;
-  return verifySessionToken(header.slice("Bearer ".length).trim());
+  if (!header) return null;
+  const [scheme, ...rest] = header.trim().split(/\s+/);
+  if (scheme.toLowerCase() !== "bearer") return null;
+  return rest.join(" ").trim() || null;
 }
 
 /**
@@ -68,8 +74,7 @@ export async function resolveIdentity(token: string): Promise<Identity | null> {
 
 /** Convenience: verify the request header and resolve identity in one call. */
 export async function identityFromRequest(request: Request): Promise<Identity | null> {
-  const header = request.headers.get("authorization");
-  const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : null;
+  const token = bearerToken(request);
   if (!token) return null;
   return resolveIdentity(token);
 }

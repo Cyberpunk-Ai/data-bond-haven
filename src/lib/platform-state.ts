@@ -154,8 +154,3 @@ export function usePlatform() {
     refresh: () => ensurePlatformLoaded(true),
   };
 }
-
-/** Non-hook read for imperative call sites (form submit handlers). */
-export function readPlatformState(): PlatformState {
-  return state;
-}

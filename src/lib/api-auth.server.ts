@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { assertSafeUrl, UnsafeUrlError } from "@/lib/ssrf-guard.server";
+import { bearerToken, checkRateLimit } from "@/lib/identity.server";
 
 /**
  * The pepper turns an API-key hash from a plain unsalted SHA-256 (which is
@@ -84,7 +85,7 @@ export function json(body: unknown, status = 200, extra: Record<string, string> 
  */
 export function requireCronSecret(request: Request): boolean {
   const secret = process.env["CRON_SECRET"] ?? "";
-  const given = (request.headers.get("authorization") ?? "").replace(/^Bearer /, "");
+  const given = bearerToken(request) ?? "";
   if (!secret || !given) return false;
   const a = Buffer.from(given);
   const b = Buffer.from(secret);
@@ -98,8 +99,7 @@ export async function authenticateApiRequest(
   request: Request,
 ): Promise<{ caller: ApiCaller } | { error: Response }> {
   const cors = apiCorsHeaders(request.headers.get("origin"));
-  const header = request.headers.get("authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  const token = bearerToken(request) ?? "";
   if (!/^sp1_live_[a-f0-9]{48}$/.test(token)) {
     return { error: json({ error: "invalid_api_key" }, 401, cors) };
   }
@@ -122,16 +122,18 @@ export async function authenticateApiRequest(
 
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const db = supabaseAdmin as any;
-  const since = new Date(Date.now() - 60_000).toISOString();
-  const { count } = await db
-    .from("api_requests")
-    .select("id", { count: "exact", head: true })
-    .eq("key_id", key.id)
-    .gte("created_at", since);
   const limit = Number(key.rate_limit_per_minute) || 60;
   const path = new URL(request.url).pathname;
-  if ((count ?? 0) >= limit) {
-    await db.from("api_requests").insert({ key_id: key.id, path, status: 429 });
+
+  // The decision comes from the same atomic fixed-window counter every other
+  // surface uses. Counting `api_requests` rows here first and inserting after
+  // let a concurrent burst all read "under the limit", and — because supabase-js
+  // resolves instead of throwing — a rejected ledger insert quietly removed the
+  // only thing the limit was measured against.
+  const withinLimit = await checkRateLimit(`api-key:${key.id}`, limit, 60);
+  if (!withinLimit) {
+    const { error } = await db.from("api_requests").insert({ key_id: key.id, path, status: 429 });
+    if (error) console.error("api usage log (429) failed:", error.message);
     return {
       error: json({ error: "rate_limited", limit_per_minute: limit }, 429, {
         "retry-after": "60",
@@ -139,7 +141,7 @@ export async function authenticateApiRequest(
       }),
     };
   }
-  await Promise.all([
+  const [ledger, usage] = await Promise.all([
     db.from("api_requests").insert({ key_id: key.id, path, status: 200 }),
     db
       .from("api_keys")
@@ -149,6 +151,10 @@ export async function authenticateApiRequest(
       })
       .eq("id", key.id),
   ]);
+  // Telemetry only — never fail a request over it — but a broken ledger has to be
+  // visible or the developer portal quietly reports zero usage for a busy key.
+  if (ledger.error) console.error("api usage log failed:", ledger.error.message);
+  if (usage.error) console.error("api key usage counter failed:", usage.error.message);
   return {
     caller: {
       keyId: key.id,
@@ -163,19 +169,34 @@ export async function dispatchDueWebhooks(limit = 50) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const db = supabaseAdmin as any;
   const maxAttempts = Number(process.env["WEBHOOK_MAX_ATTEMPTS"] ?? 6);
-  const { data: due } = await db
+  const { data: due, error: dueError } = await db
     .from("webhook_deliveries")
     .select("id,event,payload,attempts,webhook:webhooks(id,url,secret,active)")
     .eq("status", "pending")
     .lte("next_attempt_at", new Date().toISOString())
     .order("created_at")
     .limit(limit);
+  if (dueError) {
+    // Say so: a silent outage here looks exactly like "nothing to deliver".
+    console.error("webhook queue read failed:", dueError.message);
+    return { processed: 0, delivered: 0, failed: 0 };
+  }
   let delivered = 0;
   let failed = 0;
+
+  /** Persist a delivery state transition. A lost write here means the row stays
+   * `pending`, so the next run posts the same event to the customer again — worth
+   * a log line even though the queue must keep draining. */
+  const mark = async (id: string, patch: Record<string, unknown>) => {
+    const { error } = await db.from("webhook_deliveries").update(patch).eq("id", id);
+    if (error) console.error(`webhook delivery ${id} state write failed:`, error.message);
+    return !error;
+  };
+
   for (const d of due ?? []) {
     const hook = d.webhook;
     if (!hook?.active) {
-      await db.from("webhook_deliveries").update({ status: "failed" }).eq("id", d.id);
+      await mark(d.id, { status: "failed" });
       continue;
     }
     const body = JSON.stringify(d.payload);
@@ -186,15 +207,12 @@ export async function dispatchDueWebhooks(limit = 50) {
       await assertSafeUrl(hook.url);
     } catch (err) {
       const reason = err instanceof UnsafeUrlError ? err.message : "unsafe endpoint";
-      await db
-        .from("webhook_deliveries")
-        .update({
-          status: "failed",
-          attempts: d.attempts + 1,
-          response_status: null,
-          last_error: reason,
-        })
-        .eq("id", d.id);
+      await mark(d.id, {
+        status: "failed",
+        attempts: d.attempts + 1,
+        response_status: null,
+        last_error: reason,
+      });
       failed++;
       continue;
     }
@@ -217,28 +235,23 @@ export async function dispatchDueWebhooks(limit = 50) {
     }
     const attempts = d.attempts + 1;
     if (status >= 200 && status < 300) {
-      delivered++;
-      await db
-        .from("webhook_deliveries")
-        .update({
-          status: "delivered",
-          attempts,
-          response_status: status,
-          delivered_at: new Date().toISOString(),
-        })
-        .eq("id", d.id);
+      const settled = await mark(d.id, {
+        status: "delivered",
+        attempts,
+        response_status: status,
+        delivered_at: new Date().toISOString(),
+      });
+      // Only claim a delivery the database agreed to remember.
+      if (settled) delivered++;
     } else {
       failed++;
       const backoff = Math.min(2 ** attempts * 30, 6 * 3600) * 1000;
-      await db
-        .from("webhook_deliveries")
-        .update({
-          status: attempts >= maxAttempts ? "failed" : "pending",
-          attempts,
-          response_status: status || null,
-          next_attempt_at: new Date(Date.now() + backoff).toISOString(),
-        })
-        .eq("id", d.id);
+      await mark(d.id, {
+        status: attempts >= maxAttempts ? "failed" : "pending",
+        attempts,
+        response_status: status || null,
+        next_attempt_at: new Date(Date.now() + backoff).toISOString(),
+      });
     }
   }
   return { processed: (due ?? []).length, delivered, failed };

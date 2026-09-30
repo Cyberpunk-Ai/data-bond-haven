@@ -86,13 +86,6 @@ export interface StorageProvider {
   list?(cursor?: string | null): Promise<StorageListing>;
 }
 
-/** Single-key convenience wrapper around {@link StorageProvider.delete}. */
-export async function deleteObject(provider: StorageProvider, key: string): Promise<boolean> {
-  if (!key) return false;
-  const deleted = await provider.delete([key]);
-  return deleted.length > 0;
-}
-
 /** Extract a storage key from a `/api/public/media/<key>` URL or a raw key. */
 export function mediaKeyFromUrl(url: string | null | undefined): string | null {
   if (!url) return null;

@@ -213,7 +213,10 @@ function MessageText({ body, isMine }: { body: string; isMine: boolean }) {
             let host = link;
             try {
               host = new URL(link).hostname.replace(/^www\./, "");
-            } catch {}
+            } catch {
+              // Not an absolute URL (or malformed): show the text as typed rather
+              // than refuse to render the preview.
+            }
 
             return (
               <a
@@ -385,7 +388,9 @@ function DocumentCardAttachment({ body, isMine }: { body: string; isMine: boolea
       if (lastPart && lastPart.includes(".")) {
         fileName = decodeURIComponent(lastPart);
       }
-    } catch {}
+    } catch {
+      // Unparseable URL — the defaults above (no extension) already handle it.
+    }
   }
 
   const dotIdx = fileName.lastIndexOf(".");
@@ -1258,7 +1263,9 @@ function MessagesPage() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       try {
         mediaRecorderRef.current.stop();
-      } catch {}
+      } catch {
+        // Already stopped or disposed; the tracks below still need releasing.
+      }
       mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
     }
     setIsRecording(false);

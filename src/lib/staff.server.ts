@@ -37,7 +37,7 @@ export async function writeAudit(
   details: string,
   severity: "info" | "warning" | "danger" = "info",
 ) {
-  await staff.admin.from("audit_logs").insert({
+  const { error } = await staff.admin.from("audit_logs").insert({
     actor_id: staff.actorId,
     actor_name: staff.actorName,
     actor_role: staff.actorRole,
@@ -47,4 +47,8 @@ export async function writeAudit(
     details,
     severity,
   });
+  // The action itself has already landed by the time this runs, so failing the
+  // request cannot undo it — but a staff action missing from the audit trail has
+  // to leave *some* trace, or "nothing can be done invisibly" stops being true.
+  if (error) console.error(`audit log for "${action}" failed:`, error.message);
 }

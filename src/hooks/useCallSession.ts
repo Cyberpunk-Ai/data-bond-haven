@@ -130,7 +130,13 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
         // M4 task); RLS + the sender trigger enforce participant-only writes.
         void (supabase as any)
           .from("call_signals")
-          .insert({ call_id: callId, kind, payload: { sdp } });
+          .insert({ call_id: callId, kind, payload: { sdp } })
+          .then(({ error }: { error: { message: string } | null }) => {
+            // supabase-js resolves with an `error` instead of throwing, so this
+            // "guarantee for late joiners" used to fail invisibly: the peer that
+            // subscribed late found no offer and the call never connected.
+            if (error) console.error(`call ${kind} not stored:`, error.message);
+          });
       };
       sendRef.current = (event, payload) => void send(event, payload);
       persistRef.current = persist;

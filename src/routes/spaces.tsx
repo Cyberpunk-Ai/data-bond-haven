@@ -60,6 +60,8 @@ import { getSpaces, createSpace, deleteSpaceRecording } from "@/lib/api-client";
 import { getRecommendedSpaces } from "@/lib/recommendations.functions";
 import { useRealtime } from "@/lib/realtime";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
+import { getSpaceStorageState } from "@/lib/spaces-storage.functions";
+import { formatBytes, spaceStorageQuotaBytes } from "@/lib/spaces-storage";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
@@ -285,6 +287,32 @@ function SpacesPage() {
   // Host deleting a saved replay (recording) — confirm first, then reclaim.
   const [deleteTarget, setDeleteTarget] = useState<Space | null>(null);
   const [deletingRecording, setDeletingRecording] = useState(false);
+  // What the signed-in host has spent of their replay budget. A live Space is
+  // not in this number: broadcasting stores nothing, so the figure only moves
+  // when a replay is saved or deleted.
+  const [storage, setStorage] = useState<{
+    usedBytes: number;
+    quotaBytes: number;
+    replays: number;
+  } | null>(null);
+
+  async function refreshStorage() {
+    if (!currentUser.id || currentUser.id === "guest") return;
+    try {
+      const snap = await getSpaceStorageState();
+      setStorage({ usedBytes: snap.usedBytes, quotaBytes: snap.quotaBytes, replays: snap.replays });
+    } catch (err) {
+      // Advisory readout only — never a reason the Spaces page stops working.
+      console.warn("Space storage read failed:", err);
+    }
+  }
+
+  const signedInForStorage = Boolean(currentUser.id) && currentUser.id !== "guest";
+
+  useEffect(() => {
+    if (!signedInForStorage) return;
+    void refreshStorage();
+  }, [signedInForStorage]);
 
   // Create Space Form State
   const [scheduleMode, setScheduleMode] = useState<"live" | "scheduled">("live");
@@ -438,6 +466,8 @@ function SpacesPage() {
       applyRecordingDeleted(deleteTarget.id);
       toast.success("Recording deleted");
       setDeleteTarget(null);
+      // The bytes come back to the host's budget the moment the replay goes.
+      void refreshStorage();
     } catch (err: any) {
       toast.error(friendlyError(err, "Couldn't delete the recording. Please try again."));
     } finally {
@@ -683,8 +713,8 @@ function SpacesPage() {
               </div>
             </div>
             <p className="text-xs text-foreground/80 leading-relaxed">
-              The replay of “{deleteTarget.title}” will be removed for you and every listener.
-              The room's chat transcript stays as it is.
+              The replay of “{deleteTarget.title}” will be removed for you and every listener. The
+              room's chat transcript stays as it is.
             </p>
             <div className="flex items-center gap-2 pt-2">
               <button
@@ -886,6 +916,30 @@ function SpacesPage() {
                   ) : (
                     <span className="text-emerald-500 font-bold">✨ HD Active</span>
                   )}
+                </div>
+                {/* The storage promise, stated plainly: going live costs nothing,
+                    and only a saved replay spends the plan's replay budget. */}
+                <div className="mt-1.5 flex items-center justify-between gap-2 text-muted-foreground text-[0.72rem]">
+                  <span>
+                    Live broadcast stores <strong className="text-foreground">nothing</strong>
+                    {planDetails.limits.spacesRecording ? (
+                      <> · replays up to {formatBytes(spaceStorageQuotaBytes(currentPlan))}</>
+                    ) : (
+                      <> · replays need an upgrade</>
+                    )}
+                  </span>
+                  {storage && planDetails.limits.spacesRecording ? (
+                    <span
+                      className={cn(
+                        "shrink-0 font-bold",
+                        storage.usedBytes >= storage.quotaBytes
+                          ? "text-amber-500"
+                          : "text-emerald-500",
+                      )}
+                    >
+                      {formatBytes(storage.usedBytes)} / {formatBytes(storage.quotaBytes)}
+                    </span>
+                  ) : null}
                 </div>
               </div>
 

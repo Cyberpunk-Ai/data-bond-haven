@@ -4,6 +4,14 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* The Space room's action bar uses `xs:` to drop button labels before small
+ * phones do. Tailwind v4 ships no `xs` breakpoint, so without this declaration
+ * every `xs:` class is dead and those buttons render icon-only with no text.
+ * 30rem (480px) sits between the default `sm` (640px) and the smallest phone. */
+@theme {
+  --breakpoint-xs: 30rem;
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

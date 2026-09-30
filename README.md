@@ -144,9 +144,23 @@ bucket was live only exist there. Two mechanisms cover that:
 ## Migrations
 
 `DATABASE_URL` must be a connection that can reach the database. Supabase's
-direct `db.*` host is IP-blocked from most networks, so use the session pooler —
-the username is `postgres.<project-ref>` with a **dot**, and the region prefix
-must match the project's region:
+direct `db.*` host is frequently IPv6-only (and IP-blocked from some networks),
+so on a machine without global IPv6 add `--pooler`: the runner rebuilds the same
+credentials against Supabase's IPv4 **session** pooler and tries each region
+until one answers. TLS stays verified — the pooler is issued by Supabase's own
+private CA that no system trust store carries, so trust is anchored to
+`scripts/supabase-pooler-root.pem` instead of being switched off. `POOLER_HOST`,
+`POOLER_REGION` and `POOLER_PORT` override the defaults, and
+`db:backup` / `db:restore` accept the same flag.
+
+```powershell
+npm run db:migrate:pooler                 # apply everything pending
+npm run db:migrate:status -- --pooler     # or pass the flag to any variant
+```
+
+Setting the pooler URL by hand works too and needs no flag — the username is
+`postgres.<project-ref>` with a **dot**, and the region prefix must match the
+project's region:
 
 ```powershell
 $env:DATABASE_URL='postgresql://postgres.<project-ref>:<password>@aws-1-eu-west-1.pooler.supabase.com:5432/postgres'

@@ -13,6 +13,8 @@
 //                                           re-syncs sequences, re-uploads
 //                                           storage objects
 //   flags: --skip-schema  --skip-data  --skip-storage  (combine with --yes)
+//   flag:  --pooler  reach the database through Supabase's IPv4 session pooler,
+//          for machines that cannot route to the IPv6-only direct host
 //
 // DESTRUCTIVE WARNING: --yes replaces the current public schema wholesale.
 // The database password / host come from DATABASE_URL (shell env wins over
@@ -20,8 +22,7 @@
 // =============================================================================
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import postgres from "postgres";
-import { loadEnv, die, apiFetch, repoRoot } from "./db-utils.mjs";
+import { loadEnv, connect, die, apiFetch, repoRoot } from "./db-utils.mjs";
 
 const args = process.argv.slice(2);
 const yes = args.includes("--yes");
@@ -30,8 +31,6 @@ const skipData = args.includes("--skip-data");
 const skipStorage = args.includes("--skip-storage");
 
 const env = loadEnv();
-const url = env.DATABASE_URL;
-if (!url) die("DATABASE_URL is not set (checked shell env and .env).");
 
 // Resolve the backup folder: explicit arg, else newest dir under backups/.
 function latestBackupDir() {
@@ -67,7 +66,10 @@ if (!yes) {
   );
 }
 
-const sql = postgres(url, { max: 1, connect_timeout: 20, idle_timeout: 60 });
+const sql = await connect(env, {
+  pooler: args.includes("--pooler"),
+  idle_timeout: 60,
+});
 
 // ---------------------------------------------------------------------------
 // Schema

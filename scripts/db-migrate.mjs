@@ -11,6 +11,10 @@
 //   node scripts/db-migrate.mjs --dry-run     show what would apply, change nothing
 //   node scripts/db-migrate.mjs --baseline    record all files as applied, run nothing
 //                                             (adopt an existing database once)
+//   node scripts/db-migrate.mjs --pooler      reach the database through Supabase's
+//                                             IPv4 session pooler (see db-utils.mjs:
+//                                             the direct host is often IPv6-only and
+//                                             unreachable without global IPv6)
 //
 // Reads DATABASE_URL from the environment, .env, or .dev.vars. Each applied
 // file is stored with a sha256 checksum so an accidental edit to an already
@@ -22,15 +26,10 @@
 // layer notices the change on its own.
 // =============================================================================
 import { readFile, readdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import postgres from "postgres";
+import { join } from "node:path";
+import { loadEnv, connect, die, repoRoot } from "./db-utils.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(__dirname, "..");
 const migrationsDir = join(repoRoot, "db", "migrations");
 
 const args = new Set(process.argv.slice(2));
@@ -41,21 +40,6 @@ const MODE = args.has("--status")
     : args.has("--baseline")
       ? "baseline"
       : "apply";
-
-function loadDotEnv() {
-  for (const file of [".env", ".dev.vars"]) {
-    const path = join(repoRoot, file);
-    if (!existsSync(path)) continue;
-    for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/i);
-      if (!m) continue;
-      const key = m[1];
-      let value = m[2].trim();
-      if (/^".*"$/.test(value) || /^'.*'$/.test(value)) value = value.slice(1, -1);
-      if (process.env[key] === undefined) process.env[key] = value;
-    }
-  }
-}
 
 async function listMigrationFiles() {
   const names = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
@@ -90,15 +74,14 @@ async function reloadPostgrestSchema(sql) {
 }
 
 async function main() {
-  loadDotEnv();
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    console.error("DATABASE_URL is not set (checked env, .env, .dev.vars).");
-    process.exit(1);
-  }
+  const env = loadEnv();
+  if (!env.DATABASE_URL) die("DATABASE_URL is not set (checked env, .env, .dev.vars).");
 
   const files = await listMigrationFiles();
-  const sql = postgres(url, { max: 1, onnotice: () => {} });
+  const sql = await connect(env, {
+    pooler: args.has("--pooler"),
+    onnotice: () => {},
+  });
 
   try {
     await sql.unsafe(TRACKING_DDL);

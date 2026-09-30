@@ -24,7 +24,6 @@ export interface Webhook {
   description: string;
   events: string[];
   status: "active" | "paused";
-  secret?: string;
   createdAt: string;
 }
 
@@ -70,7 +69,9 @@ async function hydrate() {
       id: String(row.id),
       url: String(row.url),
       description: String(row.description ?? ""),
-      secret: String(row.secret ?? ""),
+      // The signing secret is deliberately not read into browser state: nothing
+      // in the UI verifies payloads, and a leaked secret lets a stranger forge
+      // "signed" deliveries that the receiver would accept.
       events: Array.isArray(row.events) ? (row.events as string[]) : [],
       status: row.active ? "active" : "paused",
       createdAt: new Date(row.created_at).toLocaleDateString(),
@@ -108,28 +109,34 @@ export function useDeveloper() {
     return key;
   }
 
-  function revokeApiKey(id: string) {
-    void deleteOwnedRow("api_keys", id).catch(() => undefined);
+  async function revokeApiKey(id: string) {
+    // Await the delete before touching local state: the old fire-and-forget
+    // path dropped the key from the screen even when the row was still live,
+    // so the key kept authenticating while the portal said it was revoked.
+    await deleteOwnedRow("api_keys", id);
     commit({ ...state, apiKeys: state.apiKeys.filter((k) => k.id !== id) });
   }
 
   async function addWebhook(url: string, description: string, events: string[]) {
-    const row = await insertOwnedRow("webhooks", { url, events, active: true, description }).catch(
-      () => null,
-    );
+    // A failed insert must not add a ghost endpoint: the `webhooks_url_https`
+    // CHECK and RLS both reject writes, and swallowing that left the portal
+    // listing a URL that existed only in the browser.
+    const row = await insertOwnedRow("webhooks", { url, events, active: true, description });
+    if (!row?.id) throw new Error("We couldn't register that webhook endpoint.");
     const hook: Webhook = {
-      id: String(row?.id ?? `wh_${Date.now()}`),
+      id: String(row.id),
       url,
       description,
       events,
       status: "active",
-      createdAt: new Date().toLocaleDateString(),
+      createdAt: new Date(row.created_at ?? Date.now()).toLocaleDateString(),
     };
     commit({ ...state, webhooks: [hook, ...state.webhooks] });
+    return hook;
   }
 
-  function removeWebhook(id: string) {
-    void deleteOwnedRow("webhooks", id).catch(() => undefined);
+  async function removeWebhook(id: string) {
+    await deleteOwnedRow("webhooks", id);
     commit({ ...state, webhooks: state.webhooks.filter((w) => w.id !== id) });
   }
 

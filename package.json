@@ -19,6 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "node scripts/db-migrate.mjs",
+    "db:migrate:pooler": "node scripts/db-migrate.mjs --pooler",
     "db:backup": "node scripts/db-backup.mjs",
     "db:restore": "node scripts/db-restore.mjs",
     "db:migrate:status": "node scripts/db-migrate.mjs --status",

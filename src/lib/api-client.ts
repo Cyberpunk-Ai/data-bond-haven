@@ -95,6 +95,9 @@ export function rowToPost(row: any, extras: Partial<Post> = {}): Post {
     repostCount: row.repost_count ?? 0,
     viewCount: row.view_count ?? 0,
     poll: row.poll ?? null,
+    // Moderation state: the admin console lists hidden posts too, so it can
+    // restore one. Feeds never see them (they filter on hidden = false).
+    hidden: Boolean(row.hidden),
     workspace_id: row.workspace_id ?? null,
     ...extras,
   };
@@ -173,10 +176,9 @@ export async function getPostsPage(options: PostsPageOptions = {}): Promise<Post
   // `cs.{ai}` form, which the server rejects with "invalid input syntax for type json".
   if (options.tag) query = query.contains("tags", JSON.stringify([options.tag]));
   if (options.following) {
-    const { data: follows } = isDbId(me())
-      ? await db.from("follows").select("target_id").eq("follower_id", me())
-      : { data: [] as any[] };
-    const ids = ((follows ?? []) as any[]).map((f) => f.target_id);
+    // Same follow-graph read the profile buttons use; one query shape to keep
+    // aligned with the `follows` RLS policies.
+    const ids = await getFollowingIds();
     if (ids.length === 0) return { posts: [], nextCursor: null };
     query = query.in("user_id", [...ids, me()]);
   }
@@ -829,34 +831,10 @@ export async function votePoll(postId: string, optionId: string) {
 }
 
 export async function recordPostImpression(postId: string) {
-  if (!isDbId(postId)) return { viewCount: 0 };
-  const userId = me();
-  const viewer = isDbId(userId) ? userId : null;
-  // Impressions have no anonymous write path (the INSERT policy is
-  // `to authenticated`), so a signed-out visitor — or a stale cached profile
-  // with an expired token — firing the upsert only produces a 403 round-trip.
-  // Skip the write unless there is both a profile id and a live session; the
-  // tallied view count below still comes off the post row.
-  if (viewer && (await hasAuthSession())) {
-    try {
-      // Recorded server-side with the service-role client (bypasses the
-      // `owns_profile` RLS check that used to 403 while scrolling). Repeat
-      // views are deduped by the (post_id,user_id) unique index.
-      const { recordImpressions } = await import("@/lib/impressions.functions");
-      await recordImpressions({ data: { postIds: [postId] } });
-    } catch {
-      /* impressions are best-effort */
-    }
-  }
-  // Impression rows are admin-only to read, so take the tallied count off the post.
-  const { data: postRow } = await db
-    .from("posts")
-    .select("view_count")
-    .eq("id", postId)
-    .maybeSingle();
-  const viewCount = postRow?.view_count ?? 0;
-  emitRealtime("post_view_updated", { postId, viewCount });
-  return { viewCount };
+  // One id through the batch path: same guards, same round-trips, one
+  // implementation to keep correct.
+  const { views } = await recordPostImpressions([postId]);
+  return { viewCount: views[postId] ?? 0 };
 }
 
 /* ---------------------------------------------------------------- stories */
@@ -1189,10 +1167,20 @@ export async function getFollowingIds(): Promise<string[]> {
   return ((data ?? []) as any[]).map((r) => String(r.target_id));
 }
 
+/**
+ * Responses that mean "we decided not to store these bytes". The server wrote
+ * the reason and the client must show it, not paper over it with a data URL.
+ * 5xx is deliberately absent: a storage outage keeps the resilient path below.
+ */
+const DELIBERATE_REJECTIONS = new Set([400, 401, 402, 413, 415, 429, 507]);
+
 export async function uploadMedia(
   file: File,
   folder: "avatars" | "posts" | "stories" | "media" | "messages" | "recordings" = "media",
 ) {
+  // Set when the endpoint answered with a refusal we are meant to surface.
+  // Thrown *after* the try/catch below, so the resilience path cannot eat it.
+  let rejection: string | null = null;
   try {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData?.session?.access_token;
@@ -1218,14 +1206,24 @@ export async function uploadMedia(
         return { url: json.url as string, path: json.path as string };
       }
       const failure = await res.json().catch(() => null);
-      console.warn("Media upload notice:", failure?.error || res.statusText);
+      if (failure?.error && DELIBERATE_REJECTIONS.has(res.status)) {
+        // A deliberate refusal (empty or oversized file, wrong type, rate limit,
+        // plan not covering recordings, Space replay budget spent) is the answer
+        // the host asked for: these bytes are not going to storage. Turning it
+        // into a data URL would hide the reason and bloat a DB row with base64.
+        rejection = String(failure.error);
+      } else {
+        console.warn("Media upload notice:", failure?.error || res.statusText);
+      }
     }
   } catch (err: any) {
     console.warn("Storage upload notice:", err?.message);
   }
 
+  if (rejection) throw new Error(rejection);
+
   // Fallback to client-side Data URL so uploads and attachments are 100% resilient
-  // to transient storage/network issues (never used for authenticated success paths).
+  // to transient storage/network issues (never reached by a deliberate refusal).
   const ext = (file.name.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
   const path = `${folder}/${me()}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   return new Promise<{ url: string; path: string }>((resolve) => {
@@ -1320,23 +1318,32 @@ export async function createSpace(input: {
   if (error) throw error;
   const id = data.id as string;
   if (isLive) {
-    await db.from("space_participants").insert({ space_id: id, user_id: me(), role: "host" });
+    const { error: hostError } = await db
+      .from("space_participants")
+      .insert({ space_id: id, user_id: me(), role: "host" });
+    if (hostError) {
+      // Without a host row the room opens with nobody able to broadcast, and the
+      // stage rules would reject the host's own microphone. Undo the Space rather
+      // than hand back a room that looks live but can't be spoken in.
+      await db.from("spaces").delete().eq("id", id);
+      throw hostError;
+    }
   }
   const space = rowToSpace(data);
   emitRealtime("space:created", { space });
   return { space };
 }
 
-/** Keep the room's listener count in step with who is actually inside. */
+/** Read the room's current headcount so the badge updates without a refetch.
+ * The stored `spaces.listeners` is maintained by the `t_space_participants_after`
+ * trigger on every join/leave, so there is nothing to write here — an earlier
+ * version updated the row from the client, which RLS rejected for anyone who
+ * wasn't the host, making the count look ignored rather than missing. */
 async function syncSpaceListeners(spaceId: string) {
   const { count } = await db
     .from("space_participants")
     .select("user_id", { count: "exact", head: true })
     .eq("space_id", spaceId);
-  await db
-    .from("spaces")
-    .update({ listeners: count ?? 0 })
-    .eq("id", spaceId);
   emitRealtime("space:listeners", { spaceId, listeners: count ?? 0 });
   return count ?? 0;
 }
@@ -1359,7 +1366,12 @@ export async function joinSpace(spaceId: string) {
 }
 
 export async function leaveSpace(spaceId: string) {
-  await db.from("space_participants").delete().eq("space_id", spaceId).eq("user_id", me());
+  const { error } = await db
+    .from("space_participants")
+    .delete()
+    .eq("space_id", spaceId)
+    .eq("user_id", me());
+  if (error) throw error;
   emitRealtime("space:left", { spaceId, userId: me() });
   await syncSpaceListeners(spaceId);
   return { ok: true };
@@ -1378,48 +1390,62 @@ export async function endSpace(spaceId: string) {
     .select("recording_url")
     .maybeSingle();
   if (error) throw error;
-  await db
+  const { error: recordedError } = await db
     .from("spaces")
     .update({ recorded: Boolean(data?.recording_url), listeners: 0 })
     .eq("id", spaceId);
-  await db.from("space_participants").delete().eq("space_id", spaceId);
+  if (recordedError) throw recordedError;
+  const { error: clearError } = await db
+    .from("space_participants")
+    .delete()
+    .eq("space_id", spaceId);
+  if (clearError) throw clearError;
   emitRealtime("space:ended", { spaceId });
   return { ok: true };
 }
 
 export async function toggleHandRaised(spaceId: string, raised: boolean) {
-  await db
+  const { error } = await db
     .from("space_participants")
     .update({ hand_raised: raised })
     .eq("space_id", spaceId)
     .eq("user_id", me());
+  // supabase-js resolves instead of throwing on a rejected write, so without
+  // this check a host never sees the raised hand and the badge rolls back only
+  // after the caller learns the row never changed.
+  if (error) throw new Error(error.message || "Could not update your hand");
   emitRealtime("space:hand", { spaceId, userId: me(), raised });
   return { handRaised: raised };
 }
 
 export async function toggleSpeaking(spaceId: string, speaking: boolean, muted: boolean) {
-  await db
+  const { error } = await db
     .from("space_participants")
     .update({ is_speaking: speaking, is_muted: muted })
     .eq("space_id", spaceId)
     .eq("user_id", me());
+  if (error) throw new Error(error.message || "Could not change your microphone state");
   emitRealtime("space:speaking", { spaceId, userId: me(), speaking, muted });
   return { speaking, muted };
 }
 
 export async function sendSpaceMessage(spaceId: string, body: string) {
+  const { data, error } = await db
+    .from("space_messages")
+    .insert({ space_id: spaceId, user_id: me(), body })
+    .select("*")
+    .single();
+  // Only broadcast once the row exists. Emitting first showed the message to
+  // everyone in the room — including the sender's own optimistic bubble — for a
+  // write the database had actually refused (RLS denial, closed Space).
+  if (error) throw new Error(error.message || "Message not sent");
   const message = {
-    id: `sm_${Date.now()}`,
-    userId: me(),
+    id: data.id,
+    userId: data.user_id,
     name: currentUser.display_name,
-    body,
-    createdAt: nowIso(),
+    body: data.body,
+    createdAt: data.created_at,
   };
-  try {
-    await db.from("space_messages").insert({ space_id: spaceId, user_id: me(), body });
-  } catch {
-    /* best effort */
-  }
   emitRealtime("space:message", { spaceId, message });
   return { message };
 }
@@ -1467,11 +1493,12 @@ export async function setSpaceParticipantRole(
   userId: string,
   role: "host" | "speaker" | "listener",
 ) {
-  await db
+  const { error } = await db
     .from("space_participants")
     .update({ role, hand_raised: false, is_muted: role === "listener" })
     .eq("space_id", spaceId)
     .eq("user_id", userId);
+  if (error) throw error;
   emitRealtime("space:role", { spaceId, userId, role });
   return { ok: true };
 }
@@ -1525,11 +1552,16 @@ export async function setSpaceRecording(spaceId: string, recording: boolean) {
 
 /** Host-only: report the current recording size so we can enforce the size limit server-side too. */
 export async function reportSpaceRecordingBytes(spaceId: string, bytes: number) {
-  await db
+  const { error } = await db
     .from("spaces")
     .update({ recording_bytes: Math.max(0, Math.floor(bytes)) })
     .eq("id", spaceId)
     .eq("host_id", me());
+  // `spaces.recording_bytes` is what the recording-cap check compares against the
+  // host's plan budget. The caller treats a failure as non-fatal and warns — it
+  // was already written for that, but this used to resolve successfully no matter
+  // what happened, so a dropped report left the budget looking untouched.
+  if (error) throw new Error(error.message || "Could not record the capture size");
   return { ok: true };
 }
 
@@ -1542,12 +1574,26 @@ export async function finalizeSpaceRecording(spaceId: string, recordingUrl: stri
   if (!recordingUrl || !recordingUrl.startsWith("/api/public/media/")) {
     throw new Error("The recording was not stored. Please try recording again.");
   }
+  // A room can be recorded more than once. The previous take stays referenced
+  // until the new URL is written, then its object is reclaimed: left alone it
+  // would keep counting against the host's replay budget in `media_objects`
+  // while nothing any longer points at it.
+  const { data: existing } = await db
+    .from("spaces")
+    .select("recording_url")
+    .eq("id", spaceId)
+    .eq("host_id", me())
+    .maybeSingle();
+  const previous = existing?.recording_url;
   const { error } = await db
     .from("spaces")
     .update({ is_recording: false, recorded: true, recording_url: recordingUrl })
     .eq("id", spaceId)
     .eq("host_id", me());
   if (error) throw error;
+  if (previous && previous !== recordingUrl) {
+    void deleteMyMedia({ data: { urls: [previous] } }).catch(() => {});
+  }
   emitRealtime("space:recording", { spaceId, recording: false, recordingUrl });
   return { ok: true };
 }
@@ -1567,7 +1613,16 @@ export async function deleteSpaceRecording(spaceId: string) {
   if (!existing) throw new Error("Only the host can delete this recording.");
   const { error } = await db
     .from("spaces")
-    .update({ recording_url: null, recorded: false, is_recording: false, replay_count: 0 })
+    .update({
+      recording_url: null,
+      recorded: false,
+      is_recording: false,
+      replay_count: 0,
+      // ...and give the bytes back. The plan's replay budget is counted against
+      // `recording_bytes` in the database, so a cleared replay that kept its
+      // figure would charge the host for audio nobody can any longer play.
+      recording_bytes: 0,
+    })
     .eq("id", spaceId)
     .eq("host_id", me());
   if (error) throw error;
@@ -1582,16 +1637,16 @@ export async function deleteSpaceRecording(spaceId: string) {
 export async function recordSpaceReplayView(spaceId: string) {
   const userId = me();
   if (!isDbId(userId)) return { ok: false, replayCount: null as number | null };
-  try {
-    await db
-      .from("space_replay_views")
-      .upsert(
-        { space_id: spaceId, user_id: userId },
-        { onConflict: "space_id,user_id", ignoreDuplicates: true },
-      );
-  } catch {
-    /* best effort */
-  }
+  // supabase-js resolves with `error` rather than throwing, so the try/catch that
+  // used to sit here could never have caught anything: a rejected insert was
+  // reported as a recorded view and the host's replay count crept low forever.
+  const { error } = await db
+    .from("space_replay_views")
+    .upsert(
+      { space_id: spaceId, user_id: userId },
+      { onConflict: "space_id,user_id", ignoreDuplicates: true },
+    );
+  if (error) console.warn("replay view not recorded:", error.message);
   // The AFTER INSERT trigger maintains spaces.replay_count; read the live value
   // back so the modal can show the true count instead of the stale list one.
   try {
@@ -1784,11 +1839,10 @@ export async function sendMessage(
     throw new Error(error.message || "Your message couldn't be sent");
   }
 
-  await db
-    .from("conversations")
-    .update({ preview: body.slice(0, 120), updated_at: nowIso() })
-    .eq("id", conversationId);
-
+  // No preview/updated_at write here: the SECURITY DEFINER trigger
+  // `t_messages_after` already sets both (and notifies the recipient) as part of
+  // the same transaction that stored the message. The client copy wrote a shorter
+  // preview on the browser's clock and cost an extra round-trip per message.
   emitRealtime("message:created", data);
   return { message: data as Message, conversationId };
 }
@@ -1894,7 +1948,13 @@ export async function getNotifications(
 
 export async function markNotificationsRead() {
   if (isDbId(me())) {
-    await db.from("notifications").update({ read: true }).eq("recipient_id", me());
+    const { error } = await db
+      .from("notifications")
+      .update({ read: true })
+      .eq("recipient_id", me());
+    // Deliberately not fatal: the bell already cleared optimistically and the
+    // flags resync on the next load. Say so loudly in the console instead.
+    if (error) console.warn("markNotificationsRead:", error.message);
   }
   emitRealtime("notification:read", {});
   return { ok: true };
@@ -1907,13 +1967,6 @@ export async function getFeedPreferences(): Promise<{ preferences: UserFeedPrefe
     ? await db.from("feed_preferences").select("*").eq("user_id", me()).maybeSingle()
     : { data: null as any };
   return { preferences: (data?.prefs ?? {}) as UserFeedPreferences };
-}
-
-export async function updateFeedPreferences(patch: Partial<UserFeedPreferences>) {
-  const { preferences } = await getFeedPreferences();
-  const merged = { ...preferences, ...patch };
-  if (isDbId(me())) await db.from("feed_preferences").upsert({ user_id: me(), prefs: merged });
-  return { preferences: merged as UserFeedPreferences };
 }
 
 export async function sendFeedFeedback(payload: FeedFeedbackPayload) {
@@ -1929,7 +1982,14 @@ export async function sendFeedFeedback(payload: FeedFeedbackPayload) {
   if (action === "mute_author" && payload.authorId) {
     next.mutedAuthors = Array.from(new Set([...(next.mutedAuthors ?? []), payload.authorId]));
   }
-  if (isDbId(me())) await db.from("feed_preferences").upsert({ user_id: me(), prefs: next });
+  if (isDbId(me())) {
+    const { error } = await db.from("feed_preferences").upsert({ user_id: me(), prefs: next });
+    // The tuning panel reports the new preference set to the caller, so a
+    // rejected write (expired session falls back to the anon role, which holds no
+    // INSERT grant here) has to surface — otherwise "Not interested in #x" looks
+    // saved, is re-read from the server on the next load, and silently comes back.
+    if (error) throw new Error(error.message || "Could not save your feed preferences");
+  }
   return { preferences: next };
 }
 
@@ -1971,56 +2031,13 @@ export async function summarizeSpaceAI(title: string, topic: string, messages: s
   return aiSummarizeSpace({ data: { title, topic, messages } });
 }
 
-/* ------------------------------------------------------------------- tips */
+/* --------------------------------------------------------------------- tips */
 
-export async function sendTipApi(input: {
-  recipientUsername?: string;
-  recipientId?: string;
-  amount: number;
-  message?: string;
-  postId?: string;
-  spaceId?: string;
-}) {
-  let recipientId = input.recipientId;
-  const username = input.recipientUsername?.replace(/^@/, "");
-  if (!isDbId(recipientId) && username) {
-    const { data } = await db.from("profiles").select("id").eq("username", username).maybeSingle();
-    recipientId = data?.id;
-  }
-  if (!isDbId(recipientId)) throw new Error("We couldn't find that creator.");
-  const senderId = me();
-  if (!isDbId(senderId)) throw new Error("Sign in to send a tip");
-  if (recipientId === senderId) throw new Error("You cannot tip yourself");
-
-  const { error } = await db.from("tips").insert({
-    from_user_id: senderId,
-    to_user_id: recipientId,
-    amount: input.amount,
-    message: input.message ?? "",
-    post_id: isDbId(input.postId) ? input.postId : null,
-  });
-  if (error) throw new Error(error.message || "That tip didn't go through");
-
-  // Broadcast only non-sensitive routing info. The tip amount and note stay
-  // private; the public realtime channel must not leak them to every client.
-  emitRealtime("tip:sent", {
-    from_user_id: senderId,
-    to_user_id: recipientId,
-    post_id: isDbId(input.postId) ? input.postId : null,
-  });
-
-  return { ok: true, amount: input.amount, recipientId };
-}
-
-export async function getTipsForMe() {
-  const { data } = await db
-    .from("tips")
-    .select("*")
-    .eq("to_user_id", me())
-    .order("created_at", { ascending: false })
-    .limit(100);
-  return (data ?? []) as any[];
-}
+// Tipping is a payment: the only writer of a `tips` row is the settled-payment
+// path (Paystack verify -> SECURITY DEFINER settle function) or the service-role
+// client. There is deliberately no client-side "insert a tip" helper here — one
+// would let anyone mint balance without paying, and the database now refuses it
+// (see migration 20260930000094).
 
 /* -------------------------------------------------------- moderation/admin */
 
@@ -2414,17 +2431,10 @@ export async function getAdminOverview(
         status: "operational",
         uptime_seconds: Math.floor(process_uptime()),
         database_latency_ms: Date.now() - started,
-        storage_usage_bytes: 0,
         error_rate_percent: 0,
         db_driver: "postgres",
         memory_mb: nodeMemoryMb(),
       },
-    },
-    storage_usage_breakdown: {
-      avatars_mb: 0,
-      posts_media_mb: 0,
-      stories_mb: 0,
-      spaces_audio_mb: 0,
     },
     charts: await buildAdminCharts({ likes, comments, reposts, impressions }),
     recent_activity,
@@ -2594,10 +2604,6 @@ export async function getUserProfile(idOrUsername: string): Promise<{ profile: P
   return { profile };
 }
 
-export async function getProfileById(idOrUsername: string): Promise<Profile | null> {
-  return (await getUserProfile(idOrUsername)).profile;
-}
-
 /** Bookmarked posts for the signed-in user. */
 export async function getBookmarks(): Promise<Post[]> {
   return getBookmarkedPosts();
@@ -2655,32 +2661,23 @@ export async function getSpace(id: string): Promise<{ space: Space | null }> {
 }
 
 export async function markNotificationRead(id: string) {
-  await db.from("notifications").update({ read: true }).eq("id", id);
+  const { error } = await db.from("notifications").update({ read: true }).eq("id", id);
+  // Deleting a notification one row below already refuses to lie about the
+  // outcome; marking read has to as well, or the bell drops a count the server
+  // never incremented and the alert reappears on the next load looking unread.
+  if (error) throw new Error(error.message || "Could not mark that notification read");
   return { success: true };
 }
-
-export const markNotificationAsRead = markNotificationRead;
 
 export async function markAllNotificationsRead() {
   await markNotificationsRead();
   return { success: true };
 }
 
-export const markAllNotificationsAsRead = markAllNotificationsRead;
-
 export async function deleteNotification(id: string) {
   const { error } = await db.from("notifications").delete().eq("id", id);
   if (error) throw new Error(error.message || "Could not delete that notification");
   return { id };
-}
-
-/** Send to a conversation id or straight to a recipient profile id. */
-export async function sendDirectMessage(
-  recipientOrConversationId: string,
-  body: string,
-  mediaUrl?: string | null,
-) {
-  return sendMessage(recipientOrConversationId, body, mediaUrl ?? null);
 }
 
 /**
@@ -2689,10 +2686,14 @@ export async function sendDirectMessage(
  * per-post fan-out cost two round-trips each. Now a scroll costs at most
  * three queries regardless of page size — the difference between a healthy
  * API and a self-inflicted DDoS once concurrent viewers scale.
+ * Single-impression calls from a post card go through here too, so there is
+ * only one set of guards to keep right.
  */
-export async function recordPostImpressions(postIds: string[]) {
+export async function recordPostImpressions(
+  postIds: string[],
+): Promise<{ ok: true; views: Record<string, number> }> {
   const ids = Array.from(new Set(dbIds(postIds)));
-  if (ids.length === 0) return { ok: true };
+  if (ids.length === 0) return { ok: true, views: {} };
   const userId = me();
   const viewer = isDbId(userId) ? userId : null;
   // Impressions are recorded server-side with the service-role client, which
@@ -2711,31 +2712,12 @@ export async function recordPostImpressions(postIds: string[]) {
   }
   // Tallied counts come off the posts rows (impression rows are staff-only).
   const { data: postRows } = await db.from("posts").select("id,view_count").in("id", ids);
+  const views: Record<string, number> = {};
   for (const row of postRows ?? []) {
+    views[String(row.id)] = row.view_count ?? 0;
     emitRealtime("post_view_updated", { postId: row.id, viewCount: row.view_count });
   }
-  return { ok: true };
-}
-
-/** Deterministic quick-reply suggestions for a chat thread. */
-export async function generateSmartRepliesAI(messages: string[]): Promise<{ replies: string[] }> {
-  const last = (messages[messages.length - 1] ?? "").toLowerCase();
-  if (last.includes("?"))
-    return {
-      replies: ["Good question — let me check.", "Yes, absolutely.", "Not sure yet, I'll confirm."],
-    };
-  if (last.includes("thanks") || last.includes("thank you"))
-    return { replies: ["Anytime!", "Happy to help 🙌", "You got it."] };
-  return { replies: ["Sounds good!", "On it 👍", "Let's do it."] };
-}
-
-/** Runtime configuration exposed to admin/system surfaces. */
-export async function getSystemConfig() {
-  return {
-    driver: "supabase" as const,
-    features: appConfig.features,
-    brand: appConfig.brand,
-  };
+  return { ok: true, views };
 }
 
 // ---------------------------------------------------------------------------

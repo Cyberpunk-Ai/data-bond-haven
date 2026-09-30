@@ -16,17 +16,14 @@
 //
 // Restore with: npm run db:restore [backups/<timestamp>]
 // Uses DATABASE_URL from the shell env or .env (same lookup as db-migrate).
-// If the direct db host is unreachable (IPv4 DNS issues), export the session
-// pooler URL first — see the note printed at the end.
+// On a machine without global IPv6 the direct db host is unreachable: add
+// `--pooler` to go through Supabase's IPv4 session pooler instead.
 // =============================================================================
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import postgres from "postgres";
-import { loadEnv, die, stamp, apiFetch, repoRoot } from "./db-utils.mjs";
+import { loadEnv, connect, stamp, apiFetch, repoRoot } from "./db-utils.mjs";
 
 const env = loadEnv();
-const url = env.DATABASE_URL;
-if (!url) die("DATABASE_URL is not set (checked shell env and .env).");
 
 const noStorage = process.argv.includes("--no-storage");
 const noData = process.argv.includes("--no-data");
@@ -36,7 +33,7 @@ const dataDir = join(outDir, "data");
 const storageDir = join(outDir, "storage");
 mkdirSync(outDir, { recursive: true });
 
-const sql = postgres(url, { max: 1, connect_timeout: 20 });
+const sql = await connect(env, { pooler: process.argv.includes("--pooler") });
 const q = async (texts, ...args) => await sql(texts, ...args);
 const esc = (s) => String(s).replaceAll("'", "''");
 

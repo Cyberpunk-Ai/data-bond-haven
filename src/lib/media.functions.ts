@@ -65,6 +65,15 @@ export const deleteMyMedia = createServerFn({ method: "POST" })
 
     const ownedKeys = (owned as Array<{ path: string }>).map((r) => r.path);
     const removed = await (await getStorageProvider()).delete(ownedKeys);
-    await (await admin()).from("media_objects").delete().in("path", ownedKeys);
+    const { error: rowError } = await (
+      await admin()
+    )
+      .from("media_objects")
+      .delete()
+      .in("path", ownedKeys);
+    // The bytes are already gone at this point, so a surviving row is a permanent
+    // pointer at an object that no longer exists — report it instead of returning
+    // a tidy count that hides the leak.
+    if (rowError) console.error("media_objects rows not reclaimed:", rowError.message);
     return { removed: removed.length };
   });

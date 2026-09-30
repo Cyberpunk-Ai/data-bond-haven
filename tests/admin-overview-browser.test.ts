@@ -63,6 +63,18 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 const realProcess = globalThis.process;
 
+function restoreProcess() {
+  // Hand Node's real global back unconditionally. This file takes it away to
+  // imitate a browser, and a run that is aborted mid-await (a timeout under
+  // parallel load) would otherwise leave the next test — or the next file
+  // sharing this worker — running with no `process` at all.
+  Object.defineProperty(globalThis, "process", {
+    value: realProcess,
+    configurable: true,
+    writable: true,
+  });
+}
+
 async function overviewWithoutNodeGlobals() {
   const { getAdminOverview } = await import("@/lib/api-client");
   // Take Node's global away so the builder runs as it would in a browser. A
@@ -77,29 +89,41 @@ async function overviewWithoutNodeGlobals() {
   try {
     return await getAdminOverview({ force: true });
   } finally {
-    Object.defineProperty(globalThis, "process", {
-      value: realProcess,
-      configurable: true,
-      writable: true,
-    });
+    restoreProcess();
   }
 }
 
 describe("admin overview payload", () => {
-  afterEach(() => vi.resetModules());
+  // The first call transforms the whole api-client module, which can take a
+  // second or two on a busy machine; the default 5 s budget is not the point of
+  // this test.
+  const BUDGET = 30_000;
 
-  it("resolves in a browser-like environment with no process global", async () => {
-    const data = await overviewWithoutNodeGlobals();
-    expect(data.stats.total_users).toBe(42);
-    expect(data.stats.total_tips_amount).toBe(26);
-    // Nothing to measure without Node: report zero rather than throw.
-    expect(data.stats.system_health.memory_mb).toBe(0);
-    expect(data.charts.daily_impressions).toHaveLength(7);
+  afterEach(() => {
+    restoreProcess();
+    vi.resetModules();
   });
 
-  it("still reports real heap usage when it runs on the server", async () => {
-    const { getAdminOverview } = await import("@/lib/api-client");
-    const data = await getAdminOverview({ force: true });
-    expect(data.stats.system_health.memory_mb).toBeGreaterThan(0);
-  });
+  it(
+    "resolves in a browser-like environment with no process global",
+    async () => {
+      const data = await overviewWithoutNodeGlobals();
+      expect(data.stats.total_users).toBe(42);
+      expect(data.stats.total_tips_amount).toBe(26);
+      // Nothing to measure without Node: report zero rather than throw.
+      expect(data.stats.system_health.memory_mb).toBe(0);
+      expect(data.charts.daily_impressions).toHaveLength(7);
+    },
+    BUDGET,
+  );
+
+  it(
+    "still reports real heap usage when it runs on the server",
+    async () => {
+      const { getAdminOverview } = await import("@/lib/api-client");
+      const data = await getAdminOverview({ force: true });
+      expect(data.stats.system_health.memory_mb).toBeGreaterThan(0);
+    },
+    BUDGET,
+  );
 });

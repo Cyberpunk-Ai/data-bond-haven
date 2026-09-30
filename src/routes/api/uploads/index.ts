@@ -123,9 +123,16 @@ export const Route = createFileRoute("/api/uploads/")({
         // Enforce the caller's plan, not just the global cap (plan §5).
         const { getPlanLimits, requirePlanCapability, UpgradeRequiredError } =
           await import("@/lib/plan-guard.server");
+        const { requireSpaceStorageQuota, isSpaceStorageFull } =
+          await import("@/lib/space-storage.server");
         try {
           if (folder === "recordings") {
             await requirePlanCapability(profileId, "spaces_recording");
+            // A live Space stores nothing; a saved replay does, and it has to fit
+            // the host's replay budget. Checked with the real body size before a
+            // single byte is written, so an over-budget recording simply never
+            // becomes a replay — the broadcast itself is untouched.
+            await requireSpaceStorageQuota(profileId, buffer.byteLength);
           }
           const limits = await getPlanLimits(profileId);
           const planLimitBytes = limits.media_upload_max_mb * 1024 * 1024;
@@ -144,6 +151,12 @@ export const Route = createFileRoute("/api/uploads/")({
         } catch (err) {
           if (err instanceof UpgradeRequiredError) {
             return json({ error: err.message, upgrade: true }, 402);
+          }
+          // 507: the host's replay budget is spent. `upgrade` is set because the
+          // client routes any storage refusal to a useful next step — for a full
+          // plan that is deleting an old replay, which the message says.
+          if (isSpaceStorageFull(err)) {
+            return json({ error: err.message, upgrade: true }, 507);
           }
           throw err;
         }

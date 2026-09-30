@@ -73,7 +73,7 @@ export const sendTestWebhook = createServerFn({ method: "POST" })
       .maybeSingle();
     if (!hook) throw new Error("Webhook not found");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    await (supabaseAdmin as any).from("webhook_deliveries").insert({
+    const { error: queueError } = await (supabaseAdmin as any).from("webhook_deliveries").insert({
       webhook_id: hook.id,
       event: "ping",
       payload: {
@@ -82,6 +82,9 @@ export const sendTestWebhook = createServerFn({ method: "POST" })
         data: { message: "Hello from your webhook" },
       },
     });
+    // The panel reads this as "test event queued and dispatched"; with nothing
+    // queued, dispatchDueWebhooks would happily report `{processed: 0}`.
+    if (queueError) throw new Error(queueError.message || "Could not queue the test event");
     const { dispatchDueWebhooks } = await import("./api-auth.server");
     return dispatchDueWebhooks(10);
   });

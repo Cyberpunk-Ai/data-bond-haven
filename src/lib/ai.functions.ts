@@ -62,7 +62,7 @@ async function consumeQuota(authUserId: string) {
     );
   }
 
-  await admin.from("subscriptions").upsert(
+  const { error: usageError } = await admin.from("subscriptions").upsert(
     {
       user_id: profile.id,
       plan,
@@ -71,6 +71,12 @@ async function consumeQuota(authUserId: string) {
     },
     { onConflict: "user_id" },
   );
+  if (usageError) {
+    // This write *is* the quota. If it is dropped, every later call still reads
+    // yesterday's counter, the daily limit never trips, and each pass-through
+    // costs real gateway money — so refuse the generation rather than allow it.
+    throw new Error(usageError.message || "Could not record that generation.");
+  }
 
   return { profileId: profile.id, plan, used: used + 1, limit };
 }
