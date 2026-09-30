@@ -31,10 +31,7 @@ import {
 import { Avatar as UserAvatar } from "@/components/social/Avatar";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/lib/auth-state";
-import { appConfig } from "@/lib/config";
 import { cn } from "@/lib/utils";
-
-const name = appConfig.brand.name;
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -43,7 +40,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Spaces1 is a social network for creators and communities: publish posts, stories and photos, host or join live audio rooms, message and call people in private, work as a team, and earn from tips and subscriptions with transparent payouts.",
+          "Spaces1 is a social platform for creators and communities: smart feeds, live audio rooms, stories, and encrypted chat in one beautiful place.",
       },
       { property: "og:title", content: "Spaces1 — Where Your World Comes to Life" },
       {
@@ -514,10 +511,8 @@ function Hero() {
             <span className="gradient-text">comes to life</span>
           </h1>
           <p className="max-w-lg text-xl text-muted-foreground">
-            {name} is a social network for creators and communities. Publish posts, stories and
-            photos; host or join live audio rooms; message and call people privately; publish as a
-            team; and earn from tips and subscriptions with transparent payouts. Read everything
-            about the product, its rules and your privacy below — no account needed.
+            Connect with friends, share moments, and discover a community that celebrates
+            creativity. Built for the way you actually live.
           </p>
           <div className="flex flex-wrap gap-4">
             <Link
@@ -645,12 +640,8 @@ function Features() {
               </div>
               <h3 className="mb-4 text-3xl font-bold">Chat, call, and gather in one place</h3>
               <p className="text-lg text-muted-foreground">
-                Private messaging, voice notes, and live audio rooms make it easy to stay close to
-                the people who matter. Conversations are visible only to the participants — see our{" "}
-                <Link to="/privacy" className="font-semibold text-brand underline">
-                  Privacy Policy
-                </Link>{" "}
-                for exactly how they are stored and protected.
+                End-to-end encrypted messaging, voice notes, and live video rooms make it easy to
+                stay close to the people who matter.
               </p>
             </div>
           </Reveal>
