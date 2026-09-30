@@ -67,5 +67,10 @@ export const appConfig = {
     ai: bool("VITE_FEATURE_AI", true),
     developerPortal: bool("VITE_FEATURE_DEVELOPER_PORTAL", true),
     workspaces: bool("VITE_FEATURE_WORKSPACES", true),
+    // "Continue with Google" on the sign-in / sign-up form. Off leaves email +
+    // password signup and login exactly as they are; the authentication
+    // provider's own Google setting is independent, so people already signed up
+    // with Google keep signing in normally.
+    googleSignIn: bool("VITE_FEATURE_GOOGLE_SIGNIN", true),
   },
 } as const;
