@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Loader2, CheckCircle2, ArrowRight } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
 import React, { useEffect, useState } from "react";
@@ -581,9 +581,23 @@ function AuthPage() {
               )}
             </form>
 
+            {/* Google's OAuth verification checks that the sign-in page itself links to
+                the privacy policy and terms, next to the button that hands us your Google
+                profile — not only somewhere in the site footer. */}
             <p className="mt-4 text-center text-[11px] leading-relaxed text-muted-foreground">
-              By continuing you agree to our community guidelines. We only email you about your
-              account.
+              By continuing you agree to our{" "}
+              <Link to="/terms" className="font-semibold text-brand underline">
+                Terms of Service
+              </Link>
+              {", "}
+              <Link to="/privacy" className="font-semibold text-brand underline">
+                Privacy Policy
+              </Link>
+              {" and "}
+              <Link to="/guidelines" className="font-semibold text-brand underline">
+                Community Guidelines
+              </Link>
+              . We only email you about your account.
             </p>
           </>
         )}

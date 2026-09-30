@@ -24,8 +24,8 @@ function Terms() {
     <StaticPage
       eyebrow="Legal"
       title="Terms of Service"
-      intro={`By creating an account or using ${name}, you agree to these terms. They're written to be readable; where something affects your money, we say it plainly.`}
-      updated="September 2026"
+      intro={`${name} is a social network for creators and communities: you publish posts, stories and photos, host or join live audio rooms, message and call people, run a team workspace, and tip or get paid. By creating an account or using ${name}, you agree to these terms. They're written to be readable; where something affects your money, we say it plainly.`}
+      updated="30 September 2026"
     >
       <Section title="1. Your account">
         <p>
@@ -34,6 +34,15 @@ function Terms() {
           password safe. One person, one account — platform accounts run by teams should use a
           workspace.
         </p>
+        <p>
+          If you sign in with Google or another provider, that provider's own terms apply to the
+          sign-in step as well, and you can disconnect it at any time. The account you create here
+          is yours: you can ask us to close it whenever you like, as section 8 and the{" "}
+          <Link to="/privacy" className="font-semibold text-brand underline">
+            Privacy Policy
+          </Link>{" "}
+          describe.
+        </p>
       </Section>
 
       <Section title="2. Your content">
@@ -41,7 +50,18 @@ function Terms() {
           You own what you post. You give us a licence to host, display and distribute it solely so
           the service can work — showing your posts to followers, powering search and the feed, and
           (if you use them) AI drafting tools on your behalf. You're responsible for having the
-          rights to anything you upload. Deleting a post removes it from the product.
+          rights to anything you upload. Deleting a post removes it from the product, and the
+          uploaded media with it.
+        </p>
+        <p>
+          Public posts are visible to other people, including logged-out visitors, and can be shared
+          onward by them within the rules. Please don't post other people's private information —
+          theirs as well as yours. How we handle personal data, including takedown and privacy
+          requests, is described in the{" "}
+          <Link to="/privacy" className="font-semibold text-brand underline">
+            Privacy Policy
+          </Link>
+          .
         </p>
       </Section>
 
@@ -114,7 +134,16 @@ function Terms() {
 
       <Section title="8. Suspension and termination">
         <p>
-          You can delete your account at any time from Settings. We may warn, restrict or suspend
+          You can stop using {name} at any time and ask us to delete your account — email{" "}
+          <a className="text-brand underline" href={`mailto:${appConfig.brand.supportEmail}`}>
+            {appConfig.brand.supportEmail}
+          </a>{" "}
+          from your registered address, and we close it and remove your content and files within 30
+          days, keeping only the reduced payment records the law requires. The{" "}
+          <Link to="/privacy" className="font-semibold text-brand underline">
+            Privacy Policy
+          </Link>{" "}
+          sets out exactly what happens to each category of data. We may warn, restrict or suspend
           accounts that break these terms — immediately for serious cases like illegal content.
           Suspended accounts can appeal through Support. Payments already made for the current
           period are non-refundable except where the law requires.
