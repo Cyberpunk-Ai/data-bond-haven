@@ -40,7 +40,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Spaces1 is a social platform for creators and communities: smart feeds, live audio rooms, stories, and encrypted chat in one beautiful place.",
+          "Spaces1 is a social platform for creators and communities: smart feeds, live audio rooms, stories, and private chat in one beautiful place.",
       },
       { property: "og:title", content: "Spaces1 — Where Your World Comes to Life" },
       {
@@ -640,8 +640,8 @@ function Features() {
               </div>
               <h3 className="mb-4 text-3xl font-bold">Chat, call, and gather in one place</h3>
               <p className="text-lg text-muted-foreground">
-                End-to-end encrypted messaging, voice notes, and live video rooms make it easy to
-                stay close to the people who matter.
+                Private messaging, voice notes, and live video rooms make it easy to stay close to
+                the people who matter.
               </p>
             </div>
           </Reveal>
