@@ -22,6 +22,9 @@ export const Route = createFileRoute("/api/public/health")({
         // or B2 deployment must not read as "media degraded" just because it no
         // longer uses the Supabase bucket.
         const { getStorageProvider } = await import("@/lib/storage/index.server");
+        // Lazily imported like the others: a route file is reachable from the
+        // client bundle and this module reads server-only env.
+        const { paymentConfigReady } = await import("@/lib/paystack-api.server");
 
         const [dbRes, mediaRes] = await Promise.allSettled([
           (supabaseAdmin as any).from("profiles").select("id", { count: "exact", head: true }),
@@ -32,6 +35,10 @@ export const Route = createFileRoute("/api/public/health")({
           !dbRes.value.error &&
           typeof dbRes.value.count === "number";
         const mediaOk = mediaRes.status === "fulfilled" && mediaRes.value.ok === true;
+        // Payments used to mirror `dbOk`, which reported "operational" for the
+        // entire time a missing server secret was 500ing every charge. Settling
+        // a payment needs both the ledger *and* a valid provider config.
+        const paymentsOk = dbOk && paymentConfigReady();
 
         const services = [
           { id: "app", label: "App & API", status: "operational" as const },
@@ -48,7 +55,7 @@ export const Route = createFileRoute("/api/public/health")({
           {
             id: "payments",
             label: "Tips & withdrawals",
-            status: dbOk ? ("operational" as const) : ("degraded" as const),
+            status: paymentsOk ? ("operational" as const) : ("degraded" as const),
           },
         ];
         const allOk = services.every((s) => s.status === "operational");
