@@ -377,6 +377,7 @@ export function AppShell({
   // Maintenance Mode hides the compose affordance for restricted accounts:
   // the write would be refused anyway, so offering it is only a failed toast.
   const { maintenanceBlocked } = usePlatform();
+  const { pathname } = useLocation();
 
   // Smart floating compose button visibility on scroll
   const [isFabVisible, setIsFabVisible] = useState(true);
@@ -532,8 +533,13 @@ export function AppShell({
         )}
       </div>
 
-      {/* Mobile Floating Compose Button */}
-      {!maintenanceBlocked && (
+      {/* Mobile Floating Compose Button.
+
+          Kept off the messages screen deliberately: it is pinned to the bottom
+          right corner, which is exactly where a chat's Send button lives on a
+          phone, so the one control you tap most became the one you could not
+          reach. It also has nothing to offer there — you are already writing. */}
+      {!maintenanceBlocked && pathname !== "/messages" && (
         <Link
           to="/feed"
           search={{ compose: "true" }}

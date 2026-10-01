@@ -7,6 +7,7 @@ import {
   Video,
   Info,
   Smile,
+  SmilePlus,
   Paperclip,
   ArrowLeft,
   Loader2,
@@ -29,7 +30,6 @@ import {
   FileCode,
   FileSpreadsheet,
   File,
-  Download,
   Eye,
   Film,
   Image as ImageIcon,
@@ -63,6 +63,19 @@ import { useAuth } from "@/lib/auth-state";
 import { useRealtime, emitRealtime } from "@/lib/realtime";
 import { cn, optimizeImageUrl } from "@/lib/utils";
 import { useAuthorizedMediaUrl } from "@/lib/media-access";
+import { MediaDownloadButton } from "@/components/social/MediaDownloadButton";
+import { fileNameFromUrl, extensionOf } from "@/lib/media-download";
+import { EmojiPicker } from "@/components/social/EmojiPicker";
+import { QUICK_REACTIONS, sanitizeReactionEmoji } from "@/lib/emojis";
+import {
+  MAX_MESSAGE_CHARS,
+  isMessageWithinLimit,
+  messageCharsOver,
+  messageCounterLabel,
+  messageLength,
+  messageLengthError,
+  shouldShowMessageCounter,
+} from "@/lib/message-length";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
 
@@ -312,14 +325,24 @@ function SafeVideoAttachment({ src }: { src: string }) {
   }
 
   return (
-    <video
-      src={playable}
-      controls
-      playsInline
-      preload="metadata"
-      onError={() => setHasError(true)}
-      className="max-h-72 w-full bg-black object-cover"
-    />
+    <div className="relative">
+      <video
+        src={playable}
+        controls
+        playsInline
+        preload="metadata"
+        onError={() => setHasError(true)}
+        className="max-h-72 w-full bg-black object-cover"
+      />
+      {/* Native video controls have no save button, and a long-press on a
+          private object cannot authorise itself, so offer the download here. */}
+      <MediaDownloadButton
+        url={src}
+        name={fileNameFromUrl(src) ?? "video.mp4"}
+        title="Download video"
+        className="absolute right-2 top-2 h-8 w-8 items-center justify-center rounded-lg bg-black/60 text-white hover:bg-black/80"
+      />
+    </div>
   );
 }
 
@@ -337,8 +360,34 @@ function AuthorizedImg({
   loading?: "lazy" | "eager";
   onClick?: React.MouseEventHandler<HTMLImageElement>;
 }) {
-  const { src: resolved, error } = useAuthorizedMediaUrl(src);
-  if (error || !resolved) return null;
+  const { src: resolved, error, loading: authorizing } = useAuthorizedMediaUrl(src);
+
+  // Returning null while the token was still being minted left a hole exactly
+  // the size of the photo, so a chat with pictures in it collapsed and then
+  // jumped. A placeholder keeps the bubble the right shape while it resolves.
+  if (authorizing) {
+    return (
+      <div
+        className={cn("min-h-[8rem] min-w-[12rem] animate-pulse bg-muted-foreground/15", className)}
+        role="status"
+        aria-label="Loading image"
+      />
+    );
+  }
+
+  if (error || !resolved) {
+    return (
+      <div className="flex h-32 w-56 flex-col items-center justify-center gap-1.5 rounded-lg border border-white/5 bg-neutral-950/60 p-4 text-center text-xs font-medium text-white/70 select-none">
+        <span className="text-[10px] uppercase tracking-wider font-bold text-rose-400">
+          Image Unavailable
+        </span>
+        <span className="text-[11px] leading-relaxed text-white/40">
+          {error ?? "This picture could not be loaded."}
+        </span>
+      </div>
+    );
+  }
+
   return <img src={resolved} alt={alt} loading={loading} className={className} onClick={onClick} />;
 }
 
@@ -358,13 +407,21 @@ function SafeAudioAttachment({ src }: { src: string }) {
   }
 
   return (
-    <audio
-      src={playable}
-      controls
-      preload="metadata"
-      onError={() => setHasError(true)}
-      className="my-1 w-56 max-w-full"
-    />
+    <div className="my-1 flex w-56 max-w-full items-center gap-1">
+      <audio
+        src={playable}
+        controls
+        preload="metadata"
+        onError={() => setHasError(true)}
+        className="min-w-0 flex-1"
+      />
+      <MediaDownloadButton
+        url={src}
+        name={fileNameFromUrl(src) ?? "audio"}
+        title="Download audio"
+        className="h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-foreground/5 text-foreground hover:bg-foreground/10"
+      />
+    </div>
   );
 }
 
@@ -398,10 +455,9 @@ function DocumentCardAttachment({ body, isMine }: { body: string; isMine: boolea
     ext = fileName.slice(dotIdx + 1).toLowerCase();
   }
 
-  // Downloads navigate, so they cannot attach a bearer header either; use the
-  // signed URL for private objects and the raw URL for everything else.
-  const { src: downloadUrl } = useAuthorizedMediaUrl(fileUrl);
-
+  // Downloads used to be a bare <a href={fileUrl} download>: the stored path is
+  // private, so the navigation reached the read proxy with no capability and got
+  // its fail-closed 404. Saving now mints access first (see MediaDownloadButton).
   const isPdf = ext === "pdf" || value.toLowerCase().includes(".pdf");
   const isCode = ["js", "ts", "py", "json", "html", "css", "cpp", "java", "sh", "md"].includes(ext);
   const isZip = ["zip", "rar", "7z", "tar", "gz"].includes(ext);
@@ -458,22 +514,17 @@ function DocumentCardAttachment({ body, isMine }: { body: string; isMine: boolea
       </div>
 
       <div className="flex items-center gap-1 shrink-0">
-        <a
-          href={downloadUrl || fileUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          download={fileName}
-          onClick={(e) => e.stopPropagation()}
+        <MediaDownloadButton
+          url={fileUrl}
+          name={fileName}
+          title="Download File"
           className={cn(
-            "flex h-8 w-8 items-center justify-center rounded-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer",
+            "flex h-8 w-8 items-center justify-center rounded-lg transition-transform hover:scale-105 active:scale-95",
             isMine
               ? "bg-white/20 hover:bg-white/30 text-white"
               : "bg-muted hover:bg-muted/80 text-foreground",
           )}
-          title="Download File"
-        >
-          <Download className="h-4 w-4" />
-        </a>
+        />
       </div>
     </div>
   );
@@ -618,6 +669,22 @@ function VoiceNotePlayer({ body, isMine }: { body: string; isMine: boolean }) {
           <span>{duration}s</span>
         </div>
       </div>
+
+      {/* A recording is the one attachment type people most want to keep, and the
+          fake animated bars give no way to save it. */}
+      {audioUrl && (
+        <MediaDownloadButton
+          url={audioUrl}
+          name={`voice-note.${extensionOf(fileNameFromUrl(audioUrl) ?? "") || "webm"}`}
+          title="Download voice note"
+          className={cn(
+            "h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+            isMine
+              ? "bg-white/20 text-white hover:bg-white/30"
+              : "bg-foreground/5 hover:bg-foreground/10",
+          )}
+        />
+      )}
     </div>
   );
 }
@@ -686,6 +753,10 @@ function MessagesPage() {
   // Attachment Popover and Lightbox state
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  // The composer's emoji panel, and the message id whose reaction is being
+  // chosen when the custom picker is open.
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [reactionFor, setReactionFor] = useState<string | null>(null);
 
   // Staged attachments: selecting a file ONLY queues it here with a local
   // preview; nothing is uploaded or sent until the user presses Send. This
@@ -749,6 +820,7 @@ function MessagesPage() {
 
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const draftInputRef = useRef<HTMLInputElement>(null);
   const now = useLiveNow();
 
   // Load conversations from backend (only once we know who is signed in)
@@ -1049,6 +1121,32 @@ function MessagesPage() {
   }
 
   /**
+   * Puts an emoji where the caret is, not at the end of the line.
+   *
+   * Appending is what people notice: type "see you ", pick 🙏, and the glyph
+   * lands after the next word you wrote instead of where you left off.
+   */
+  function insertDraftEmoji(emoji: string) {
+    const el = draftInputRef.current;
+    const before = draft;
+    const start = el?.selectionStart ?? before.length;
+    const end = el?.selectionEnd ?? before.length;
+    const next = `${before.slice(0, start)}${emoji}${before.slice(end)}`;
+    // The composer caps what you can type; a picker writing straight into state
+    // bypasses that, so it has to respect the same ceiling.
+    if (messageLength(next) > MAX_MESSAGE_CHARS) return;
+    setDraft(next);
+    notifyTyping();
+    const caret = start + emoji.length;
+    requestAnimationFrame(() => {
+      const input = draftInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(caret, caret);
+    });
+  }
+
+  /**
    * Saves a message to the backend. Threads started in the UI only exist
    * locally until the first message, so send to the person and adopt the real
    * thread id the backend hands back.
@@ -1098,6 +1196,12 @@ function MessagesPage() {
     const body = draft.trim();
     const staged = pendingAttachments;
     if (!body && staged.length === 0) return;
+    // Enter in the text field reaches here without the button's `disabled`, and
+    // the optimistic bubble would have been rendered before the write refused it.
+    if (!isMessageWithinLimit(body)) {
+      toast.error(messageLengthError(body) ?? "That message is too long.");
+      return;
+    }
 
     setSending(true);
     // Clear the composer up front so a second press can never double-send the
@@ -1801,7 +1905,7 @@ function MessagesPage() {
                               mine ? "order-first" : "order-last",
                             )}
                           >
-                            {["❤️", "🔥", "👏", "😂", "🎉", "💡"].map((emoji) => (
+                            {QUICK_REACTIONS.map((emoji) => (
                               <button
                                 key={emoji}
                                 type="button"
@@ -1812,6 +1916,18 @@ function MessagesPage() {
                                 {emoji}
                               </button>
                             ))}
+
+                            {/* The row cannot hold the whole set, but the database
+                                stores any emoji, so it should not be limited to ten. */}
+                            <button
+                              type="button"
+                              onClick={() => setReactionFor(m.id)}
+                              className="p-0.5 text-muted-foreground transition-colors hover:text-brand"
+                              title="Add a custom reaction"
+                              aria-label="Add a custom reaction"
+                            >
+                              <SmilePlus className="h-3.5 w-3.5" />
+                            </button>
 
                             {mine && (
                               <>
@@ -2039,12 +2155,12 @@ function MessagesPage() {
                       <Paperclip className="h-4 w-4" />
                     </button>
                     <input
+                      ref={draftInputRef}
                       value={draft}
                       onChange={(e) => {
                         setDraft(e.target.value);
                         notifyTyping();
                       }}
-
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
@@ -2054,6 +2170,20 @@ function MessagesPage() {
                       placeholder={`Message ${partner.display_name.split(" ")[0]}...`}
                       className="min-w-0 flex-1 bg-transparent text-xs sm:text-sm outline-none placeholder:text-muted-foreground"
                     />
+                    {/* Only appears as you run out of room. Typing past the cap is
+                        allowed on purpose — a hard maxLength silently eats a paste,
+                        and the number goes negative so the reason is visible. */}
+                    {shouldShowMessageCounter(draft) && (
+                      <span
+                        aria-label={`${messageCounterLabel(draft)} characters left in this message`}
+                        className={cn(
+                          "shrink-0 text-[10px] font-bold tabular-nums",
+                          messageCharsOver(draft) > 0 ? "text-rose-500" : "text-muted-foreground",
+                        )}
+                      >
+                        {messageCounterLabel(draft)}
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => startVoiceRecording()}
@@ -2062,16 +2192,46 @@ function MessagesPage() {
                     >
                       <Mic className="h-4 w-4" />
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setDraft((p) => p + " ✨")}
-                      className="rounded-full p-2 text-muted-foreground transition-colors hover:text-brand min-h-[36px] min-w-[36px] flex items-center justify-center shrink-0 cursor-pointer"
-                    >
-                      <Smile className="h-4 w-4" />
-                    </button>
+                    <div className="relative shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowEmoji((open) => !open);
+                          setShowAttachMenu(false);
+                        }}
+                        aria-expanded={showEmoji}
+                        title="Pick an emoji"
+                        className={cn(
+                          "rounded-full p-2 transition-colors min-h-[36px] min-w-[36px] flex items-center justify-center shrink-0 cursor-pointer",
+                          showEmoji
+                            ? "bg-brand/20 text-brand"
+                            : "text-muted-foreground hover:text-brand",
+                        )}
+                      >
+                        <Smile className="h-4 w-4" />
+                      </button>
+                      {showEmoji && (
+                        <EmojiPicker
+                          multiple
+                          label="Emoji"
+                          className="bottom-full right-0 mb-2"
+                          onPick={insertDraftEmoji}
+                          onClose={() => setShowEmoji(false)}
+                        />
+                      )}
+                    </div>
                     <button
                       onClick={send}
-                      disabled={(!draft.trim() && pendingAttachments.length === 0) || sending}
+                      disabled={
+                        (!draft.trim() && pendingAttachments.length === 0) ||
+                        sending ||
+                        !isMessageWithinLimit(draft)
+                      }
+                      title={
+                        isMessageWithinLimit(draft)
+                          ? "Send message"
+                          : `A message can be up to ${MAX_MESSAGE_CHARS} characters`
+                      }
                       aria-label="Send message"
                       className="grid h-9 w-9 min-w-[36px] place-items-center rounded-full bg-gradient-to-r from-brand to-brand-pink text-white transition-all duration-300 hover:shadow-glow disabled:opacity-40 active:scale-95 shrink-0 cursor-pointer"
                     >
@@ -2179,16 +2339,13 @@ function MessagesPage() {
               onClick={(e) => e.stopPropagation()}
             />
             <div className="mt-4 flex items-center gap-3">
-              <a
-                href={lightboxImage}
-                target="_blank"
-                rel="noopener noreferrer"
-                download="attachment"
-                onClick={(e) => e.stopPropagation()}
-                className="flex items-center gap-2 rounded-full bg-white/20 hover:bg-white/30 px-5 py-2 text-xs sm:text-sm font-bold text-white transition-all cursor-pointer"
-              >
-                <Download className="h-4 w-4" /> Download Full Resolution
-              </a>
+              <MediaDownloadButton
+                url={lightboxImage}
+                name={fileNameFromUrl(lightboxImage) ?? "photo.jpg"}
+                label="Download Full Resolution"
+                title="Download full resolution"
+                className="rounded-full bg-white/20 px-5 py-2 text-xs sm:text-sm text-white hover:bg-white/30"
+              />
             </div>
           </div>
         </div>
@@ -2196,6 +2353,29 @@ function MessagesPage() {
 
       {/* Conversation Info Modal */}
       <InfoModal isOpen={showInfo} onClose={() => setShowInfo(false)} type="Privacy" />
+
+      {/* Custom reaction picker. It lives at page level rather than inside the
+          bubble because the message list is its own scroll container, and a panel
+          anchored to a chat row gets clipped by it the moment you scroll. */}
+      {reactionFor && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm sm:items-center sm:p-4"
+          onClick={() => setReactionFor(null)}
+        >
+          <div onClick={(e) => e.stopPropagation()}>
+            <EmojiPicker
+              label="Add a reaction"
+              className="relative bottom-0 m-3 w-[20rem]"
+              onClose={() => setReactionFor(null)}
+              onPick={(emoji) => {
+                const target = reactionFor;
+                setReactionFor(null);
+                if (target) handleToggleReaction(target, sanitizeReactionEmoji(emoji));
+              }}
+            />
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }

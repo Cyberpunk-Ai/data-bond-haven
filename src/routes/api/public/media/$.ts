@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getStorageProvider } from "@/lib/storage/index.server";
 import { readRangeIntent } from "@/lib/media-range.server";
+import { contentDisposition, sanitizeFileName } from "@/lib/media-download";
 
 // `stories` moved from public to authed: the rows are already limited to the
 // author's follow network by RLS, and the bytes now enforce the same rule.
@@ -47,6 +48,12 @@ export const Route = createFileRoute("/api/public/media/$")({
         const raw = String((params as { _splat?: string })._splat ?? "");
         const path = raw.replace(/^\/+/, "");
         const folder = path.split("/")[0] ?? "";
+        const query = new URL(request.url).searchParams;
+        // `?dl=1` asks for the bytes as a file. `?name=` is the name the sender
+        // chose; the storage key is a randomised uuid that means nothing to the
+        // person saving it.
+        const asAttachment = query.get("dl") === "1";
+        const wantedName = query.get("name") ? sanitizeFileName(query.get("name")!, "") : "";
 
         if (!path || path.includes("..") || path.includes("\0")) {
           return new Response("Not found", { status: 404 });
@@ -68,7 +75,7 @@ export const Route = createFileRoute("/api/public/media/$")({
             import("@/lib/media-token.server"),
             import("@/lib/media-authz.server"),
           ]);
-          const tokenParam = new URL(request.url).searchParams.get("mt");
+          const tokenParam = query.get("mt");
           const tokenProfile = verifyMediaToken(path, tokenParam);
           if (!tokenProfile) {
             const { identityFromRequest } = await import("@/lib/identity.server");
@@ -85,7 +92,10 @@ export const Route = createFileRoute("/api/public/media/$")({
         // then travel from the CDN instead of through this server. Requires an
         // explicit MEDIA_PUBLIC_CDN=true, because a public bucket domain serves
         // the whole bucket, not just the folders the app treats as public.
-        if (isPublic && publicCdnEnabled() && provider.publicUrl) {
+        // A download must come from here even when a public CDN is configured:
+        // the bucket's own domain cannot be told to answer `attachment`, and a
+        // redirect to it is how "Download" ended up opening the image in a tab.
+        if (isPublic && !asAttachment && publicCdnEnabled() && provider.publicUrl) {
           const head = await provider.stat(path);
           const headType = (head?.contentType ?? "").split(";")[0].trim().toLowerCase();
           if (head && INLINE_CONTENT_TYPES.has(headType)) {
@@ -141,26 +151,26 @@ export const Route = createFileRoute("/api/public/media/$")({
           .split(";")[0]
           .trim()
           .toLowerCase();
-        const inline = INLINE_CONTENT_TYPES.has(rawType);
-        const filename = path.split("/").pop() ?? "media";
+        const inline = INLINE_CONTENT_TYPES.has(rawType) && !asAttachment;
+        const filename = wantedName || path.split("/").pop() || "media";
         const bytes = object.body;
         const total = object.totalSize || bytes.byteLength;
 
         // A private object must never be stored by a shared cache — and not
         // even by the browser for long: story/DM/recording access can be
-        // revoked (unfollow, delete) minutes after it was first viewed.
-        const cacheControl = !inline
-          ? "no-store"
-          : isPublic
-            ? "public, max-age=31536000, immutable"
-            : "no-store";
+        // revoked (unfollow, delete) minutes after it was first viewed. A
+        // download is private by definition, so it is never cached either.
+        const cacheControl =
+          !inline || asAttachment
+            ? "no-store"
+            : isPublic
+              ? "public, max-age=31536000, immutable"
+              : "no-store";
 
         const baseHeaders: Record<string, string> = {
           "Content-Type": inline ? rawType : "application/octet-stream",
           "X-Content-Type-Options": "nosniff",
-          "Content-Disposition": inline
-            ? `inline; filename="${filename}"`
-            : `attachment; filename="${filename}"`,
+          "Content-Disposition": contentDisposition(inline ? "inline" : "attachment", filename),
           "Cache-Control": cacheControl,
           "Accept-Ranges": "bytes",
         };
@@ -199,6 +209,11 @@ function publicCdnEnabled(): boolean {
   const value = process.env["MEDIA_PUBLIC_CDN"];
   return value === "true" || value === "1";
 }
+
+// The download name arrives from a chat message and lands in a response header,
+// so it is reduced to a basename with nothing quote- or header-breaking left in
+// it — see sanitizeFileName in src/lib/media-download.ts, which the browser uses
+// for the same value so a name cannot disagree with itself.
 
 // The per-folder read rules live in src/lib/media-authz.server.ts so that this
 // reader and the /api/media/token issuer cannot drift apart.

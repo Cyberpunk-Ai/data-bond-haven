@@ -1,6 +1,6 @@
 import { useCurrentUserId } from "@/hooks/useCurrentUserId";
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useState, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import {
   CalendarDays,
   Link2,
@@ -30,11 +30,12 @@ import { currentUser as defaultUser, getProfile, fetchProfile } from "@/lib/prof
 import { getProfileTabPosts } from "@/lib/profile.functions";
 import type { Post, Profile } from "@/lib/types";
 import {
-  getPostsPage,
+  getProfileTabPage,
   getCurrentUser,
   getUserProfile,
   toggleFollowUser,
   isFollowing as isFollowingUser,
+  type ProfileTabPage,
 } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
 import { useAuth } from "@/lib/auth-state";
@@ -75,6 +76,22 @@ export const Route = createFileRoute("/profile")({
 const ownTabs = ["Posts", "Replies", "Reposts", "Media", "Likes", "Analytics"] as const;
 const otherTabs = ["Posts", "Replies", "Reposts", "Media"] as const;
 
+/** Tabs that list posts, and the query each one means. */
+const POST_TABS: Record<string, ProfileTabPage> = {
+  Posts: "posts",
+  Reposts: "reposts",
+  Media: "media",
+  Likes: "likes",
+};
+
+interface ProfileReply {
+  commentId: string;
+  replyContent: string;
+  repliedAt: string;
+  /** The parent post is what makes a reply worth showing; without it there is no thread to link to. */
+  post?: { id: string; content?: string; user_id?: string };
+}
+
 function ProfilePage() {
   const navigate = useNavigate();
   const search = Route.useSearch();
@@ -99,7 +116,10 @@ function ProfilePage() {
 
   const [userProfile, setUserProfile] = useState<Profile>(resolvedProfile);
   const [tab, setTab] = useState<string>("Posts");
-  const [allPosts, setAllPosts] = useState<Post[]>([]);
+  const [authorId, setAuthorId] = useState<string | null>(null);
+  const [tabPosts, setTabPosts] = useState<Post[]>([]);
+  const [tabCursor, setTabCursor] = useState<string | null>(null);
+  const [postsTotal, setPostsTotal] = useState(0);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isTipModalOpen, setIsTipModalOpen] = useState(false);
   const [isFollowing, setIsFollowing] = useState(false);
@@ -107,13 +127,13 @@ function ProfilePage() {
   // Load-first so the posts area shows the skeleton on the initial paint
   // instead of flashing "Nothing in posts yet" before the fetch resolves.
   const [loading, setLoading] = useState(true);
-  const [replies, setReplies] = useState<any[]>([]);
+  const [replies, setReplies] = useState<ProfileReply[]>([]);
   const [repliesLoading, setRepliesLoading] = useState(false);
-  // Profile posts stream in one 20-post chunk at a time via the same cursor
-  // the feed uses; "Load more" walks older pages instead of re-fetching all.
-  const [postsCursor, setPostsCursor] = useState<string | null>(null);
-  const [loadingMorePosts, setLoadingMorePosts] = useState(false);
-  const authorIdRef = useRef<string | null>(null);
+  // Each tab streams one page at a time through its own cursor, so "Load more"
+  // walks older activity instead of re-fetching everything and filtering here.
+  const [loadingMore, setLoadingMore] = useState(false);
+  /** Bumped by realtime events to re-run the current tab's query. */
+  const [tabNonce, setTabNonce] = useState(0);
 
   useEffect(() => {
     setUserProfile(resolvedProfile);
@@ -126,12 +146,15 @@ function ProfilePage() {
     }
   }, [authUser, isMe]);
 
+  // Resolve who this page is about. The tab query is a separate effect: the two
+  // used to be one chain, so a tab switch re-resolved the profile and the first
+  // paint asked for posts before it knew whose they were.
   useEffect(() => {
+    let active = true;
     setLoading(true);
-    setPostsCursor(null);
-    authorIdRef.current = null;
-    // Resolve the profile first, then fetch only that author's posts instead of
-    // pulling the whole feed and filtering client-side.
+    setTabPosts([]);
+    setTabCursor(null);
+    setAuthorId(null);
     const profilePromise: Promise<string | null> = isMe
       ? getCurrentUser().then((res) => {
           if (res?.user) {
@@ -154,33 +177,54 @@ function ProfilePage() {
         : Promise.resolve(null);
 
     profilePromise
-      .then(async (authorId) => {
-        if (!authorId) return { posts: [], nextCursor: null };
-        authorIdRef.current = authorId;
-        return getPostsPage({ userId: authorId });
+      .then((id) => {
+        if (active && id && id !== "guest") setAuthorId(id);
       })
-      .then((page) => {
-        if (Array.isArray(page.posts)) {
-          setAllPosts(page.posts);
-          setPostsCursor(page.nextCursor);
-        }
-      })
-      .catch((err) => console.warn("Failed loading profile details:", err))
-      .finally(() => setLoading(false));
+      .catch((err) => console.warn("Failed loading profile details:", err));
+    return () => {
+      active = false;
+    };
   }, [isMe, targetId]);
 
-  async function loadMoreProfilePosts() {
-    const authorId = authorIdRef.current;
-    if (!authorId || !postsCursor || loadingMorePosts) return;
-    setLoadingMorePosts(true);
+  useEffect(() => {
+    const query = POST_TABS[tab];
+    if (!authorId || !query) return undefined;
+    let active = true;
+    setLoading(true);
+    getProfileTabPage({ profileId: authorId, tab: query })
+      .then((page) => {
+        if (!active) return;
+        setTabPosts(page.posts);
+        setTabCursor(page.nextCursor);
+        if (query === "posts") setPostsTotal(page.total);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setTabPosts([]);
+        setTabCursor(null);
+        console.warn("Failed loading profile tab:", err);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [authorId, tab, tabNonce]);
+
+  async function loadMoreTabPosts() {
+    const query = POST_TABS[tab];
+    if (!authorId || !query || !tabCursor || loadingMore) return;
+    setLoadingMore(true);
     try {
-      const page = await getPostsPage({ userId: authorId, before: postsCursor });
-      if (page.posts.length) setAllPosts((prev) => [...prev, ...page.posts]);
-      setPostsCursor(page.nextCursor);
+      const page = await getProfileTabPage({ profileId: authorId, tab: query, before: tabCursor });
+      setTabPosts((prev) => [...prev, ...page.posts]);
+      setTabCursor(page.nextCursor);
+      if (query === "posts") setPostsTotal(page.total);
     } catch {
-      setPostsCursor(null);
+      setTabCursor(null);
     } finally {
-      setLoadingMorePosts(false);
+      setLoadingMore(false);
     }
   }
 
@@ -188,16 +232,18 @@ function ProfilePage() {
   // made, joined to their parent post) rather than a client filter of the feed
   // page — the backend already supports it (getProfileTabPosts), the UI didn't.
   useEffect(() => {
-    if (tab !== "Replies" || !userProfile?.id || userProfile.id === "guest") return;
+    if (tab !== "Replies" || !authorId) return undefined;
     let active = true;
     setRepliesLoading(true);
-    getProfileTabPosts({ data: { profileId: userProfile.id, tab: "replies", limit: 30 } })
+    getProfileTabPosts({ data: { profileId: authorId, tab: "replies", limit: 30 } })
       .then(async (res) => {
-        const items = ((res as any)?.replies ?? []) as any[];
-        const authorIds = Array.from(
+        const items = (
+          ((res as unknown as { replies?: ProfileReply[] })?.replies ?? []) as ProfileReply[]
+        ).filter((r) => r.commentId && r.post?.id);
+        const parentAuthors = Array.from(
           new Set(items.map((r) => r.post?.user_id).filter(Boolean) as string[]),
         );
-        await Promise.all(authorIds.map((id) => fetchProfile(id).catch(() => null)));
+        await Promise.all(parentAuthors.map((id) => fetchProfile(id).catch(() => null)));
         if (active) setReplies(items);
       })
       .catch((err) => console.warn("Failed loading replies:", err))
@@ -207,7 +253,7 @@ function ProfilePage() {
     return () => {
       active = false;
     };
-  }, [tab, userProfile?.id]);
+  }, [tab, authorId, tabNonce]);
 
   const viewerId = useCurrentUserId();
   useEffect(() => {
@@ -226,13 +272,14 @@ function ProfilePage() {
       if (event.type === "user_profile_updated" && event.id === userProfile.id) {
         setUserProfile((prev) => ({ ...prev, ...event }));
       } else if (event.type === "new_post" && event.post) {
-        // Only surface new posts by this profile's author; otherwise the list and
-        // counts get polluted by everyone's posts while viewing a profile.
-        if (event.post.user_id === userProfile.id) {
-          setAllPosts((prev) => [event.post, ...prev]);
-        }
+        // Only react to this profile's own posts; everyone else's would pollute
+        // the list and the counts. Re-running the tab query rather than
+        // prepending is deliberate: whether the new post belongs in Media (or in
+        // Reposts/Likes at all) is the server's answer, not the client's.
+        if (event.post.user_id === userProfile.id) setTabNonce((n) => n + 1);
       } else if (event.type === "post_deleted" && event.postId) {
-        setAllPosts((prev) => prev.filter((p) => p.id !== event.postId));
+        setTabPosts((prev) => prev.filter((p) => p.id !== event.postId));
+        setReplies((prev) => prev.filter((r) => r.post?.id !== event.postId));
       }
     },
     ["user_profile_updated", "new_post", "post_deleted"],
@@ -285,27 +332,10 @@ function ProfilePage() {
 
   const tabs = isMe ? ownTabs : otherTabs;
 
-  const authorPosts = allPosts.filter((p) => p.user_id === userProfile.id);
-  const reposts = allPosts.filter(
-    (p) =>
-      p.repostedByMe ||
-      (p as any).reposted_by === userProfile.id ||
-      (p as any).repost_user_id === userProfile.id,
-  );
-  const media = allPosts.filter(
-    (p) => (p.image_gradient || p.image_url || p.media_url) && p.user_id === userProfile.id,
-  );
-  const liked = allPosts.filter((p) => p.likedByMe);
-  const list =
-    tab === "Posts"
-      ? authorPosts
-      : tab === "Reposts"
-        ? reposts
-        : tab === "Media"
-          ? media
-          : tab === "Likes" && isMe
-            ? liked
-            : authorPosts;
+  // The tab's rows come straight from the query that defines it. What used to
+  // live here was four client-side filters over one list of this author's
+  // posts, which could never find the posts *they* reposted or liked.
+  const list = tabPosts;
 
   return (
     <AppShell title={userProfile.display_name} right={<DefaultRail />}>
@@ -478,7 +508,7 @@ function ProfilePage() {
                   <span className="text-muted-foreground">Followers</span>
                 </span>
                 <span>
-                  <strong className="font-extrabold">{authorPosts.length}</strong>{" "}
+                  <strong className="font-extrabold">{compact(postsTotal)}</strong>{" "}
                   <span className="text-muted-foreground">Posts</span>
                 </span>
               </div>
@@ -529,8 +559,9 @@ function ProfilePage() {
               {repliesLoading && replies.length === 0 && <FeedSkeleton />}
               {!repliesLoading &&
                 replies.map((r) => {
-                  const parent = r.post ?? {};
-                  const parentAuthor = getProfile(parent.user_id);
+                  const parent = r.post;
+                  if (!parent) return null;
+                  const parentAuthor = getProfile(parent.user_id ?? "");
                   return (
                     <Panel key={r.commentId} className="space-y-2.5 p-4 sm:p-5">
                       <p className="whitespace-pre-wrap text-[0.95rem] leading-relaxed [overflow-wrap:anywhere]">
@@ -580,7 +611,7 @@ function ProfilePage() {
                   key={`${tab}-${p.id}`}
                   post={p}
                   index={i}
-                  onDeleted={(id) => setAllPosts((prev) => prev.filter((x) => x.id !== id))}
+                  onDeleted={(id) => setTabPosts((prev) => prev.filter((x) => x.id !== id))}
                 />
               ))}
               {list.length === 0 && (
@@ -594,16 +625,16 @@ function ProfilePage() {
                   </p>
                 </Panel>
               )}
-              {(tab === "Posts" || tab === "Media") && postsCursor && (
+              {POST_TABS[tab] && tabCursor && (
                 <div className="flex justify-center pt-1">
                   <button
                     type="button"
-                    disabled={loadingMorePosts}
-                    onClick={() => void loadMoreProfilePosts()}
+                    disabled={loadingMore}
+                    onClick={() => void loadMoreTabPosts()}
                     className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all active:scale-95 cursor-pointer disabled:opacity-60"
                   >
-                    <Loader2 className={cn("h-3.5 w-3.5", loadingMorePosts && "animate-spin")} />
-                    Load more posts
+                    <Loader2 className={cn("h-3.5 w-3.5", loadingMore && "animate-spin")} />
+                    Load more {tab.toLowerCase()}
                   </button>
                 </div>
               )}

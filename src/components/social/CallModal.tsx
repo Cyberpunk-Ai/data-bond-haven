@@ -1,26 +1,46 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Phone,
-  PhoneOff,
+  ChevronDown,
+  Maximize2,
+  MessageSquare,
   Mic,
   MicOff,
+  Minimize2,
+  Monitor,
+  MonitorOff,
+  PhoneOff,
+  PictureInPicture2,
+  Send,
+  Settings2,
+  Speaker,
   Video,
   VideoOff,
-  Sparkles,
   Volume2,
   VolumeX,
-  Monitor,
-  Heart,
-  Flame,
-  Laugh,
-  ThumbsUp,
-  MessageSquare,
-  Send,
   Wifi,
+  WifiOff,
+  X,
 } from "lucide-react";
+
 import { Avatar } from "@/components/social/Avatar";
 import { useCallSession } from "@/hooks/useCallSession";
-import { type Profile } from "@/lib/types";
+import {
+  CALL_CHAT_HISTORY,
+  CALL_REACTION_HISTORY,
+  MAX_CALL_CHAT_CHARS,
+  canRouteAudio,
+  formatCallDuration,
+  isNewEvent,
+  pickAudioOutput,
+  pushBounded,
+  readChatPayload,
+  readReactionPayload,
+  remotePaneContent,
+  sanitizeCallChat,
+  type RemotePaneContent,
+} from "@/lib/call-media";
+import { CALL_REACTIONS } from "@/lib/emojis";
+import type { Profile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -28,13 +48,56 @@ interface CallModalProps {
   partner: Profile | null;
   type: "audio" | "video";
   isOpen: boolean;
-  onClose: () => void;
+  /** Receives the connected duration so the call history stops recording 0s. */
+  onClose: (seconds: number) => void;
   /** Id of the call row; when present the call is a real connected call. */
   callId?: string | null;
   role?: "caller" | "callee";
   /** "ringing" until the other person picks up, then "active". */
   callStatus?: "ringing" | "active";
 }
+
+/**
+ * The call's seconds counter, on its own.
+ *
+ * A tick in the modal body re-rendered the whole sheet every second - both video
+ * panes, the chat list and the device picker - on a component whose only job is
+ * to keep two streams playing smoothly. Here the tick re-renders one <span>.
+ * The count still lives in `tickRef`, which is what `onClose` reports, so a
+ * call that minimises or re-renders never loses or double-counts seconds.
+ */
+function CallDuration({
+  running,
+  tickRef,
+  className,
+}: {
+  running: boolean;
+  tickRef: { current: number };
+  className?: string;
+}) {
+  const [seconds, setSeconds] = useState(tickRef.current);
+
+  useEffect(() => {
+    if (!running) return undefined;
+    // Adopt the shared counter on mount (this element re-mounts when the call is
+    // restored from the corner pill) instead of starting a second clock.
+    setSeconds(tickRef.current);
+    const timer = setInterval(() => {
+      tickRef.current += 1;
+      setSeconds(tickRef.current);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [running, tickRef]);
+
+  return <span className={className}>{formatCallDuration(seconds)}</span>;
+}
+
+const QUALITY_LABEL: Record<string, string> = {
+  good: "Strong",
+  fair: "Choppy",
+  poor: "Weak",
+  unknown: "",
+};
 
 export function CallModal({
   partner,
@@ -45,22 +108,31 @@ export function CallModal({
   role = "caller",
   callStatus = "active",
 }: CallModalProps) {
-  const [muted, setMuted] = useState(false);
-  const [videoOff, setVideoOff] = useState(type === "audio");
-  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
-  const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [showInCallChat, setShowInCallChat] = useState(false);
-  const [inCallNotes, setInCallNotes] = useState<string[]>([]);
+  const [minimized, setMinimized] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [showDevices, setShowDevices] = useState(false);
+  const [unread, setUnread] = useState(0);
+  const [messages, setMessages] = useState<
+    Array<{ id: string; text: string; mine: boolean; at: number }>
+  >([]);
   const [noteDraft, setNoteDraft] = useState("");
-  const [seconds, setSeconds] = useState(0);
   const [reactions, setReactions] = useState<Array<{ id: string; emoji: string; left: number }>>(
     [],
   );
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [outputId, setOutputId] = useState("");
+  const [volume, setVolume] = useState(1);
+  const [soundOn, setSoundOn] = useState(true);
+  const [soundBlocked, setSoundBlocked] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
-  const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const showChatRef = useRef(false);
+  /** Broadcast ids already applied — a duplicate must not render twice. */
+  const seenRef = useRef(new Set<string>());
+  const secondsRef = useRef(0);
 
   const session = useCallSession({
     callId,
@@ -70,57 +142,170 @@ export function CallModal({
   });
 
   const connected = session.connection === "connected";
+  const { peerMedia } = session;
 
-  // Timer starts once the two sides are actually connected.
+  // Closing the sheet resets the clock for the next call; the counter itself is
+  // owned by <CallDuration> so a tick cannot re-render the whole modal.
   useEffect(() => {
-    if (!isOpen || !connected) {
-      if (!isOpen) setSeconds(0);
-      return undefined;
-    }
-    const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
-    return () => clearInterval(timer);
-  }, [isOpen, connected]);
+    if (!isOpen) secondsRef.current = 0;
+  }, [isOpen]);
 
-  // Attach media streams to the elements.
-  useEffect(() => {
-    if (localVideoRef.current) localVideoRef.current.srcObject = session.localStream;
-    // Remember the *camera* track only — never the screen-share one, or ending
-    // a share would "restore" a dead display track.
-    cameraTrackRef.current =
-      session.localStream?.getVideoTracks().find((t) => !t.getSettings().displaySurface) ?? null;
-  }, [session.localStream]);
+  // ---- media elements -------------------------------------------------------------
+  // One audio path only. The remote <video> is muted and the hidden <audio> is
+  // the single thing that plays sound: both elements playing the same stream used
+  // to double the audio (and feed it straight back into the microphone), and it
+  // also meant the speaker button silenced nothing at all.
+  //
+  // The streams are attached through callback refs rather than an effect because
+  // the local tile swaps between the camera and the desktop, so a fresh element
+  // can mount with no effect scheduled to fill it — that is how a preview goes
+  // black after a screen share ends.
+  //
+  // Those refs are memoised. An inline arrow is a new function every render, and
+  // React then calls the old one with null and the new one with the node, so any
+  // re-render detached and re-attached both panes; and each only re-binds when the
+  // stream it holds actually changes identity.
+  const remoteStream = session.remoteStream;
+  const attachRemoteVideo = useCallback(
+    (el: HTMLVideoElement | null) => {
+      remoteVideoRef.current = el;
+      if (el && el.srcObject !== remoteStream) el.srcObject = remoteStream;
+    },
+    [remoteStream],
+  );
+
+  // One element for the self tile: your camera normally, your desktop while you
+  // share. Two sibling <video> nodes swapping meant a fresh decoder plus a replay
+  // of the tile's zoom-in animation on every share toggle.
+  const selfStream = session.sharing ? session.screenStream : session.localStream;
+  const attachSelfVideo = useCallback(
+    (el: HTMLVideoElement | null) => {
+      localVideoRef.current = el;
+      if (el && el.srcObject !== selfStream) el.srcObject = selfStream;
+    },
+    [selfStream],
+  );
 
   useEffect(() => {
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = session.remoteStream;
-    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = session.remoteStream;
+    const audio = remoteAudioRef.current;
+    if (!audio) return;
+    audio.srcObject = session.remoteStream;
+    if (!session.remoteStream) return;
+    let alive = true;
+    audio
+      .play()
+      .then(() => {
+        if (alive) setSoundBlocked(false);
+      })
+      .catch(() => {
+        // Autoplay policy, not a broken call: one tap on the banner unlocks it.
+        if (alive) setSoundBlocked(true);
+      });
+    return () => {
+      alive = false;
+    };
   }, [session.remoteStream]);
+
+  // Speaker / headphone routing. Falls back to silence when the browser has no
+  // say over the output device, rather than pretending to move the audio.
+  const activeSinkId = pickAudioOutput(devices, outputId || null);
+
+  useEffect(() => {
+    const audio = remoteAudioRef.current;
+    if (!audio) return;
+    audio.muted = !soundOn;
+    audio.volume = volume;
+    if (canRouteAudio(audio)) {
+      void audio.setSinkId(activeSinkId).catch(() => {
+        /* device unplugged mid-call; the OS default still plays */
+      });
+    }
+  }, [activeSinkId, volume, soundOn, session.remoteStream]);
+
+  // ---- device lists ---------------------------------------------------------------
+  useEffect(() => {
+    if (!isOpen || !navigator.mediaDevices?.enumerateDevices) return undefined;
+    let alive = true;
+    const list = () =>
+      navigator.mediaDevices
+        .enumerateDevices()
+        .then((found) => {
+          if (alive) setDevices(found);
+        })
+        .catch(() => undefined);
+    void list();
+    const onChange = () => void list();
+    navigator.mediaDevices.addEventListener?.("devicechange", onChange);
+    return () => {
+      alive = false;
+      navigator.mediaDevices.removeEventListener?.("devicechange", onChange);
+    };
+  }, [isOpen, session.localStream]);
+
+  /** A reaction is a two-second animation, whoever sent it. */
+  const showReaction = useCallback((id: string, emoji: string) => {
+    const left = Math.floor(Math.random() * 60) + 20;
+    setReactions((prev) => pushBounded(prev, { id, emoji, left }, CALL_REACTION_HISTORY));
+    setTimeout(() => setReactions((prev) => prev.filter((r) => r.id !== id)), 2400);
+  }, []);
+
+  // ---- in-call signals (chat + reactions) ----------------------------------------
+  // `onSignal` is a stable callback out of the hook; depending on `session` would
+  // resubscribe on every render, which is how a received message ends up twice.
+  const { onSignal } = session;
+  useEffect(() => {
+    const offChat = onSignal("chat", (payload) => {
+      const message = readChatPayload(payload);
+      if (!message || !isNewEvent(seenRef.current, message.id)) return;
+      setMessages((prev) =>
+        pushBounded(
+          prev,
+          { id: message.id, text: message.text, mine: false, at: Date.now() },
+          CALL_CHAT_HISTORY,
+        ),
+      );
+      // Read the open/closed state from a ref: setting one piece of state from
+      // inside another setter's updater double-counts under StrictMode.
+      if (!showChatRef.current) setUnread((n) => n + 1);
+    });
+    const offReaction = onSignal("reaction", (payload) => {
+      const reaction = readReactionPayload(payload);
+      if (!reaction || !isNewEvent(seenRef.current, reaction.id)) return;
+      showReaction(reaction.id, reaction.emoji);
+    });
+    return () => {
+      offChat();
+      offReaction();
+    };
+  }, [onSignal, showReaction]);
 
   useEffect(() => {
     if (session.mediaError) toast.error(session.mediaError);
   }, [session.mediaError]);
 
   useEffect(() => {
-    session.setMicEnabled(!muted);
-  }, [muted, session]);
+    showChatRef.current = showChat;
+  }, [showChat]);
 
   useEffect(() => {
-    session.setCameraEnabled(!videoOff);
-  }, [videoOff, session]);
+    if (showChat) {
+      setUnread(0);
+      chatEndRef.current?.scrollIntoView({ block: "end" });
+    }
+  }, [showChat, messages.length]);
 
+  // A screen share arriving mid-conversation is worth announcing; the pane label
+  // alone is easy to miss while you are looking at the chat.
+  const peerSharingRef = useRef(false);
+  const peerName = partner?.display_name ?? "";
   useEffect(() => {
-    if (remoteAudioRef.current) remoteAudioRef.current.muted = !isSpeakerOn;
-  }, [isSpeakerOn]);
-
-  const handleEndCall = () => {
-    session.hangUp();
-    onClose();
-  };
+    if (peerMedia.share && !peerSharingRef.current && peerName) {
+      toast.info(`${peerName} is sharing their screen`);
+    }
+    peerSharingRef.current = peerMedia.share;
+  }, [peerMedia.share, peerName]);
 
   if (!isOpen || !partner) return null;
-
-  const formattedTime = `${Math.floor(seconds / 60)
-    .toString()
-    .padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
 
   const statusLabel =
     callStatus === "ringing"
@@ -133,79 +318,121 @@ export function CallModal({
           ? "Connection lost"
           : "Connecting…";
 
-  const hasRemoteVideo = (session.remoteStream?.getVideoTracks().length ?? 0) > 0;
+  const pane: RemotePaneContent = remotePaneContent({
+    hasRemoteVideoTrack: session.remoteHasVideo,
+    cameraOn: peerMedia.camera,
+    sharing: peerMedia.share,
+    videoLive: session.remoteVideoLive,
+  });
+
+  const audioOutputs = devices.filter((d) => d.kind === "audiooutput");
+  const cameras = devices.filter((d) => d.kind === "videoinput");
+  const microphones = devices.filter((d) => d.kind === "audioinput");
+  const routingAvailable = canRouteAudio(remoteAudioRef.current) && audioOutputs.length > 1;
 
   function triggerReaction(emoji: string) {
-    const id = `react_${Date.now()}_${Math.random()}`;
-    const left = Math.floor(Math.random() * 60) + 20;
-    setReactions((prev) => [...prev, { id, emoji, left }]);
-    setTimeout(() => {
-      setReactions((prev) => prev.filter((r) => r.id !== id));
-    }, 2000);
+    const id = `r_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    if (!isNewEvent(seenRef.current, id)) return;
+    showReaction(id, emoji);
+    session.sendSignal("reaction", { id, emoji });
   }
 
-  async function handleToggleScreenShare() {
-    if (isScreenSharing) {
-      await session.replaceVideoTrack(cameraTrackRef.current);
-      setIsScreenSharing(false);
-      toast.info("Screen sharing ended");
-      return;
-    }
-    try {
-      if (!navigator.mediaDevices?.getDisplayMedia) {
-        toast.error("Screen sharing isn't supported in this browser.");
-        return;
-      }
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      const track = displayStream.getVideoTracks()[0];
-      if (!track) return;
-      await session.replaceVideoTrack(track);
-      setIsScreenSharing(true);
-      toast.success("Sharing your screen");
-      track.onended = () => {
-        void session.replaceVideoTrack(cameraTrackRef.current);
-        setIsScreenSharing(false);
-      };
-    } catch {
-      // user cancelled the picker
-    }
-  }
-
-  async function handleToggleVideo() {
-    if (!videoOff) {
-      // Stop sending frames but keep the track — flipping back on is instant
-      // and never renegotiates.
-      setVideoOff(true);
-      return;
-    }
-    // Voice call upgrade: grab the camera the first time video is wanted.
-    if (!cameraTrackRef.current && !session.localStream?.getVideoTracks().length) {
-      try {
-        const track = await session.startCamera();
-        if (!track) throw new Error("no camera track");
-        await session.replaceVideoTrack(track);
-        cameraTrackRef.current = track;
-      } catch {
-        toast.error("We couldn't reach your camera. Check your browser permissions.");
-        return;
-      }
-    }
-    setVideoOff(false);
-  }
-
-  function handleSendNote() {
-    if (!noteDraft.trim()) return;
-    setInCallNotes((prev) => [...prev, noteDraft.trim()]);
+  function sendNote() {
+    const text = sanitizeCallChat(noteDraft);
+    if (!text) return;
+    const id = `c_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    if (!isNewEvent(seenRef.current, id)) return;
+    setMessages((prev) =>
+      pushBounded(prev, { id, text, mine: true, at: Date.now() }, CALL_CHAT_HISTORY),
+    );
+    session.sendSignal("chat", { id, text });
     setNoteDraft("");
   }
 
+  async function toggleShare() {
+    if (session.sharing) {
+      await session.stopScreenShare();
+      toast.info("Stopped sharing your screen");
+      return;
+    }
+    const started = await session.startScreenShare();
+    if (started) toast.success("Sharing your screen — the other person sees it now");
+  }
+
+  function unlockSound() {
+    const audio = remoteAudioRef.current;
+    if (!audio) return;
+    setSoundBlocked(false);
+    void audio.play().catch(() => toast.error("Your browser is still blocking the call audio."));
+  }
+
+  function handleEndCall() {
+    session.hangUp();
+    onClose(secondsRef.current);
+  }
+
+  // A call you cannot see out of the way is a call you leave running. Minimising
+  // keeps this component (and therefore the peer connection, the timer and the
+  // unread chat) mounted, and swaps the sheet for a corner pill.
+  if (minimized) {
+    return (
+      <div className="fixed bottom-4 right-4 z-[60] flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/95 py-2 pl-2 pr-3 text-white shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-4">
+        <button
+          onClick={() => setMinimized(false)}
+          aria-label="Return to the call"
+          title="Return to the call"
+          className="relative cursor-pointer"
+        >
+          <Avatar
+            name={partner.display_name}
+            src={partner.avatar_url}
+            className="h-9 w-9 ring-2 ring-emerald-400/70"
+          />
+          {unread > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[10px] font-bold">
+              {unread > 9 ? "9+" : unread}
+            </span>
+          )}
+        </button>
+        <CallDuration
+          running={connected}
+          tickRef={secondsRef}
+          className="font-mono text-xs text-white/85"
+        />
+        <button
+          onClick={() => session.setMicEnabled(!session.micOn)}
+          aria-label={session.micOn ? "Mute microphone" : "Unmute microphone"}
+          className={cn(
+            "rounded-full p-1.5 transition-colors cursor-pointer",
+            session.micOn ? "text-white/80 hover:bg-white/10" : "bg-rose-500 text-white",
+          )}
+        >
+          {session.micOn ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
+        </button>
+        <button
+          onClick={handleEndCall}
+          aria-label="End call"
+          title="Hang up"
+          className="rounded-full bg-rose-600 p-1.5 text-white hover:bg-rose-700 transition-colors cursor-pointer"
+        >
+          <PhoneOff className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
+    <div
+      className={cn(
+        "fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200",
+        !isOpen && "hidden",
+      )}
+    >
       <div
-        className="glass-panel relative flex flex-col justify-between h-[85dvh] max-h-[640px] w-full max-w-md overflow-hidden rounded-3xl p-5 shadow-2xl bg-gradient-to-b from-slate-900 via-slate-950 to-black text-white border border-white/10"
+        className="glass-panel relative flex flex-col justify-between h-[85dvh] max-h-[680px] w-full max-w-md overflow-hidden rounded-3xl p-5 shadow-2xl bg-gradient-to-b from-slate-900 via-slate-950 to-black text-white border border-white/10"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Floating live reaction hearts/emojis */}
+        {/* Reactions float over the call for both people */}
         <div className="pointer-events-none absolute inset-0 z-40 overflow-hidden">
           {reactions.map((r) => (
             <span
@@ -218,25 +445,15 @@ export function CallModal({
           ))}
         </div>
 
-        {/* Remote audio always plays, even on an audio-only call */}
-        {session.remoteStream && (
-          <audio
-            ref={(el) => {
-              (remoteAudioRef as any).current = el;
-              if (el) el.srcObject = session.remoteStream;
-            }}
-            autoPlay
-            playsInline
-            className="hidden"
-          />
-        )}
+        {/* Remote audio: the only thing that plays sound in the call */}
+        <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
         {/* Top Header */}
-        <div className="flex items-center justify-between z-20">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-2 z-20">
+          <div className="flex min-w-0 items-center gap-2">
             <span
               className={cn(
-                "flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold border",
+                "flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold border",
                 connected
                   ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
                   : session.connection === "failed"
@@ -261,34 +478,116 @@ export function CallModal({
               </span>
               {statusLabel}
             </span>
-            <span className="flex items-center gap-1 text-[11px] text-white/85 bg-white/20 px-2 py-0.5 rounded-full">
-              <Wifi className="h-3 w-3 text-emerald-400" /> {type === "video" ? "Video" : "Audio"}
-            </span>
+            {session.quality !== "unknown" && (
+              <span
+                title={`Link quality: ${QUALITY_LABEL[session.quality]}`}
+                className={cn(
+                  "flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold",
+                  session.quality === "poor" ? "bg-rose-500/25 text-rose-200" : "bg-white/15",
+                )}
+              >
+                {session.quality === "poor" ? (
+                  <WifiOff className="h-3 w-3" />
+                ) : (
+                  <Wifi
+                    className={cn(
+                      "h-3 w-3",
+                      session.quality === "fair" ? "text-amber-300" : "text-emerald-400",
+                    )}
+                  />
+                )}
+                {QUALITY_LABEL[session.quality]}
+              </span>
+            )}
           </div>
-          <span className="font-mono text-xs font-semibold text-white/95 bg-white/20 px-2.5 py-1 rounded-full">
-            {formattedTime}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <CallDuration
+              running={connected}
+              tickRef={secondsRef}
+              className="font-mono text-xs font-semibold text-white/95 bg-white/20 px-2.5 py-1 rounded-full"
+            />
+            {connected && (
+              <button
+                onClick={() => setMinimized(true)}
+                aria-label="Minimise call"
+                title="Minimise — the call keeps running"
+                className="rounded-full bg-white/15 p-1.5 text-white/90 transition-colors hover:bg-white/25 cursor-pointer"
+              >
+                <Minimize2 className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Center Calling Area */}
-        <div className="my-auto relative flex flex-col items-center justify-center text-center w-full z-10">
-          {/* Remote video when the other person has their camera on */}
-          {type === "video" && hasRemoteVideo && session.remoteStream ? (
-            <div className="relative w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
-              <video
-                ref={(el) => {
-                  (remoteVideoRef as any).current = el;
-                  if (el) el.srcObject = session.remoteStream;
-                }}
-                autoPlay
-                playsInline
-                className="h-64 w-full object-cover"
-              />
-              <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-2 py-0.5 text-[10px] font-bold text-white/90">
-                {partner.display_name}
+        {/* Autoplay is a browser policy, not a broken call — say so once. */}
+        {soundBlocked && (
+          <button
+            onClick={unlockSound}
+            className="z-20 mt-3 flex items-center justify-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-xs font-bold text-black transition-transform hover:scale-[1.01] cursor-pointer"
+          >
+            <Volume2 className="h-4 w-4" /> Tap to enable sound
+          </button>
+        )}
+
+        {/* Center Call Area */}
+        <div className="my-auto relative flex flex-col items-center justify-center text-center w-full z-10 min-h-0">
+          {/* The remote <video> is mounted for the whole call and only hidden with
+              CSS when the avatar is showing. Unmounting it used to tear the element
+              down and build a new one each time the far side switched camera, share
+              or lens cover — a black card for a few hundred milliseconds, which is
+              exactly the flickering people reported. */}
+          <div
+            className={cn(
+              "relative w-full overflow-hidden rounded-2xl border border-white/10 bg-black",
+              pane === "avatar" && "hidden",
+            )}
+          >
+            <video
+              ref={attachRemoteVideo}
+              autoPlay
+              playsInline
+              muted
+              className="h-64 w-full bg-black object-contain"
+            />
+            <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md bg-black/65 px-2 py-0.5 text-[10px] font-bold text-white/90">
+              {pane === "screen" && <Monitor className="h-3 w-3 text-indigo-300" />}
+              {pane === "screen" ? `${partner.display_name}'s screen` : partner.display_name}
+            </span>
+            {type === "audio" && pane === "screen" && (
+              <span className="absolute top-2 right-2 rounded-md bg-indigo-600/90 px-2 py-0.5 text-[10px] font-bold">
+                Screen share
               </span>
-            </div>
-          ) : (
+            )}
+            <button
+              onClick={() => {
+                const el = remoteVideoRef.current;
+                if (!el) return;
+                if (document.pictureInPictureElement) void document.exitPictureInPicture();
+                else void el.requestPictureInPicture?.().catch(() => undefined);
+              }}
+              aria-label="Pop the video out"
+              title="Pop the video out (picture-in-picture)"
+              className="absolute top-2 left-2 rounded-md bg-black/60 p-1.5 text-white/90 hover:bg-black/80 transition-colors cursor-pointer"
+            >
+              <PictureInPicture2 className="h-3.5 w-3.5" />
+            </button>
+            {/* A shared slide or spreadsheet wants the whole screen. */}
+            <button
+              onClick={() => {
+                const host = remoteVideoRef.current?.parentElement;
+                if (!host) return;
+                if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+                else void host.requestFullscreen?.().catch(() => undefined);
+              }}
+              aria-label="Toggle fullscreen"
+              title="Fullscreen"
+              className="absolute top-2 right-2 rounded-md bg-black/60 p-1.5 text-white/90 hover:bg-black/80 transition-colors cursor-pointer"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {pane === "avatar" && (
             <div className="relative flex flex-col items-center">
               <div className="relative flex items-center justify-center">
                 <div className="absolute -inset-4 rounded-full bg-gradient-to-r from-brand/30 via-brand-pink/30 to-brand-orange/30 blur-xl animate-pulse" />
@@ -308,182 +607,344 @@ export function CallModal({
               <p className="text-xs text-white/85 mt-1">
                 @{partner.username} · {statusLabel}
               </p>
+              {peerMedia.muted && (
+                <p className="mt-2 rounded-full bg-white/15 px-2.5 py-0.5 text-[11px] font-semibold text-white/85">
+                  Their microphone is off
+                </p>
+              )}
             </div>
           )}
 
-          {/* Self Camera Inset (if video active) */}
-          {!videoOff && session.localStream && (
-            <div className="absolute right-2 bottom-0 w-28 h-36 rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl bg-black animate-in zoom-in duration-200">
+          {/* Self tile: the camera normally, your own desktop while sharing. One
+              element for both, so stopping a share does not rebuild the preview. */}
+          {(session.localStream || session.screenStream) && (
+            <div className="absolute right-2 -bottom-2 w-28 h-36 rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl bg-black animate-in zoom-in duration-200">
               <video
-                ref={(el) => {
-                  (localVideoRef as any).current = el;
-                  if (el) el.srcObject = session.localStream;
-                }}
+                ref={attachSelfVideo}
                 autoPlay
                 playsInline
                 muted
-                className="w-full h-full object-cover scale-x-[-1]"
+                className={cn(
+                  "h-full w-full object-cover",
+                  // Your desktop is not a selfie: a mirrored spreadsheet is unreadable.
+                  !session.sharing && "scale-x-[-1]",
+                )}
               />
               <span className="absolute bottom-1.5 left-1.5 text-[10px] font-bold bg-black/60 px-1.5 py-0.5 rounded-md text-white/90">
-                You
+                {session.sharing ? "Your screen" : "You"}
               </span>
+              {!session.sharing && !session.cameraOn && (
+                <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-slate-900/90 text-[10px] font-semibold text-white/70">
+                  <VideoOff className="h-5 w-5" /> Camera off
+                </span>
+              )}
             </div>
           )}
 
-          {/* In-Call Quick Notes/Chat Overlay */}
-          {showInCallChat && (
-            <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md rounded-2xl p-4 flex flex-col justify-between border border-white/10 animate-in fade-in">
-              <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                <span className="text-xs font-bold flex items-center gap-1.5">
-                  <MessageSquare className="h-3.5 w-3.5 text-brand" /> Quick In-Call Chat
+          {/* In-call chat: real messages over the call's private channel */}
+          {showChat && (
+            <div className="absolute inset-0 flex flex-col justify-between rounded-2xl border border-white/10 bg-slate-950/95 p-4 animate-in fade-in">
+              <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                <span className="flex items-center gap-1.5 text-xs font-bold">
+                  <MessageSquare className="h-3.5 w-3.5 text-brand" /> Chat with{" "}
+                  {partner.display_name}
                 </span>
                 <button
-                  onClick={() => setShowInCallChat(false)}
-                  className="text-xs text-white/85 hover:text-white"
+                  onClick={() => setShowChat(false)}
+                  className="text-xs text-white/70 hover:text-white cursor-pointer"
                 >
                   Close
                 </button>
               </div>
-              <div className="flex-1 overflow-y-auto space-y-2 py-2 text-left">
-                <div className="rounded-xl bg-white/20 p-2 text-xs">
-                  <p className="text-white/85 text-[10px]">@{partner.username}</p>
-                  <p>Audio is super clear!</p>
-                </div>
-                {inCallNotes.map((n, i) => (
-                  <div key={i} className="rounded-xl bg-brand/30 p-2 text-xs text-right">
-                    <p className="text-white/85 text-[10px]">You</p>
-                    <p>{n}</p>
-                  </div>
-                ))}
+              <div className="flex-1 space-y-2 overflow-y-auto py-2 text-left">
+                {messages.length === 0 ? (
+                  <p className="mt-6 text-center text-xs text-white/60">
+                    Say something — it reaches them while you're connected.
+                  </p>
+                ) : (
+                  messages.map((m) => (
+                    <div
+                      key={m.id}
+                      className={cn(
+                        "max-w-[85%] rounded-xl p-2 text-xs",
+                        m.mine ? "ml-auto bg-brand/40 text-right" : "bg-white/15",
+                      )}
+                    >
+                      <p className="text-[10px] text-white/70">
+                        {m.mine ? "You" : partner.username}
+                      </p>
+                      <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                    </div>
+                  ))
+                )}
               </div>
-              <div className="flex items-center gap-2 pt-2 border-t border-white/10">
+              <div className="flex items-center gap-2 border-t border-white/10 pt-2">
                 <input
                   type="text"
                   value={noteDraft}
+                  maxLength={MAX_CALL_CHAT_CHARS}
                   onChange={(e) => setNoteDraft(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSendNote()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      sendNote();
+                    }
+                  }}
                   placeholder="Type a message..."
-                  className="flex-1 bg-white/20 rounded-full px-3 py-1.5 text-xs text-white placeholder:text-white/70 outline-none"
+                  className="flex-1 rounded-full bg-white/15 px-3 py-1.5 text-xs text-white outline-none placeholder:text-white/50 focus:ring-2 focus:ring-brand/60"
                 />
-                <button onClick={handleSendNote} className="p-1.5 rounded-full bg-brand text-white">
+                <button
+                  onClick={sendNote}
+                  aria-label="Send message"
+                  className="rounded-full bg-brand p-1.5 text-white transition-transform active:scale-95 cursor-pointer"
+                >
                   <Send className="h-3.5 w-3.5" />
                 </button>
               </div>
+              <p className="pt-1 text-center text-[10px] text-white/45">
+                In-call messages aren't saved to your chat history.
+              </p>
+            </div>
+          )}
+
+          {/* Device picker */}
+          {showDevices && (
+            <div className="absolute inset-x-0 top-0 z-30 max-h-full overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/97 p-4 text-left animate-in fade-in">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-xs font-bold">
+                  <Settings2 className="h-3.5 w-3.5 text-brand" /> Devices
+                </span>
+                <button
+                  onClick={() => setShowDevices(false)}
+                  aria-label="Close device settings"
+                  className="rounded-full p-1 text-white/70 hover:bg-white/10 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <DeviceGroup
+                label="Microphone"
+                items={microphones.map((d) => ({
+                  id: d.deviceId,
+                  label: d.label || "Microphone",
+                  active: !d.deviceId,
+                }))}
+                emptyLabel="No other microphones"
+                onPick={(id) => {
+                  void session.switchMicrophone(id);
+                  toast.success("Microphone switched");
+                }}
+              />
+              <DeviceGroup
+                label="Camera"
+                items={cameras.map((d) => ({
+                  id: d.deviceId,
+                  label: d.label || "Camera",
+                  active: !d.deviceId,
+                }))}
+                emptyLabel="No other cameras"
+                onPick={(id) => {
+                  void session.switchCamera(id);
+                  toast.success("Camera switched");
+                }}
+              />
+              <DeviceGroup
+                label="Speaker"
+                items={audioOutputs.map((d) => ({
+                  id: d.deviceId,
+                  label: d.label || (d.deviceId ? "Audio device" : "System default"),
+                  active: activeSinkId === d.deviceId,
+                }))}
+                emptyLabel="This browser routes audio for you — use the system control"
+                onPick={(id) => {
+                  setOutputId(id);
+                  setSoundOn(true);
+                  toast.success("Audio output changed");
+                }}
+              />
+
+              <label className="mt-3 block text-[11px] font-semibold text-white/70">
+                Call volume
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={volume}
+                  onChange={(e) => {
+                    setVolume(Number(e.target.value));
+                    setSoundOn(Number(e.target.value) > 0);
+                  }}
+                  className="mt-1 w-full accent-brand"
+                />
+              </label>
             </div>
           )}
         </div>
 
         {/* Quick Reactions Bar */}
-        <div className="flex items-center justify-center gap-2 py-2 border-t border-white/10 z-20">
-          {[
-            { emoji: "❤️", icon: Heart },
-            { emoji: "🔥", icon: Flame },
-            { emoji: "👏", label: "Clap" },
-            { emoji: "😂", icon: Laugh },
-            { emoji: "👍", icon: ThumbsUp },
-          ].map((item, idx) => (
+        <div className="z-20 flex items-center justify-center gap-2 border-t border-white/10 py-2">
+          {CALL_REACTIONS.map((emoji) => (
             <button
-              key={idx}
-              onClick={() => triggerReaction(item.emoji)}
-              className="rounded-full bg-white/20 hover:bg-white/20 p-2 text-base transition-transform active:scale-125 cursor-pointer"
-              title={`Send ${item.emoji}`}
+              key={emoji}
+              onClick={() => triggerReaction(emoji)}
+              className="cursor-pointer rounded-full bg-white/15 p-2 text-base transition-transform hover:bg-white/25 active:scale-125"
+              title={`Send ${emoji}`}
             >
-              {item.emoji}
+              {emoji}
             </button>
           ))}
         </div>
 
-        {/* Bottom Call Controls */}
-        <div className="flex items-center justify-center gap-3 pt-3 border-t border-white/10 z-20">
-          {/* Mute Mic */}
-          <button
-            onClick={() => setMuted(!muted)}
-            aria-label={muted ? "Unmute microphone" : "Mute microphone"}
-            className={cn(
-              "rounded-full p-3.5 backdrop-blur-md transition-all active:scale-95 shadow-md cursor-pointer",
-              muted
-                ? "bg-rose-500 text-white"
-                : "bg-white/25 text-white ring-1 ring-white/40 hover:bg-white/40",
-            )}
-            title={muted ? "Unmute" : "Mute"}
+        {/* Call Controls */}
+        <div className="z-20 flex items-center justify-center gap-2 border-t border-white/10 pt-3">
+          <ControlButton
+            label={session.micOn ? "Mute microphone" : "Unmute microphone"}
+            hint={session.micOn ? "Mute" : "Unmute"}
+            danger={!session.micOn}
+            onClick={() => session.setMicEnabled(!session.micOn)}
           >
-            {muted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
-          </button>
+            {session.micOn ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
+          </ControlButton>
 
-          {/* Toggle Video */}
-          <button
-            onClick={handleToggleVideo}
-            aria-label={videoOff ? "Turn on camera" : "Turn off camera"}
-            className={cn(
-              "rounded-full p-3.5 backdrop-blur-md transition-all active:scale-95 shadow-md cursor-pointer",
-              videoOff
-                ? "bg-rose-500 text-white"
-                : "bg-white/25 text-white ring-1 ring-white/40 hover:bg-white/40",
-            )}
-            title={videoOff ? "Turn on video" : "Turn off video"}
+          <ControlButton
+            label={session.cameraOn ? "Turn off camera" : "Turn on camera"}
+            hint={session.cameraOn ? "Video" : "No video"}
+            danger={!session.cameraOn && !session.sharing}
+            onClick={() => void session.setCameraEnabled(!session.cameraOn)}
           >
-            {videoOff ? <VideoOff className="h-6 w-6" /> : <Video className="h-6 w-6" />}
-          </button>
+            {session.cameraOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+          </ControlButton>
 
-          {/* Screen Share */}
-          <button
-            onClick={handleToggleScreenShare}
-            aria-label="Share screen"
-            className={cn(
-              "rounded-full p-3.5 backdrop-blur-md transition-all active:scale-95 shadow-md cursor-pointer",
-              isScreenSharing
-                ? "bg-indigo-600 text-white"
-                : "bg-white/25 text-white ring-1 ring-white/40 hover:bg-white/40",
-            )}
-            title={isScreenSharing ? "Stop sharing" : "Share screen"}
+          <ControlButton
+            label={session.sharing ? "Stop sharing screen" : "Share your screen"}
+            hint={session.sharing ? "Stop share" : "Share"}
+            active={session.sharing}
+            onClick={() => void toggleShare()}
           >
-            <Monitor className="h-6 w-6" />
-          </button>
+            {session.sharing ? <Monitor className="h-5 w-5" /> : <MonitorOff className="h-5 w-5" />}
+          </ControlButton>
 
-          {/* Chat Toggle */}
-          <button
-            onClick={() => setShowInCallChat(!showInCallChat)}
-            aria-label="Open in-call chat"
-            className={cn(
-              "rounded-full p-3.5 backdrop-blur-md transition-all active:scale-95 shadow-md cursor-pointer",
-              showInCallChat
-                ? "bg-brand text-white"
-                : "bg-white/25 text-white ring-1 ring-white/40 hover:bg-white/40",
-            )}
-            title="In-call chat"
+          <ControlButton
+            label="Open in-call chat"
+            hint="Chat"
+            active={showChat}
+            badge={unread}
+            onClick={() => setShowChat((open) => !open)}
           >
-            <MessageSquare className="h-6 w-6" />
-          </button>
+            <MessageSquare className="h-5 w-5" />
+          </ControlButton>
 
-          {/* Speaker Toggle */}
-          <button
-            onClick={() => {
-              setIsSpeakerOn(!isSpeakerOn);
-              toast(isSpeakerOn ? "Audio routed to earpiece" : "Speakerphone enabled");
-            }}
-            aria-label="Toggle speaker"
-            className={cn(
-              "rounded-full p-3.5 backdrop-blur-md transition-all active:scale-95 shadow-md cursor-pointer",
-              !isSpeakerOn
-                ? "bg-amber-500 text-white"
-                : "bg-white/25 text-white ring-1 ring-white/40 hover:bg-white/40",
-            )}
-            title={isSpeakerOn ? "Speaker ON" : "Speaker OFF"}
+          <ControlButton
+            label={soundOn ? "Silence the call" : "Unsilence the call"}
+            hint={soundOn ? (routingAvailable ? "Speaker" : "Sound on") : "Silenced"}
+            danger={!soundOn}
+            onClick={() => setSoundOn((on) => !on)}
           >
-            {isSpeakerOn ? <Volume2 className="h-6 w-6" /> : <VolumeX className="h-6 w-6" />}
-          </button>
+            {soundOn ? <Speaker className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
+          </ControlButton>
 
-          {/* End Call */}
+          <ControlButton
+            label="Device settings"
+            hint="Devices"
+            active={showDevices}
+            onClick={() => setShowDevices((open) => !open)}
+          >
+            <Settings2 className="h-5 w-5" />
+          </ControlButton>
+
           <button
             onClick={handleEndCall}
             aria-label="End call"
-            className="rounded-full bg-rose-600 hover:bg-rose-700 p-3.5 text-white transition-all active:scale-95 shadow-lg shadow-rose-600/40 cursor-pointer"
             title="Hang up"
+            className="rounded-full bg-rose-600 p-3.5 text-white shadow-lg shadow-rose-600/40 transition-all hover:bg-rose-700 active:scale-95 cursor-pointer"
           >
             <PhoneOff className="h-6 w-6" />
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ControlButton({
+  children,
+  label,
+  hint,
+  onClick,
+  active,
+  danger,
+  badge,
+}: {
+  children: ReactNode;
+  label: string;
+  hint: string;
+  onClick: () => void;
+  active?: boolean;
+  danger?: boolean;
+  badge?: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full backdrop-blur-md transition-all active:scale-95 cursor-pointer",
+        danger
+          ? "bg-rose-500 text-white"
+          : active
+            ? "bg-indigo-600 text-white ring-1 ring-indigo-300/50"
+            : "bg-white/20 text-white ring-1 ring-white/30 hover:bg-white/30",
+      )}
+    >
+      {children}
+      {badge ? (
+        <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[10px] font-bold text-white">
+          {badge > 9 ? "9+" : badge}
+        </span>
+      ) : null}
+      <span className="sr-only">{hint}</span>
+    </button>
+  );
+}
+
+function DeviceGroup({
+  label,
+  items,
+  emptyLabel,
+  onPick,
+}: {
+  label: string;
+  items: Array<{ id: string; label: string; active: boolean }>;
+  emptyLabel: string;
+  onPick: (id: string) => void;
+}) {
+  return (
+    <div className="mb-3">
+      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-white/50">
+        {label}
+      </p>
+      {items.length === 0 ? (
+        <p className="text-[11px] text-white/45">{emptyLabel}</p>
+      ) : (
+        <div className="space-y-1">
+          {items.map((item) => (
+            <button
+              key={item.id || item.label}
+              onClick={() => onPick(item.id)}
+              className={cn(
+                "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer",
+                item.active ? "bg-white/20 font-semibold text-white" : "bg-white/5 text-white/80",
+              )}
+            >
+              <span className="truncate">{item.label}</span>
+              {item.active && <ChevronDown className="h-3.5 w-3.5 -rotate-90 opacity-70" />}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

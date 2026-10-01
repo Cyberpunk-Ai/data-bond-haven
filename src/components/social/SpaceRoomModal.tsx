@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import type { CSSProperties } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   Mic,
@@ -53,7 +54,29 @@ import {
   removeSpaceParticipant,
   deleteSpaceRecording,
   uploadMedia,
+  sendSpaceReaction,
 } from "@/lib/api-client";
+import { timeAgo, usd } from "@/lib/formatters";
+import { SPACE_REACTIONS } from "@/lib/emojis";
+import { isNewEvent } from "@/lib/call-media";
+import {
+  REACTION_MEMORY,
+  applyReactions,
+  canTapReaction,
+  dismissTipAlert,
+  emptyReactionLayer,
+  nextTipAlertDelay,
+  pruneReactionLayer,
+  pruneTipAlerts,
+  pushTipAlert,
+  readReactionPayload,
+  readTipAlert,
+  reactionFor,
+  reactionId,
+  sortedTally,
+  tipSparkles,
+} from "@/lib/space-reactions";
+import type { FloatingReaction, ReactionLayer, TipAlert } from "@/lib/space-reactions";
 import { appConfig } from "@/lib/config";
 import { useAuthorizedMediaUrl } from "@/lib/media-access";
 import { friendlyError } from "@/lib/error-messages";
@@ -84,15 +107,6 @@ interface ChatMessage {
   userId: string;
   body: string;
   timestamp: string;
-  isTip?: boolean;
-  tipAmount?: number;
-}
-
-interface LiveTipAlert {
-  id: string;
-  senderName: string;
-  amount: number;
-  message?: string;
 }
 
 export function SpaceRoomModal({ space, isOpen, onClose }: SpaceRoomModalProps) {
@@ -131,10 +145,15 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   const [handRaised, setHandRaised] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [summary, setSummary] = useState<{ summary: string; keyTakeaways: string[] } | null>(null);
-  const [floatingReactions, setFloatingReactions] = useState<
-    { id: string; emoji: string; left: number }[]
-  >([]);
-  const [activeTipAlert, setActiveTipAlert] = useState<LiveTipAlert | null>(null);
+  // The room's celebration layer. Reactions are shared: a tap is broadcast and
+  // arrives back as an event, so every member sees the same emoji in the same
+  // place. Tip banners queue instead of overwriting one another.
+  const [reactionLayer, setReactionLayer] = useState<ReactionLayer>(emptyReactionLayer);
+  const [tipAlerts, setTipAlerts] = useState<TipAlert[]>([]);
+  // Event ids already applied. A Set in a ref because it is an identity, not
+  // render data — copying three hundred of them per sparkle would be waste.
+  const eventIdsRef = useRef(new Set<string>());
+  const lastTapAtRef = useRef(0);
   const [isRecordingSpace, setIsRecordingSpace] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [showEndConfirmation, setShowEndConfirmation] = useState(false);
@@ -186,6 +205,10 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   // Load the room from the backend: who is here and what has been said.
   useEffect(() => {
     let cancelled = false;
+    // Captured for the cleanup below. The dedupe set is created once per room,
+    // so this is the same object either way — but teardown should not have to
+    // trust what a ref points at by then.
+    const appliedEvents = eventIdsRef.current;
 
     void (async () => {
       type RoomParticipant = {
@@ -282,9 +305,50 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
 
     return () => {
       cancelled = true;
+      // One room's celebration must not follow you into the next one.
+      appliedEvents.clear();
+      lastTapAtRef.current = 0;
+      setReactionLayer(emptyReactionLayer());
+      setTipAlerts([]);
       leaveSpace(space.id).catch(() => {});
     };
   }, [space.id]);
+
+  /** Put floaters on this screen. Everything the room should see arrives as an event. */
+  const showFloats = (floats: FloatingReaction[]) => {
+    if (floats.length === 0) return;
+    const at = Date.now();
+    setReactionLayer((layer) => applyReactions(layer, eventIdsRef.current, floats, at));
+  };
+
+  /**
+   * Tap a glyph: broadcast it, and let the broadcast render it.
+   *
+   * `emitRealtime` hands the sender their own event back, so this is the only
+   * place a tap enters the layer — one path, and the person who tapped sees what
+   * the room sees. Held-down buttons are throttled rather than queued; silence
+   * is kinder here than a toast for every dropped tap.
+   */
+  const sendReaction = (emoji: string) => {
+    const at = Date.now();
+    if (!canTapReaction(lastTapAtRef.current, at)) return;
+    lastTapAtRef.current = at;
+    sendSpaceReaction(space.id, emoji, {
+      id: reactionId(currentUser.id, at, Math.random().toString(36).slice(2, 8)),
+    });
+  };
+
+  /** Best available name for a tip's sender, most trustworthy evidence first. */
+  function tipSenderName(raw: unknown): string {
+    const p = raw as { sender_name?: unknown; sender_id?: unknown } | null;
+    const fromEvent = typeof p?.sender_name === "string" ? p.sender_name.trim() : "";
+    if (fromEvent) return fromEvent;
+    const id = typeof p?.sender_id === "string" ? p.sender_id : "";
+    if (!id) return "";
+    const name = getProfile(id).display_name?.trim() ?? "";
+    // A cache miss returns the id itself as the name, which is not a name.
+    return name && name !== id ? name : "";
+  }
 
   // Real-time events
   useRealtime(
@@ -316,34 +380,34 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                     id: msg.id || `msg_${Date.now()}`,
                     userId: msg.userId || msg.user_id,
                     body: msg.body || msg.content,
-                    timestamp: "Just now",
+                    timestamp: new Date().toISOString(),
                   },
                 ],
           );
         }
+      } else if (event.type === "space:reaction") {
+        // Someone in this room tapped a glyph. The payload came over the wire,
+        // so it is validated before it is rendered and deduped by its id.
+        const tap = readReactionPayload(event);
+        if (tap) showFloats([reactionFor(tap.id, tap.emoji, Date.now())]);
       } else if (event.type === "space:tip" || event.type === "space_tip") {
-        const tip = event.tip || event.data;
-        if (tip) {
-          setActiveTipAlert({
-            id: tip.id || `tip_${Date.now()}`,
-            senderName: tip.sender_name || "A listener",
-            amount: tip.amount || 5,
-            message: tip.message,
-          });
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `tip_msg_${Date.now()}`,
-              userId: tip.sender_id || "u_tip",
-              body: `🎉 Tipped $${(tip.amount || 0).toFixed(2)}${tip.message ? `: “${tip.message}”` : " to the stage!"}`,
-              timestamp: "Just now",
-              isTip: true,
-              tipAmount: tip.amount,
-            },
-          ]);
-          triggerReaction("💰");
-          setTimeout(() => setActiveTipAlert(null), 6000);
-        }
+        // A settled tip: the banner and a short burst of bags, and nothing
+        // invented. The amount used to default to $5 when an event arrived
+        // without one, which put money on the screen nobody had paid.
+        //
+        // There is no chat row here on purpose. The line the room keeps comes
+        // from the database (`announceSpaceTip` writes an ordinary message), so
+        // it survives a refresh, obeys access rules, and reaches members whose
+        // broadcast socket missed this event. Adding one here drew the same tip
+        // twice for everyone who was watching.
+        const raw = event.tip || event.data;
+        const at = Date.now();
+        const alert = readTipAlert(raw, { at, senderName: tipSenderName(raw) });
+        if (!alert) return;
+        // The same tip reaching us twice must not ping twice.
+        if (!isNewEvent(eventIdsRef.current, `tip_${alert.id}`, REACTION_MEMORY)) return;
+        setTipAlerts((list) => pushTipAlert(list, alert));
+        showFloats(tipSparkles(alert.id, at));
       } else if (event.type === "space:speaking" || event.type === "speaking_state") {
         const data = event.data || event;
         if (data && data.userId) {
@@ -478,6 +542,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       "space:joined",
       "space:left",
       "space:tip",
+      "space:reaction",
       "space:recording",
       "space:recording-deleted",
       "space:removed",
@@ -488,17 +553,29 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
-  const triggerReaction = (emoji: string) => {
-    const newReaction = {
-      id: Math.random().toString(),
-      emoji,
-      left: Math.floor(Math.random() * 70) + 15,
-    };
-    setFloatingReactions((prev) => [...prev, newReaction]);
-    setTimeout(() => {
-      setFloatingReactions((prev) => prev.filter((r) => r.id !== newReaction.id));
-    }, 2000);
-  };
+  // Floaters are animations with an end, not state that outlives them: once the
+  // arc is over they leave the DOM. The interval exists only while something is
+  // on screen, so an idle room costs nothing.
+  useEffect(() => {
+    if (reactionLayer.visible.length === 0) return;
+    const timer = setInterval(() => {
+      setReactionLayer((layer) => pruneReactionLayer(layer, Date.now()));
+    }, 400);
+    return () => clearInterval(timer);
+  }, [reactionLayer.visible.length]);
+
+  // One timer for the whole stack of tip banners, re-armed whenever the stack
+  // changes. A timeout per tip is what used to dismiss a banner that had already
+  // been replaced — and kept running after the room closed.
+  useEffect(() => {
+    const delay = nextTipAlertDelay(tipAlerts, Date.now());
+    if (delay === null) return;
+    const timer = setTimeout(() => {
+      const at = Date.now();
+      setTipAlerts((list) => pruneTipAlerts(list, at));
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [tipAlerts]);
 
   /** Host-only: wipe the saved replay (row fields + storage bytes). */
   async function handleDeleteRecording() {
@@ -744,6 +821,8 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
 
   const speakers = participants.filter((p) => p.role === "host" || p.role === "speaker");
   const listeners = participants.filter((p) => p.role === "listener");
+  // The current burst, busiest glyph first, so a room can see how it is going.
+  const burst = sortedTally(reactionLayer.tally, Date.now());
   const myRole =
     participants.find((p) => p.id === currentUser.id)?.role ??
     (isCurrentUserHost ? "host" : "listener");
@@ -774,6 +853,30 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           className="glass-panel relative flex flex-col h-[95dvh] sm:h-[90dvh] max-h-[750px] w-full max-w-2xl overflow-hidden rounded-2xl sm:rounded-3xl border border-border/80 bg-card/95 shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
+          {/*
+           * The celebration layer: reactions from everybody in the room, plus the
+           * money bags a settled tip throws up. It spans the card rather than the
+           * scroll area, so a tap is visible whatever tab you are on, and it is
+           * `aria-hidden` because an emoji that floats past is not an announcement.
+           */}
+          <div aria-hidden className="pointer-events-none absolute inset-0 z-30 overflow-hidden">
+            {reactionLayer.visible.map((r) => (
+              <span
+                key={r.id}
+                style={
+                  {
+                    left: `${r.left}%`,
+                    animationDuration: `${r.duration}ms`,
+                    "--reaction-rise": `${r.rise}px`,
+                    "--reaction-sway": `${r.sway}px`,
+                  } as CSSProperties
+                }
+                className="absolute bottom-3 select-none text-2xl sm:text-3xl animate-reaction-rise will-change-transform"
+              >
+                {r.emoji}
+              </span>
+            ))}
+          </div>
           {/* Top Header */}
           <div className="flex items-center justify-between border-b border-border/60 p-3 sm:p-4 gap-2">
             <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
@@ -843,30 +946,43 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
             </div>
           </div>
 
-          {/* Live Tip Banner Alert */}
-          {activeTipAlert && (
-            <div className="mx-4 sm:mx-6 mt-2 rounded-2xl bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-amber-500/20 border border-amber-500/40 p-2.5 sm:p-3 text-xs text-foreground flex items-center justify-between shadow-lg animate-in slide-in-from-top duration-300">
-              <div className="flex items-center gap-2">
-                <span className="p-1.5 rounded-full bg-amber-500 text-white font-bold">
-                  <DollarSign className="h-3.5 w-3.5" />
-                </span>
-                <div>
-                  <span className="font-bold text-amber-600 dark:text-amber-400">
-                    {activeTipAlert.senderName} tipped ${activeTipAlert.amount.toFixed(2)}!
-                  </span>
-                  {activeTipAlert.message && (
-                    <p className="text-[11px] text-muted-foreground italic truncate max-w-xs">
-                      “{activeTipAlert.message}”
-                    </p>
-                  )}
+          {/*
+           * Settled tips. A stack, newest at the bottom, each with its own life:
+           * one banner used to replace the one before it mid-announcement, so a
+           * run of tips looked like a single larger one.
+           */}
+          {tipAlerts.length > 0 && (
+            <div role="status" aria-live="polite" className="mx-4 sm:mx-6 mt-2 space-y-1.5">
+              {tipAlerts.map((t) => (
+                <div
+                  key={t.id}
+                  className="flex items-center justify-between gap-2 rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-amber-500/20 p-2.5 sm:p-3 text-xs text-foreground shadow-lg animate-tip-banner"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="shrink-0 rounded-full bg-amber-500 p-1.5 font-bold text-white">
+                      <DollarSign className="h-3.5 w-3.5" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-amber-600 dark:text-amber-400">
+                        {t.senderName} tipped {usd(t.amount)}
+                      </p>
+                      {t.message && (
+                        <p className="truncate text-[11px] italic text-muted-foreground">
+                          “{t.message}”
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTipAlerts((list) => dismissTipAlert(list, t.id))}
+                    aria-label="Dismiss this tip"
+                    className="shrink-0 cursor-pointer p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
-              </div>
-              <button
-                onClick={() => setActiveTipAlert(null)}
-                className="text-muted-foreground hover:text-foreground p-1"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+              ))}
             </div>
           )}
 
@@ -970,17 +1086,6 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
 
           {/* Main Content Area */}
           <div className="relative flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 [scrollbar-width:thin]">
-            {/* Floating Live Reactions */}
-            {floatingReactions.map((r) => (
-              <div
-                key={r.id}
-                style={{ left: `${r.left}%` }}
-                className="pointer-events-none absolute bottom-4 z-50 text-2xl animate-in fade-in slide-in-from-bottom-6 duration-1000 select-none animate-bounce"
-              >
-                {r.emoji}
-              </div>
-            ))}
-
             {activeTab === "stage" ? (
               <div className="space-y-5 sm:space-y-6">
                 {/* Speakers Section */}
@@ -1168,45 +1273,28 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
               <div className="flex flex-col h-full space-y-3">
                 <div className="flex-1 space-y-3">
                   {messages.map((m) => {
-                    const sender = getProfile(m.userId);
+                    const profile = getProfile(m.userId);
                     return (
                       <div
                         key={m.id}
-                        className={cn(
-                          "flex items-start gap-2.5 p-2 rounded-xl transition-all",
-                          m.isTip ? "bg-amber-500/10 border border-amber-500/30" : "",
-                        )}
+                        className="flex items-start gap-2.5 p-2 rounded-xl transition-all"
                       >
                         <Avatar
-                          name={sender.display_name}
-                          src={sender.avatar_url}
+                          name={profile.display_name}
+                          src={profile.avatar_url}
                           className="h-7 w-7 text-[0.6rem] shrink-0 mt-0.5"
                         />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-baseline gap-2">
-                            <span
-                              className={cn(
-                                "text-xs font-bold",
-                                m.isTip && "text-amber-600 dark:text-amber-400",
-                              )}
-                            >
-                              {sender.display_name}
+                            <span className="text-xs font-bold">{profile.display_name}</span>
+                            {/* Chat rows store a real instant, loaded or live, so
+                                one formatter covers both instead of a mix of raw
+                                ISO strings and hand-written "Just now" text. */}
+                            <span className="text-[10px] text-muted-foreground">
+                              {timeAgo(m.timestamp)}
                             </span>
-                            <span className="text-[10px] text-muted-foreground">{m.timestamp}</span>
-                            {m.isTip && (
-                              <span className="ml-auto text-[10px] font-extrabold text-amber-600 dark:text-amber-400 bg-amber-500/20 px-1.5 py-0.5 rounded-md">
-                                TIP ${m.tipAmount?.toFixed(2)}
-                              </span>
-                            )}
                           </div>
-                          <div
-                            className={cn(
-                              "text-xs mt-0.5 leading-relaxed",
-                              m.isTip
-                                ? "font-semibold text-foreground"
-                                : "text-foreground/90 bg-foreground/5 p-2 rounded-xl",
-                            )}
-                          >
+                          <div className="text-xs mt-0.5 leading-relaxed text-foreground/90 bg-foreground/5 p-2 rounded-xl">
                             <ClampText text={m.body} lines={4} limit={240} />
                           </div>
                         </div>
@@ -1335,21 +1423,39 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
             </button>
           )}
 
-          {/* Quick Emoji Reaction Toolbar */}
-          <div className="flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-3 sm:px-4 border-t border-border/40 bg-foreground/[0.02] overflow-x-auto [scrollbar-width:none]">
-            <span className="text-[10px] font-semibold text-muted-foreground mr-1 shrink-0">
-              React:
-            </span>
-            {["❤️", "🔥", "👏", "🚀", "💡", "💰", "💯"].map((emoji) => (
-              <button
-                key={emoji}
-                type="button"
-                onClick={() => triggerReaction(emoji)}
-                className="text-base sm:text-lg hover:scale-125 transition-transform active:scale-95 p-1.5 rounded-full hover:bg-foreground/5 min-h-[36px] min-w-[36px] flex items-center justify-center shrink-0 cursor-pointer"
-              >
-                {emoji}
-              </button>
-            ))}
+          {/* Quick Emoji Reaction Toolbar: what your tap sends to the room, and
+              the count the room has produced in this burst. */}
+          <div className="flex items-center gap-2 border-t border-border/40 bg-foreground/[0.02] py-2 px-3 sm:px-4">
+            <div className="flex min-w-0 flex-1 items-center justify-center gap-1.5 sm:gap-2 overflow-x-auto [scrollbar-width:none]">
+              <span className="text-[10px] font-semibold text-muted-foreground mr-1 shrink-0">
+                React:
+              </span>
+              {SPACE_REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => sendReaction(emoji)}
+                  title={`Send ${emoji} to everyone in the room`}
+                  aria-label={`Send ${emoji} to everyone in the room`}
+                  className="text-base sm:text-lg hover:scale-125 transition-transform active:scale-95 p-1.5 rounded-full hover:bg-foreground/5 min-h-[36px] min-w-[36px] flex items-center justify-center shrink-0 cursor-pointer"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+            {burst.length > 0 && (
+              <div className="flex shrink-0 items-center gap-1.5" aria-hidden>
+                {burst.map((b) => (
+                  <span
+                    key={b.emoji}
+                    className="flex items-center gap-1 rounded-full bg-foreground/5 px-2 py-0.5 text-[11px] font-bold tabular-nums text-muted-foreground"
+                  >
+                    <span className="text-sm leading-none">{b.emoji}</span>
+                    {b.count}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Bottom Action Bar */}

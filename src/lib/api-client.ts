@@ -13,6 +13,9 @@ import {
 } from "@/lib/moderation.functions";
 import { cacheProfiles, currentUser, currentUserId, rowToProfile } from "@/lib/profile-service";
 import { deleteMyMedia } from "@/lib/media.functions";
+import { sanitizeReactionEmoji } from "@/lib/emojis";
+import { tipAnnouncement } from "@/lib/space-reactions";
+import { MAX_SPACE_CHAT_CHARS, lengthError, messageLengthError } from "@/lib/message-length";
 import { emitRealtime } from "@/lib/realtime";
 import { appConfig } from "@/lib/config";
 import type {
@@ -672,6 +675,103 @@ export async function getWorkspaceReposts(workspaceId: string, limit = 50): Prom
   await hydrateWorkspaces(posts);
   await hydrateEngagement(posts);
   return posts;
+}
+
+export type ProfileTabPage = "posts" | "media" | "reposts" | "likes";
+
+export interface ProfileTabResult {
+  posts: Post[];
+  /** Cursor for the next page, or null once the tab is exhausted. */
+  nextCursor: string | null;
+  /** Exact row count for the tab, so the header never shows a page-length "total". */
+  total: number;
+}
+
+const EMPTY_TAB: ProfileTabResult = { posts: [], nextCursor: null, total: 0 };
+
+/**
+ * One profile tab, fetched the way the tab actually means it.
+ *
+ * The profile page used to slice the *author's own posts* three ways and call
+ * the results Reposts, Media and Likes. That can only ever be empty for two of
+ * them: the posts you reposted and the posts you liked belong to other people,
+ * so they are never in a list of this author's posts, and `repostedByMe` on your
+ * own post is never true. Reposts and Likes therefore read the join tables by
+ * profile id; Media asks the database instead of filtering a page of 15 down to
+ * whatever happened to have a picture.
+ *
+ * `likes.public read` and `reposts.public read` are `using (true)`, so no new
+ * policy is needed; Likes stays only on the tabs of your own profile, because
+ * somebody else's likes are not ours to publish.
+ */
+export async function getProfileTabPage(options: {
+  profileId: string;
+  tab: ProfileTabPage;
+  before?: string | null;
+  limit?: number;
+}): Promise<ProfileTabResult> {
+  const { profileId, tab } = options;
+  if (!isDbId(profileId)) return EMPTY_TAB;
+  const limit = Math.min(options.limit ?? appConfig.feed.pageSize, appConfig.feed.maxPageSize);
+
+  if (tab === "posts" || tab === "media") {
+    let query = db
+      .from("posts")
+      // `image_url` used to be missing from the media filter, so a plain photo
+      // post appeared in Posts but not in Media.
+      .select("*", { count: "exact" })
+      .eq("user_id", profileId)
+      .eq("hidden", false)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (tab === "media")
+      query = query.or("media_url.not.null,image_url.not.null,image_gradient.not.null");
+    if (options.before) query = query.lt("created_at", options.before);
+    const { data, error, count } = await query;
+    if (error) console.warn("getProfileTabPage notice:", error.message);
+    const rows = (data ?? []) as any[];
+    const posts = rows.map((row) => rowToPost(row));
+    await hydrateAuthors(posts.map((p) => p.user_id));
+    await hydrateWorkspaces(posts);
+    await hydrateEngagement(posts);
+    return {
+      posts,
+      nextCursor: rows.length === limit ? String(rows[rows.length - 1].created_at) : null,
+      total: count ?? rows.length,
+    };
+  }
+
+  // Reposts and Likes are activity on somebody else's post, so the join row's
+  // own timestamp orders the tab (newest reaction first) and carries the cursor.
+  const table = tab === "reposts" ? "reposts" : "likes";
+  let query = db
+    .from(table)
+    .select("created_at, post_id, posts(*)", { count: "exact" })
+    .eq("user_id", profileId)
+    .order("created_at", { ascending: false })
+    // Over-fetch a little: a repost whose post was deleted or hidden yields no
+    // card, and a page that silently returns 3 of 15 items looks broken.
+    .limit(limit + 5);
+  if (options.before) query = query.lt("created_at", options.before);
+  const { data, error, count } = await query;
+  if (error) {
+    console.warn("getProfileTabPage notice:", error.message);
+    return EMPTY_TAB;
+  }
+  const rows = (data ?? []) as any[];
+  const posts = rows
+    .filter((row) => row.posts && !row.posts.hidden)
+    .slice(0, limit)
+    .map((row) => rowToPost(row.posts));
+  await hydrateAuthors(posts.map((p) => p.user_id));
+  await hydrateWorkspaces(posts);
+  await hydrateEngagement(posts);
+  const last = rows[Math.min(rows.length, limit) - 1];
+  return {
+    posts,
+    nextCursor: rows.length > limit ? String(last?.created_at ?? null) : null,
+    total: count ?? rows.length,
+  };
 }
 
 export async function addPostComment(postId: string, content: string, parentId?: string | null) {
@@ -1430,6 +1530,11 @@ export async function toggleSpeaking(spaceId: string, speaking: boolean, muted: 
 }
 
 export async function sendSpaceMessage(spaceId: string, body: string) {
+  // `space_messages_body_length` refuses this in the database; saying it here is
+  // what turns that into a sentence the room composer can show instead of a
+  // constraint name — and it happens before the optimistic bubble is broadcast.
+  const tooLong = lengthError(body, MAX_SPACE_CHAT_CHARS);
+  if (tooLong) throw new Error(tooLong);
   const { data, error } = await db
     .from("space_messages")
     .insert({ space_id: spaceId, user_id: me(), body })
@@ -1448,6 +1553,102 @@ export async function sendSpaceMessage(spaceId: string, body: string) {
   };
   emitRealtime("space:message", { spaceId, message });
   return { message };
+}
+
+/**
+ * A reaction tap in a live room is a sparkle, not a row: nothing is stored and
+ * nothing is replayed, so it rides the same ephemeral broadcast bus as joins,
+ * mutes and hand raises, and reaches everyone currently watching.
+ *
+ * The caller supplies the id. That is what lets the receiving side dedupe — a
+ * retried event must not put two hearts on someone's screen — and what keeps a
+ * person's own copy from being counted twice on their device.
+ *
+ * Returns false when the glyph or the id is unusable, so a silent no-op is
+ * distinguishable from a sent one.
+ */
+export function sendSpaceReaction(
+  spaceId: string,
+  emoji: string,
+  opts: { id: string; userId?: string },
+): boolean {
+  if (!spaceId || !opts?.id) return false;
+  const glyph = sanitizeReactionEmoji(emoji);
+  if (!glyph) return false;
+  emitRealtime("space:reaction", {
+    spaceId,
+    id: opts.id,
+    userId: opts.userId ?? me(),
+    emoji: glyph,
+  });
+  return true;
+}
+
+/**
+ * Tell a room that a tip has settled.
+ *
+ * Ordered on purpose. The chat row goes to the database first: it is the part
+ * that lasts, it is checked by access rules, and it is what reaches everyone in
+ * the room through the `space_messages` change feed even if their sockets were
+ * busy. The banner is second and is decoration — a burst of bags and a figure
+ * for whoever is watching at that moment.
+ *
+ * A failed insert does not throw. The money has already been taken and verified
+ * by the server; a room line that could not be written (a closed Space, an RLS
+ * denial, the person having been removed) must never be reported as a payment
+ * problem, so the caller gets `false` and stays quiet.
+ */
+export async function announceSpaceTip(
+  spaceId: string,
+  tip: { amountUsd: number; message?: string; senderName?: string },
+): Promise<boolean> {
+  if (!spaceId) return false;
+  const body = tipAnnouncement(tip.amountUsd, tip.message);
+  if (!body) return false;
+
+  // This runs on a cold page: the confirmation route is a fresh document after
+  // the hosted checkout, so the in-memory profile may still be the guest
+  // placeholder while the real session loads. The session is the authority on
+  // who is writing — the access rules on `space_messages` check that the row
+  // belongs to the caller — so ask the client instead of trusting memory, and
+  // stay silent when nobody is signed in rather than posting a line as "guest".
+  let senderId = "";
+  try {
+    const { data } = await supabase.auth.getSession();
+    senderId = data.session?.user?.id ?? "";
+  } catch {
+    senderId = "";
+  }
+  if (!senderId) return false;
+
+  const reference = `tip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const knownName = currentUser.id === senderId ? currentUser.display_name : "";
+  let posted = true;
+  try {
+    const { error } = await db
+      .from("space_messages")
+      .insert({ space_id: spaceId, user_id: senderId, body });
+    if (error) posted = false;
+  } catch {
+    posted = false;
+  }
+
+  emitRealtime("space:tip", {
+    spaceId,
+    tip: {
+      id: reference,
+      // The caller passes the amount the payment provider confirmed, so the
+      // banner shows real money rather than a number off the disk.
+      amount: tip.amountUsd,
+      message: tip.message ?? "",
+      // An id is quite enough: the room resolves the name from the people it
+      // already knows and falls back to "A supporter" — never a placeholder
+      // word, and never a raw UUID printed where a person's name belongs.
+      sender_name: tip.senderName || knownName,
+      sender_id: senderId,
+    },
+  });
+  return posted;
 }
 
 /** Everyone currently in the room plus the recent chat, straight from the backend. */
@@ -1799,6 +2000,10 @@ export async function sendMessage(
 ) {
   const senderId = me();
   if (!isDbId(senderId)) throw new Error("Sign in to send messages");
+  // The database refuses an over-long body (messages_body_length), which would
+  // otherwise reach the user as a constraint name. Say what happened instead.
+  const tooLong = messageLengthError(body);
+  if (tooLong) throw new Error(tooLong);
 
   const { data: existingConversation } = isDbId(target)
     ? await db.from("conversations").select("id").eq("id", target).maybeSingle()
@@ -1876,10 +2081,15 @@ export async function getMessageReactions(
 
 export async function toggleMessageReaction(messageId: string, emoji: string, on: boolean) {
   const userId = me();
+  // `message_reactions.emoji` is unbounded text and the value is rendered
+  // straight back into the thread, so the boundary is enforced here rather than
+  // trusted from whichever button happened to call this.
+  const glyph = sanitizeReactionEmoji(emoji);
+  if (!glyph) throw new Error("That reaction isn't valid");
   if (on) {
     const { error } = await db
       .from("message_reactions")
-      .insert({ message_id: messageId, user_id: userId, emoji });
+      .insert({ message_id: messageId, user_id: userId, emoji: glyph });
     if (error && error.code !== "23505") throw error;
   } else {
     const { error } = await db
@@ -1887,11 +2097,11 @@ export async function toggleMessageReaction(messageId: string, emoji: string, on
       .delete()
       .eq("message_id", messageId)
       .eq("user_id", userId)
-      .eq("emoji", emoji);
+      .eq("emoji", glyph);
     if (error) throw error;
   }
-  emitRealtime("message:reaction", { messageId, emoji, on, userId });
-  return { messageId, emoji, on };
+  emitRealtime("message:reaction", { messageId, emoji: glyph, on, userId });
+  return { messageId, emoji: glyph, on };
 }
 
 export async function editMessage(messageId: string, body: string) {

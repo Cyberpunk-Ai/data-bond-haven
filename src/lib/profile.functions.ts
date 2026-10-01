@@ -103,13 +103,17 @@ export const getProfileTabPosts = createServerFn({ method: "GET" })
         .eq("hidden", false)
         .order("created_at", { ascending: false })
         .limit(limit);
+      // Media is decided by the database, not by filtering the page afterwards:
+      // a plain photo post stores `image_url`, which the old in-memory filter
+      // ignored, and dropping rows after `limit` could hand back an empty page
+      // with no cursor even when the profile did have media older than it.
+      if (tab === "media") {
+        q = q.or("media_url.not.null,image_url.not.null,image_gradient.not.null");
+      }
       if (cursor) q = q.lt("created_at", cursor);
       const { data: rows, error } = await q;
       if (error) throw new Error(error.message);
-      let posts = rows ?? [];
-      if (tab === "media") {
-        posts = posts.filter((p: any) => p.media_url || p.image_gradient);
-      }
+      const posts = rows ?? [];
       const last = posts[posts.length - 1];
       return { posts, nextCursor: last ? last.created_at : null };
     }

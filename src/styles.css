@@ -246,6 +246,67 @@
   }
 }
 
+/*
+ * A Space reaction: one emoji floats up the room and fades out.
+ *
+ * One animation and nothing else. The room used to put `animate-in`,
+ * `slide-in-from-bottom-6` *and* `animate-bounce` on the same element — two
+ * rules for the `animation` shorthand, so the later one reset the earlier one
+ * and every tap wobbled in place on the bottom edge instead of rising.
+ *
+ * Distance and drift arrive as custom properties from `space-reactions.ts`,
+ * which derives them from the event id, so all members see the same arc.
+ */
+@utility animate-reaction-rise {
+  animation:
+    reaction-rise var(--reaction-duration, 2200ms) cubic-bezier(0.22, 0.61, 0.36, 1)
+    forwards;
+}
+
+@keyframes reaction-rise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.7);
+  }
+  16% {
+    opacity: 1;
+    transform: translate3d(0, -8px, 0) scale(1.05);
+  }
+  62% {
+    opacity: 0.95;
+    transform: translate3d(
+      var(--reaction-sway, 10px),
+      calc(var(--reaction-rise, 150px) * -0.55),
+      0
+    );
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(
+      calc(var(--reaction-sway, 10px) * -0.4),
+      calc(var(--reaction-rise, 150px) * -1),
+      0
+    )
+    scale(0.92);
+  }
+}
+
+/* A settled tip's banner: arrives once, quietly, rather than sliding in twice. */
+@utility animate-tip-banner {
+  animation: tip-banner 320ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
+@keyframes tip-banner {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 html.reduce-motion *,
 html.reduce-motion *::before,
 html.reduce-motion *::after {

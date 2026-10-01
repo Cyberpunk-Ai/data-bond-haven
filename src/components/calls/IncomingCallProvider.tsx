@@ -329,16 +329,18 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
           callId={activeCall.callId}
           role={activeCall.role}
           callStatus={activeCall.status}
-          onClose={() => {
+          onClose={(seconds) => {
             if (activeCall.callId) {
               handledRef.current.add(activeCall.callId);
               stopStatusRef.current();
               // Cancelling while it still rings marks it missed — that DB write
               // (not the timeout on the other device) stops their ringing.
+              // Otherwise the real talk time is recorded; it used to be written
+              // as a constant 0, so the call history never showed a duration.
               void (
                 activeCall.status === "ringing"
                   ? markCallMissed(activeCall.callId)
-                  : endCall(activeCall.callId, 0)
+                  : endCall(activeCall.callId, seconds)
               ).catch(() => {});
             }
             setActiveCall(null);

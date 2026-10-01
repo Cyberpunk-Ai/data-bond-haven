@@ -14,6 +14,7 @@ import { getEarnings, requestPayout } from "@/lib/payouts.functions";
 import { usd } from "@/lib/formatters";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
+import { stashPendingTip } from "@/lib/pending-tip";
 import { workspaceSlug } from "@/lib/workspace-state";
 import { cn } from "@/lib/utils";
 
@@ -45,7 +46,7 @@ function formatTip(amount: number) {
   return `$${amount.toFixed(2)}`;
 }
 
-export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalProps) {
+export function TipModal({ isOpen, onClose, recipient, team, postId, spaceId }: TipModalProps) {
   const { user } = useAuth();
   const activeUser = user || currentUser;
   const beginTip = useServerFn(startTipCheckout);
@@ -128,6 +129,21 @@ export function TipModal({ isOpen, onClose, recipient, team, postId }: TipModalP
 
       if (!res?.authorizationUrl || !res.reference) {
         throw new Error("We couldn't open a secure checkout. Please try again.");
+      }
+
+      // Checkout is a full page change: the hosted page unloads this app, and the
+      // person lands back at /billing/callback with no room around them. Note
+      // which room the tip came from against the payment reference — the only
+      // id both sides of the redirect agree on — so the callback can tell that
+      // room the money settled. The amount here is a hint; what gets announced
+      // is the figure the server verified.
+      if (spaceId) {
+        stashPendingTip({
+          reference: res.reference,
+          spaceId,
+          amountUsd: effectiveAmount,
+          message: message.trim(),
+        });
       }
 
       openPaystackPayment({

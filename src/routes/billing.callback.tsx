@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 
 import { confirmPaystackPayment } from "@/lib/paystack.functions";
+import { announceSpaceTip } from "@/lib/api-client";
+import { claimPendingTip } from "@/lib/pending-tip";
 import { usd } from "@/lib/formatters";
 
 export const Route = createFileRoute("/billing/callback")({
@@ -51,6 +53,28 @@ function BillingCallback() {
               : "Payment confirmed. Your new plan is active.",
           );
           router.invalidate();
+
+          // A tip paid from inside a live Space. Checkout unloaded that page, so
+          // the room is long gone here — but the people still sitting in it
+          // should hear about it. Claiming consumes the note, which is what makes
+          // a refresh on this page (or a second tab) announce exactly once. The
+          // amount comes from the verified payment, not from the note.
+          //
+          // Nothing about this is allowed to fail the payment: the charge is
+          // settled, so a room that cannot be told (closed, or no longer a
+          // member) is a silent miss rather than an error on screen.
+          if (res.kind === "tip") {
+            const pending = claimPendingTip(reference);
+            if (pending) {
+              // The server's verified figure is the one to show; the note's own
+              // amount is only a fallback for a response that omitted it.
+              const settled = Number(res.amount);
+              void announceSpaceTip(pending.spaceId, {
+                amountUsd: Number.isFinite(settled) && settled > 0 ? settled : pending.amountUsd,
+                message: pending.message,
+              }).catch(() => {});
+            }
+          }
         } else {
           setState("failed");
           setMessage("That payment didn't go through. You haven't been charged.");
