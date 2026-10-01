@@ -6,6 +6,7 @@ import { Avatar } from "@/components/social/Avatar";
 import { TimeAgo } from "@/components/social/TimeAgo";
 import { DefaultRail } from "@/components/social/RightRail";
 import { PostCard } from "@/components/social/PostCard";
+import { PostDetailSkeleton } from "@/components/social/PostSkeleton";
 import { compact } from "@/lib/formatters";
 import { getSharedPost } from "@/lib/share.functions";
 import { getPostById } from "@/lib/api-client";
@@ -33,7 +34,23 @@ export const Route = createFileRoute("/post/$id")({
     };
   },
   component: PostPage,
+  // The share loader itself gets a matching skeleton, so an in-app tap on a
+  // post never flashes an empty page while the server function round-trips.
+  pendingComponent: PostPagePending,
 });
+
+function PostPagePending() {
+  return (
+    <AppShell title="Post" right={<DefaultRail />}>
+      <div className="mx-auto w-full max-w-2xl space-y-5">
+        <span className="inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+          <ArrowLeft className="h-4 w-4" /> Back to feed
+        </span>
+        <PostDetailSkeleton />
+      </div>
+    </AppShell>
+  );
+}
 
 function PostPage() {
   const post = Route.useLoaderData();
@@ -41,14 +58,19 @@ function PostPage() {
   // In-app viewers get the full interactive card (like/comment/repost/save);
   // the loader's share DTO is only the crawler/anonymous fallback.
   const [fullPost, setFullPost] = useState<Post | null>(null);
+  const [loadingFull, setLoadingFull] = useState(true);
 
   useEffect(() => {
     let active = true;
+    setLoadingFull(true);
     getPostById(id)
       .then((p) => {
         if (active && p) setFullPost(p);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (active) setLoadingFull(false);
+      });
     return () => {
       active = false;
     };
@@ -65,7 +87,11 @@ function PostPage() {
         </Link>
 
         {fullPost ? (
-          <PostCard post={fullPost} />
+          <div className="animate-in fade-in duration-300">
+            <PostCard post={fullPost} />
+          </div>
+        ) : loadingFull ? (
+          <PostDetailSkeleton hasMedia={Boolean(post?.mediaUrl || post?.gradient)} />
         ) : !post ? (
           <Panel className="flex flex-col items-center gap-3 py-14 text-center">
             <p className="text-lg font-bold">This post isn't available</p>

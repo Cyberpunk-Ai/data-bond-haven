@@ -2861,11 +2861,15 @@ export async function getCurrentUser(): Promise<{ user: Profile | null }> {
 /** Look a profile up by id or @username. */
 export async function getUserProfile(idOrUsername: string): Promise<{ profile: Profile | null }> {
   const handle = idOrUsername.replace(/^@/, "");
-  const { data } = await db
-    .from("profiles")
-    .select("*")
-    .or(`id.eq.${handle},username.eq.${handle}`)
-    .maybeSingle();
+  // `id` is a uuid column: asking for `id.eq.janedoe` makes PostgREST reject the
+  // whole or-filter with "invalid input syntax for type uuid", `data` comes back
+  // null, and the page silently keeps the username placeholder — which is why a
+  // copied /u/<username> link never opened the full profile. Only UUIDs may
+  // match the id column; anything else is looked up by username (same rule as
+  // fetchProfile in profile-service).
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(handle);
+  const filter = isUuid ? `id.eq.${handle},username.eq.${handle}` : `username.eq.${handle}`;
+  const { data } = await db.from("profiles").select("*").or(filter).maybeSingle();
   if (!data) return { profile: null };
   const profile = rowToProfile(data as any);
   cacheProfiles([profile]);

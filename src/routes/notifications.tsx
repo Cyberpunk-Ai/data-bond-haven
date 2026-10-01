@@ -151,7 +151,6 @@ function NotificationsPage() {
       // `hasMore` and the offset so the button stays and a retry continues from
       // the same place — retiring it here silently hid all older notifications.
       console.warn("Load more notifications failed:", err);
-      toast.error("Couldn't load older notifications. Tap again to retry.");
     } finally {
       setLoadingMore(false);
     }
@@ -241,16 +240,29 @@ function NotificationsPage() {
       void navigate({ to: "/settings", search: { section: "workspaces" } as any });
       return;
     }
+    if ((n.type as string) === "message") {
+      // A DM alert belongs in the inbox — open the thread with the sender
+      // directly instead of dropping the visitor on their profile.
+      if (n.actor_id) {
+        void navigate({ to: "/messages", search: { user: n.actor_id } });
+      }
+      return;
+    }
+    // Engagement on a post opens that post. The triggers stamp like/comment/
+    // reply/repost with the post id, and tips carry it since the tip-notify
+    // migration, so one list covers everything that points at a post.
+    if (n.post_id && ["like", "comment", "reply", "repost", "mention", "tip"].includes(n.type)) {
+      void navigate({ to: "/post/$id", params: { id: n.post_id } });
+      return;
+    }
     if (n.type === "tip" || (n.type as string) === "payout") {
+      // No post context — the earnings hub is the right landing spot.
       void navigate({ to: "/settings", search: { section: "monetization" } });
       return;
     }
     if ((n.type as string) === "system") return; // notice only — marking it read is the action
-    // Likes/comments/reposts/mentions point at the post itself when we know it.
-    if (n.post_id && ["like", "comment", "reply", "repost", "mention"].includes(n.type)) {
-      void navigate({ to: "/post/$id", params: { id: n.post_id } });
-      return;
-    }
+    // Everything person-shaped (follows, story likes, post-less engagement)
+    // opens the actor's profile.
     if (n.actor_id) {
       void navigate({ to: "/profile", search: { user: n.actor_id } });
     }

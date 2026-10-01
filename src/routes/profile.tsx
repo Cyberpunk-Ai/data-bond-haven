@@ -233,7 +233,6 @@ function ProfilePage() {
       // Keep the cursor: one failed page (or a timeout) must not permanently
       // retire the "Load more" button — the next tap retries the same page.
       console.warn("Load more tab posts failed:", err);
-      toast.error("Couldn't load more. Tap again to retry.");
     } finally {
       setLoadingMore(false);
     }

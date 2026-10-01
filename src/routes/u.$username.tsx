@@ -1,4 +1,5 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
 import { AppShell, Panel } from "@/components/social/AppShell";
 import { Avatar } from "@/components/social/Avatar";
@@ -34,6 +35,19 @@ export const Route = createFileRoute("/u/$username")({
 
 function PublicProfilePage() {
   const profile = Route.useLoaderData();
+  const navigate = useNavigate();
+
+  // Copied profile links are /u/<username>, and this page used to be a share
+  // preview that stopped there — following the link never opened the actual
+  // profile unless the visitor found and tapped "Open full profile". Real
+  // visitors are now forwarded straight through (replace, so Back doesn't
+  // loop); crawlers and link previews still get this page's SSR meta tags,
+  // because effects never run on the server.
+  useEffect(() => {
+    if (profile) {
+      void navigate({ to: "/profile", search: { user: profile.username }, replace: true });
+    }
+  }, [profile, navigate]);
 
   return (
     <AppShell title="Profile" right={<DefaultRail />}>

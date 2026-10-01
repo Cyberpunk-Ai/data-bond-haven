@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   TrendingUp,
   Users,
@@ -13,6 +14,7 @@ import {
   Target,
   Loader2,
   BarChart3,
+  ArrowUpRight,
 } from "lucide-react";
 import {
   AreaChart,
@@ -436,12 +438,14 @@ export function AnalyticsDashboard({ workspaceId }: { workspaceId?: string }) {
                         ? data.topPosts
                         : data.topPosts.slice(0, POSTS_PREVIEW_COUNT)
                       ).map((post, idx) => (
-                        <div
+                        <Link
                           key={post.id}
-                          className="rounded-2xl border border-border/60 bg-muted/20 p-3.5 space-y-2 hover:bg-muted/40 transition-colors"
+                          to="/post/$id"
+                          params={{ id: post.id }}
+                          className="group block cursor-pointer rounded-2xl border border-border/60 bg-muted/20 p-3.5 space-y-2 transition-all hover:border-brand/50 hover:bg-muted/40 hover:shadow-soft"
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <p className="text-xs sm:text-sm font-bold text-foreground line-clamp-1">
+                            <p className="text-xs sm:text-sm font-bold text-foreground line-clamp-1 transition-colors group-hover:text-brand">
                               {post.title}
                             </p>
                             <span className="text-[0.65rem] font-extrabold px-2 py-0.5 rounded bg-brand/10 text-brand whitespace-nowrap">
@@ -455,8 +459,11 @@ export function AnalyticsDashboard({ workspaceId }: { workspaceId?: string }) {
                             <span className="font-bold text-emerald-600 dark:text-emerald-400">
                               {post.ctr} engagement
                             </span>
+                            <span className="ml-auto hidden items-center gap-1 font-bold text-brand opacity-0 transition-opacity group-hover:opacity-100 sm:flex">
+                              View post <ArrowUpRight className="h-3 w-3" />
+                            </span>
                           </div>
-                        </div>
+                        </Link>
                       ))}
                     </div>
                     {data.topPosts.length > POSTS_PREVIEW_COUNT && (
@@ -676,6 +683,15 @@ export function AnalyticsDashboard({ workspaceId }: { workspaceId?: string }) {
                         ? `“${bestPost.title}” reached ${bestPost.views.toLocaleString()} views with ${bestPost.ctr} engagement. Posting more in this style is your best lever right now.`
                         : "Publish a few posts and we'll point out which style performs best for you."}
                     </p>
+                    {bestPost && (
+                      <Link
+                        to="/post/$id"
+                        params={{ id: bestPost.id }}
+                        className="inline-flex items-center gap-1 text-xs font-bold text-brand hover:underline"
+                      >
+                        View post <ArrowUpRight className="h-3 w-3" />
+                      </Link>
+                    )}
                   </div>
 
                   <div className="p-4 rounded-2xl bg-card/80 border border-border/60 space-y-2">

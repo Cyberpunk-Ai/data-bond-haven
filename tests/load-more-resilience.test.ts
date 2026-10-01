@@ -116,7 +116,10 @@ describe("the other paged lists honour the same contract", () => {
     expect(loadMore).toContain("withTimeout(");
     const catchBlock = between(loadMore, "} catch (err) {", "} finally {");
     expect(catchBlock).not.toContain("setTabCursor(null)");
-    expect(catchBlock).toContain("toast.error");
+    // Silent + retryable: the button stays put, no error toast pops (users
+    // asked for no toasts for this; a warn in the console is enough).
+    expect(catchBlock).not.toContain("toast");
+    expect(catchBlock).toContain("console.warn");
   });
 
   it("keeps notifications paging after one error", () => {
@@ -125,7 +128,8 @@ describe("the other paged lists honour the same contract", () => {
     expect(loadMore).toContain("withTimeout(");
     const catchBlock = between(loadMore, "} catch (err) {", "} finally {");
     expect(catchBlock).not.toContain("setHasMore(false)");
-    expect(catchBlock).toContain("toast.error");
+    expect(catchBlock).not.toContain("toast");
+    expect(catchBlock).toContain("console.warn");
   });
 
   it("does not mark Explore exhausted on a failed walk", () => {

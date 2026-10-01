@@ -455,6 +455,11 @@ function PostCardBase({
   const [confirmDeleteCommentId, setConfirmDeleteCommentId] = useState<string | null>(null);
   const commentInputRef = useRef<HTMLInputElement | null>(null);
   const [showMenu, setShowMenu] = useState(false);
+  const moreBtnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top?: number; bottom?: number; right: number } | null>(
+    null,
+  );
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [previewMediaUrl, setPreviewMediaUrl] = useState<string | null>(null);
   const [imageError, setImageError] = useState(false);
@@ -467,6 +472,45 @@ function PostCardBase({
   const [liveContent, setLiveContent] = useState(post.content);
   const [editedAt, setEditedAt] = useState<string | null | undefined>(post.edited_at);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // The dropdown used to sit absolutely inside the card, and the card is
+  // overflow-hidden (media and gradient tiles clip to its radius) — so on a
+  // short post, whose card ends right below the header, the menu was cut off
+  // at the card edge. Portalled and fixed-positioned it escapes every clipped
+  // ancestor; it also flips above the button when the bottom of the viewport
+  // has no room, and closes on outside press, scroll or resize.
+  useEffect(() => {
+    if (!showMenu) {
+      setMenuPos(null);
+      return undefined;
+    }
+    const rect = moreBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      const MENU_HEIGHT = 330;
+      const openUp = rect.bottom + MENU_HEIGHT > window.innerHeight && rect.top > MENU_HEIGHT + 24;
+      setMenuPos(
+        openUp
+          ? { bottom: window.innerHeight - rect.top + 6, right: window.innerWidth - rect.right }
+          : { top: rect.bottom + 6, right: window.innerWidth - rect.right },
+      );
+    }
+    const close = () => setShowMenu(false);
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (moreBtnRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      close();
+    };
+    // A menu that detaches from its button while the feed scrolls is worse than
+    // one that closes; capture catches the AppShell <main> scroller too.
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [showMenu]);
 
   // Autoplay/Pause video when scrolling in/out of viewport
   useEffect(() => {
@@ -1117,99 +1161,116 @@ function PostCardBase({
         {/* More Menu */}
         <div className="relative shrink-0">
           <button
+            ref={moreBtnRef}
             type="button"
             onClick={() => setShowMenu(!showMenu)}
             aria-label="More options"
+            aria-haspopup="menu"
+            aria-expanded={showMenu}
             className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
           >
             <MoreHorizontal className="h-4 w-4" />
           </button>
 
-          {showMenu && (
-            <div className="absolute right-0 top-8 z-30 w-52 rounded-2xl border border-border/80 bg-card/95 p-1.5 shadow-xl backdrop-blur-md animate-in fade-in duration-150 divide-y divide-border/40">
-              <div className="space-y-0.5 pb-1">
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(window.location.origin + "/post/" + post.id);
-                    setShowMenu(false);
-                    toast.success("Link copied!");
-                  }}
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold hover:bg-foreground/5 transition-colors"
-                >
-                  <Copy className="h-3.5 w-3.5" /> Copy link
-                </button>
-
-                <button
-                  onClick={() => {
-                    handleBookmark();
-                    setShowMenu(false);
-                  }}
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold hover:bg-foreground/5 transition-colors"
-                >
-                  <Bookmark className="h-3.5 w-3.5" />{" "}
-                  {state.saved ? "Remove bookmark" : "Bookmark post"}
-                </button>
-              </div>
-
-              {!isMine && (
-                <div className="space-y-0.5 py-1">
+          {showMenu &&
+            menuPos &&
+            typeof document !== "undefined" &&
+            createPortal(
+              <div
+                ref={menuRef}
+                role="menu"
+                style={{
+                  position: "fixed",
+                  top: menuPos.top,
+                  bottom: menuPos.bottom,
+                  right: menuPos.right,
+                }}
+                className="z-[80] w-52 rounded-2xl border border-border/80 bg-card/95 p-1.5 shadow-xl backdrop-blur-md animate-in fade-in duration-150 divide-y divide-border/40"
+              >
+                <div className="space-y-0.5 pb-1">
                   <button
-                    onClick={() => handleSendFeedback("interested")}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10 transition-colors"
+                    onClick={() => {
+                      navigator.clipboard.writeText(window.location.origin + "/post/" + post.id);
+                      setShowMenu(false);
+                      toast.success("Link copied!");
+                    }}
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold hover:bg-foreground/5 transition-colors"
                   >
-                    <ThumbsUp className="h-3.5 w-3.5" /> More like this
+                    <Copy className="h-3.5 w-3.5" /> Copy link
                   </button>
 
                   <button
-                    onClick={() => handleSendFeedback("not_interested")}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-foreground/5 transition-colors"
+                    onClick={() => {
+                      handleBookmark();
+                      setShowMenu(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold hover:bg-foreground/5 transition-colors"
                   >
-                    <ThumbsDown className="h-3.5 w-3.5" /> Not interested
-                  </button>
-
-                  <button
-                    onClick={() => handleSendFeedback("mute_author")}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-foreground/5 transition-colors"
-                  >
-                    <VolumeX className="h-3.5 w-3.5" /> Mute @{author.username}
+                    <Bookmark className="h-3.5 w-3.5" />{" "}
+                    {state.saved ? "Remove bookmark" : "Bookmark post"}
                   </button>
                 </div>
-              )}
 
-              <div className="pt-1">
-                {isMine ? (
-                  <>
+                {!isMine && (
+                  <div className="space-y-0.5 py-1">
+                    <button
+                      onClick={() => handleSendFeedback("interested")}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10 transition-colors"
+                    >
+                      <ThumbsUp className="h-3.5 w-3.5" /> More like this
+                    </button>
+
+                    <button
+                      onClick={() => handleSendFeedback("not_interested")}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-foreground/5 transition-colors"
+                    >
+                      <ThumbsDown className="h-3.5 w-3.5" /> Not interested
+                    </button>
+
+                    <button
+                      onClick={() => handleSendFeedback("mute_author")}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-foreground/5 transition-colors"
+                    >
+                      <VolumeX className="h-3.5 w-3.5" /> Mute @{author.username}
+                    </button>
+                  </div>
+                )}
+
+                <div className="pt-1">
+                  {isMine ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          setShowMenu(false);
+                          setEditDraft(liveContent);
+                          setIsEditing(true);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold hover:bg-foreground/5 transition-colors"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" /> Edit post
+                      </button>
+                      <button
+                        onClick={handleDelete}
+                        className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 transition-colors"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" /> Delete post
+                      </button>
+                    </>
+                  ) : (
                     <button
                       onClick={() => {
                         setShowMenu(false);
-                        setEditDraft(liveContent);
-                        setIsEditing(true);
+                        setIsReportModalOpen(true);
                       }}
-                      className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold hover:bg-foreground/5 transition-colors"
-                    >
-                      <Sparkles className="h-3.5 w-3.5" /> Edit post
-                    </button>
-                    <button
-                      onClick={handleDelete}
                       className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 transition-colors"
                     >
-                      <Trash2 className="h-3.5 w-3.5" /> Delete post
+                      <Flag className="h-3.5 w-3.5" /> Report post
                     </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setShowMenu(false);
-                      setIsReportModalOpen(true);
-                    }}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 transition-colors"
-                  >
-                    <Flag className="h-3.5 w-3.5" /> Report post
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
+                  )}
+                </div>
+              </div>,
+              document.body,
+            )}
         </div>
       </header>
 

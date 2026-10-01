@@ -33,7 +33,6 @@ import {
 } from "@/lib/api-client";
 import { getWhoToFollow } from "@/lib/recommendations.functions";
 import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS } from "@/lib/utils";
-import { toast } from "sonner";
 
 export const Route = createFileRoute("/explore")({
   validateSearch: (
@@ -176,7 +175,6 @@ function ExplorePage() {
       setPeopleVisible((v) => v + EXPLORE_PEOPLE_CHUNK);
     } catch (err) {
       console.warn("Load more creators failed:", err);
-      toast.error("Couldn't load more creators. Tap again to retry.");
     } finally {
       setLoadingMorePeople(false);
     }
@@ -282,7 +280,6 @@ function ExplorePage() {
     } catch (err) {
       // Keep the cursor — a blip should not end the "Show more" trail.
       console.warn("Load more top posts failed:", err);
-      toast.error("Couldn't load more posts. Tap again to retry.");
     } finally {
       setLoadingMorePosts(false);
     }

@@ -34,7 +34,6 @@ import { useAuth } from "@/lib/auth-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { PLAN_DETAILS } from "@/lib/plans";
 import { useUnreadCounts } from "@/lib/unread-state";
-import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import { useTheme, ACCENT_PALETTES, type ThemeAccent } from "@/lib/theme-state";
 import { UpgradeModal } from "@/components/social/UpgradeModal";
 import { cn, getScrollY, onAppScroll } from "@/lib/utils";
@@ -371,8 +370,8 @@ export function AppShell({
   const { user } = useAuth();
   const activeUser = user || currentUser;
   const { notifications: unreadNotifications, messages: unreadMessages } = useUnreadCounts();
-  // Live notification toasts on every page, not just the notifications tab.
-  useNotificationToasts();
+  // Live notification toasts were removed on purpose: activity only ever
+  // surfaces through the bell and the notifications page, never as a pop-up.
   const { isDark, toggleTheme } = useTheme();
   // Maintenance Mode hides the compose affordance for restricted accounts:
   // the write would be refused anyway, so offering it is only a failed toast.

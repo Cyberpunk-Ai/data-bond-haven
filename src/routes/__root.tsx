@@ -13,6 +13,7 @@ import { Toaster } from "@/components/ui/sonner";
 import appCss from "../styles.css?url";
 import { reportError } from "../lib/error-reporting";
 import { bootstrapTheme } from "../lib/theme-state";
+import { OG_IMAGE_META } from "../lib/og-meta";
 import { supabase } from "@/integrations/supabase/client";
 import { IncomingCallProvider } from "@/components/calls/IncomingCallProvider";
 
@@ -122,6 +123,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
           "Live audio spaces, stories, messaging and creator monetization — all in one social home.",
       },
       { property: "og:type", content: "website" },
+      { property: "og:site_name", content: "Spaces1" },
+      // Shared post/profile links preview with the crisp 512px brand icon
+      // instead of a scraped 32px favicon. Merged into every route's head.
+      ...OG_IMAGE_META,
       { name: "twitter:card", content: "summary_large_image" },
       { name: "theme-color", content: "#7f22fe" },
     ],
