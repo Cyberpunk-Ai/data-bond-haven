@@ -412,6 +412,16 @@ function FeedPage() {
         PAGE_REQUEST_TIMEOUT_MS,
       );
       if (reqId !== feedReqId.current) return; // tab switched mid-flight
+      // A successful but empty page is the tail of the feed, even if the
+      // server echoed a cursor back. Retiring `hasMore` here is the last belt:
+      // without it the end-of-all-posts case kept the sentinel alive and the
+      // observer re-fired the same doomed request in a loop — the reported
+      // "stuck loading more posts" spinner.
+      if (page.posts.length === 0) {
+        cursorRef.current = null;
+        setHasMore(false);
+        return;
+      }
       setPosts((prev) => {
         const seen = new Set(prev.map((p) => p.id));
         return [...prev, ...page.posts.filter((p) => !seen.has(p.id))];

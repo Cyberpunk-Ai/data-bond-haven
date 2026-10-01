@@ -81,6 +81,34 @@ describe("the feed cannot hang or silently stop", () => {
   });
 });
 
+describe("the end of the ranked feed is terminal, not a loop", () => {
+  const client = read("../src/lib/api-client.ts");
+
+  it("an exhausted ranker page ends the walk instead of re-serving the top", () => {
+    const foryou = between(
+      client,
+      'if (options.filter === "foryou" && !options.userId',
+      'if (options.filter === "following")',
+    );
+    // Both the empty-success and the failure path of a *paged* request must
+    // hand back a terminal page. Falling through to the recency query (which
+    // cannot continue from a ranked cursor) re-served the newest page, every
+    // row was deduped away, and the spinner looped at the end of all posts.
+    const terminals = foryou.match(
+      /if \(options\.cursor\) return \{ posts: \[\], nextCursor: null \};/g,
+    );
+    expect(terminals, "empty ranker page must end the walk").toHaveLength(2);
+  });
+
+  it("the feed retires hasMore on an empty page, even one with a cursor", () => {
+    const feed = read("../src/routes/feed.tsx");
+    const loadMore = between(feed, "async function loadMorePosts()", "async function fetchStories");
+    const guard = between(loadMore, "if (page.posts.length === 0) {", "setPosts((prev)");
+    expect(guard).toContain("setHasMore(false)");
+    expect(guard).toContain("cursorRef.current = null");
+  });
+});
+
 describe("the other paged lists honour the same contract", () => {
   it("keeps the profile tab cursor on a failed page", () => {
     const profile = read("../src/routes/profile.tsx");

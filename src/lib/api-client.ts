@@ -157,8 +157,19 @@ export async function getPostsPage(options: PostsPageOptions = {}): Promise<Post
         await hydrateEngagement(ranked);
         return { posts: ranked, nextCursor: res?.nextCursor ?? null };
       }
+      // The ranker answered with an empty page. On a pagination request (the
+      // cursor is set) that IS the end of "For you": falling through to the
+      // recency query below would re-serve the NEWEST page (a ranked cursor
+      // has no `before` for it to continue from), the feed's dedupe would drop
+      // every row, and `nextCursor` would keep `hasMore` alive — the spinner
+      // looped forever at the end of all posts. End the walk honestly instead.
+      if (options.cursor) return { posts: [], nextCursor: null };
     } catch (err) {
       console.warn("For you ranking unavailable, using recency:", err);
+      // Same rule for a failed ranker mid-paging: the chronological fallback
+      // cannot resume a ranked walk, so hand back a terminal page rather than
+      // a duplicate of the top of the feed.
+      if (options.cursor) return { posts: [], nextCursor: null };
     }
   }
   if (options.filter === "following") options = { ...options, following: true };
