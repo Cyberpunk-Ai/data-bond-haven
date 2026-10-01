@@ -124,6 +124,12 @@ export function CallModal({
   const [volume, setVolume] = useState(1);
   const [soundOn, setSoundOn] = useState(true);
   const [soundBlocked, setSoundBlocked] = useState(false);
+  // The expand buttons must mirror what the browser actually did: pressing Esc
+  // leaves fullscreen without going through a click, so an un-listened flag both
+  // lies about the icon and makes the next tap try to exit a fullscreen we are
+  // no longer in. Same logic for picture-in-picture.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPip, setIsPip] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -189,8 +195,9 @@ export function CallModal({
   useEffect(() => {
     const audio = remoteAudioRef.current;
     if (!audio) return;
-    audio.srcObject = session.remoteStream;
-    if (!session.remoteStream) return;
+    // Assign only on a real change: re-setting the same stream restarts decoding.
+    if (audio.srcObject !== session.remoteStream) audio.srcObject = session.remoteStream;
+    if (!session.remoteStream || !soundOn) return;
     let alive = true;
     audio
       .play()
@@ -204,7 +211,30 @@ export function CallModal({
     return () => {
       alive = false;
     };
-  }, [session.remoteStream]);
+    // Re-running on `soundOn` is the un-mute path: a stream the autoplay policy
+    // blocked stays blocked until a gesture re-calls play(), and toggling the
+    // speaker button is exactly that gesture.
+  }, [session.remoteStream, soundOn]);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  useEffect(() => {
+    const el = remoteVideoRef.current;
+    if (!el) return;
+    const enter = () => setIsPip(true);
+    const leave = () => setIsPip(false);
+    el.addEventListener("enterpictureinpicture", enter);
+    el.addEventListener("leavepictureinpicture", leave);
+    return () => {
+      el.removeEventListener("enterpictureinpicture", enter);
+      el.removeEventListener("leavepictureinpicture", leave);
+      setIsPip(false);
+    };
+  }, [isOpen, session.remoteStream]);
 
   // Speaker / headphone routing. Falls back to silence when the browser has no
   // say over the output device, rather than pretending to move the audio.
@@ -519,8 +549,10 @@ export function CallModal({
           </div>
         </div>
 
-        {/* Autoplay is a browser policy, not a broken call — say so once. */}
-        {soundBlocked && (
+        {/* Autoplay is a browser policy, not a broken call — say so once. Hidden
+            while the speaker button is off: the banner would offer to enable
+            sound the viewer just chose to silence. */}
+        {soundBlocked && soundOn && (
           <button
             onClick={unlockSound}
             className="z-20 mt-3 flex items-center justify-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-xs font-bold text-black transition-transform hover:scale-[1.01] cursor-pointer"
@@ -539,6 +571,11 @@ export function CallModal({
           <div
             className={cn(
               "relative w-full overflow-hidden rounded-2xl border border-white/10 bg-black",
+              // Fullscreen means fullscreen: the pane is fixed at h-64 on the
+              // card, so without this the "expanded" screen is a small video
+              // floating in black. The corner radius/border also read oddly at
+              // arm's-length from a monitor edge.
+              "[&:fullscreen_video]:h-full [&:fullscreen]:rounded-none [&:fullscreen]:border-0",
               pane === "avatar" && "hidden",
             )}
           >
@@ -562,12 +599,16 @@ export function CallModal({
               onClick={() => {
                 const el = remoteVideoRef.current;
                 if (!el) return;
-                if (document.pictureInPictureElement) void document.exitPictureInPicture();
+                if (document.pictureInPictureElement)
+                  void document.exitPictureInPicture().catch(() => {});
                 else void el.requestPictureInPicture?.().catch(() => undefined);
               }}
-              aria-label="Pop the video out"
-              title="Pop the video out (picture-in-picture)"
-              className="absolute top-2 left-2 rounded-md bg-black/60 p-1.5 text-white/90 hover:bg-black/80 transition-colors cursor-pointer"
+              aria-label={isPip ? "Close picture-in-picture" : "Pop the video out"}
+              title={isPip ? "Close picture-in-picture" : "Pop the video out (picture-in-picture)"}
+              className={cn(
+                "absolute top-2 left-2 rounded-md p-1.5 transition-colors cursor-pointer",
+                isPip ? "bg-brand text-white" : "bg-black/60 text-white/90 hover:bg-black/80",
+              )}
             >
               <PictureInPicture2 className="h-3.5 w-3.5" />
             </button>
@@ -576,14 +617,24 @@ export function CallModal({
               onClick={() => {
                 const host = remoteVideoRef.current?.parentElement;
                 if (!host) return;
-                if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+                if (document.fullscreenElement === host)
+                  void document.exitFullscreen().catch(() => {});
                 else void host.requestFullscreen?.().catch(() => undefined);
               }}
-              aria-label="Toggle fullscreen"
-              title="Fullscreen"
-              className="absolute top-2 right-2 rounded-md bg-black/60 p-1.5 text-white/90 hover:bg-black/80 transition-colors cursor-pointer"
+              aria-label={isFullscreen ? "Exit fullscreen" : "Toggle fullscreen"}
+              title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              className={cn(
+                "absolute top-2 right-2 rounded-md p-1.5 transition-colors cursor-pointer",
+                isFullscreen
+                  ? "bg-brand text-white"
+                  : "bg-black/60 text-white/90 hover:bg-black/80",
+              )}
             >
-              <Maximize2 className="h-3.5 w-3.5" />
+              {isFullscreen ? (
+                <Minimize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
             </button>
           </div>
 

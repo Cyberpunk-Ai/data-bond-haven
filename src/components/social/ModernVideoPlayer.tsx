@@ -71,6 +71,16 @@ export function ModernVideoPlayer({
     return () => observer.disconnect();
   }, [autoPlayOnScroll]);
 
+  // Esc and the browser's own fullscreen UI leave without ever calling our
+  // toggle. Without this listener the button kept its stale "isFullscreen"
+  // flag: the icon lied, and the next click tried to exit a fullscreen that
+  // was already gone — leaving a two-tap button on a video mid-feed.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement === containerRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
   // Handle controls fadeout after inactivity
   const triggerControlsActivity = () => {
     setShowControls(true);
@@ -137,15 +147,17 @@ export function ModernVideoPlayer({
   const toggleFullscreen = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!containerRef.current) return;
-    if (!document.fullscreenElement) {
-      containerRef.current
-        .requestFullscreen()
-        .then(() => setIsFullscreen(true))
-        .catch(() => {});
-    } else {
+    // Compare against *our* container: another player on the page may hold
+    // fullscreen, and blindly exiting it would hijack someone else's video.
+    if (document.fullscreenElement === containerRef.current) {
       document
         .exitFullscreen()
         .then(() => setIsFullscreen(false))
+        .catch(() => {});
+    } else {
+      containerRef.current
+        .requestFullscreen()
+        .then(() => setIsFullscreen(true))
         .catch(() => {});
     }
   };

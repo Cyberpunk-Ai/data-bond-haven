@@ -32,7 +32,8 @@ import {
   getTrendingTags,
 } from "@/lib/api-client";
 import { getWhoToFollow } from "@/lib/recommendations.functions";
-import { cn } from "@/lib/utils";
+import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS } from "@/lib/utils";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/explore")({
   validateSearch: (
@@ -154,10 +155,10 @@ function ExplorePage() {
       const existing = new Set(matchedPeople.map((p) => p.id));
       const fresh: Profile[] = [];
       for (let guard = 0; guard < 3 && fresh.length < EXPLORE_PEOPLE_CHUNK; guard++) {
-        const chunk = await getCreatorsPage({
-          limit: EXPLORE_PEOPLE_CHUNK,
-          offset: peopleWalkRef.current,
-        });
+        const chunk = await withTimeout(
+          getCreatorsPage({ limit: EXPLORE_PEOPLE_CHUNK, offset: peopleWalkRef.current }),
+          PAGE_REQUEST_TIMEOUT_MS,
+        );
         peopleWalkRef.current += chunk.length;
         for (const p of chunk) {
           if (!p.id || p.id === currentUser.id || existing.has(p.id)) continue;
@@ -167,11 +168,15 @@ function ExplorePage() {
         }
         if (chunk.length < EXPLORE_PEOPLE_CHUNK) break;
       }
+      // "Exhausted" only means something after a *successful* short walk. A
+      // failed or timed-out request used to set it too, hiding the button and
+      // silently ending the directory weeks of creators early.
       if (fresh.length === 0) setPeopleExhausted(true);
       else setMatchedPeople((prev) => [...prev, ...fresh]);
       setPeopleVisible((v) => v + EXPLORE_PEOPLE_CHUNK);
-    } catch {
-      setPeopleExhausted(true);
+    } catch (err) {
+      console.warn("Load more creators failed:", err);
+      toast.error("Couldn't load more creators. Tap again to retry.");
     } finally {
       setLoadingMorePeople(false);
     }
@@ -259,16 +264,25 @@ function ExplorePage() {
     if (!postsCursor || loadingMorePosts) return;
     setLoadingMorePosts(true);
     try {
-      const page = await getPostsPage({
-        limit: EXPLORE_POSTS_CHUNK,
-        tag: selectedTag ?? undefined,
-        before: postsCursor ?? undefined,
-      });
-      if (page.posts.length) setAllPosts((prev) => [...prev, ...page.posts]);
+      const page = await withTimeout(
+        getPostsPage({
+          limit: EXPLORE_POSTS_CHUNK,
+          tag: selectedTag ?? undefined,
+          before: postsCursor ?? undefined,
+        }),
+        PAGE_REQUEST_TIMEOUT_MS,
+      );
+      if (page.posts.length)
+        setAllPosts((prev) => {
+          const seen = new Set(prev.map((p) => p.id));
+          return [...prev, ...page.posts.filter((p) => !seen.has(p.id))];
+        });
       setPostsCursor(page.nextCursor);
       setTopVisible((v) => v + EXPLORE_TOP_STEP);
-    } catch {
-      setPostsCursor(null);
+    } catch (err) {
+      // Keep the cursor — a blip should not end the "Show more" trail.
+      console.warn("Load more top posts failed:", err);
+      toast.error("Couldn't load more posts. Tap again to retry.");
     } finally {
       setLoadingMorePosts(false);
     }

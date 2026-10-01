@@ -50,7 +50,7 @@ import {
 } from "@/lib/api-client";
 import { clearAllUnreadNotifications, decrementUnreadNotifications } from "@/lib/unread-state";
 import { useRealtime } from "@/lib/realtime";
-import { cn } from "@/lib/utils";
+import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS } from "@/lib/utils";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
 import { supabase } from "@/integrations/supabase/client";
@@ -132,7 +132,10 @@ function NotificationsPage() {
     if (!hasMore || loadingMore) return;
     setLoadingMore(true);
     try {
-      const data = await getNotifications({ limit: NOTIF_CHUNK, offset: offsetRef.current });
+      const data = await withTimeout(
+        getNotifications({ limit: NOTIF_CHUNK, offset: offsetRef.current }),
+        PAGE_REQUEST_TIMEOUT_MS,
+      );
       if (Array.isArray(data)) {
         offsetRef.current += data.length;
         setHasMore(data.length === NOTIF_CHUNK);
@@ -143,8 +146,12 @@ function NotificationsPage() {
           });
         }
       }
-    } catch {
-      setHasMore(false);
+    } catch (err) {
+      // One failed page (or a timeout) is not the end of the timeline. Keep
+      // `hasMore` and the offset so the button stays and a retry continues from
+      // the same place — retiring it here silently hid all older notifications.
+      console.warn("Load more notifications failed:", err);
+      toast.error("Couldn't load older notifications. Tap again to retry.");
     } finally {
       setLoadingMore(false);
     }

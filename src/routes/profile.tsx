@@ -43,7 +43,7 @@ import { usePlan } from "@/lib/plan-state";
 import { useBranding } from "@/lib/branding-state";
 import { PLAN_DETAILS } from "@/lib/plans";
 import { useCreatorBalance } from "@/lib/monetization-state";
-import { cn } from "@/lib/utils";
+import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS } from "@/lib/utils";
 import { toast } from "sonner";
 
 const AnalyticsDashboard = lazy(() =>
@@ -217,12 +217,23 @@ function ProfilePage() {
     if (!authorId || !query || !tabCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const page = await getProfileTabPage({ profileId: authorId, tab: query, before: tabCursor });
-      setTabPosts((prev) => [...prev, ...page.posts]);
+      const page = await withTimeout(
+        getProfileTabPage({ profileId: authorId, tab: query, before: tabCursor }),
+        PAGE_REQUEST_TIMEOUT_MS,
+      );
+      setTabPosts((prev) => {
+        // A shifted cursor can hand back rows already on screen; appending them
+        // again renders duplicate cards under the same keys.
+        const seen = new Set(prev.map((p) => p.id));
+        return [...prev, ...page.posts.filter((p) => !seen.has(p.id))];
+      });
       setTabCursor(page.nextCursor);
       if (query === "posts") setPostsTotal(page.total);
-    } catch {
-      setTabCursor(null);
+    } catch (err) {
+      // Keep the cursor: one failed page (or a timeout) must not permanently
+      // retire the "Load more" button — the next tap retries the same page.
+      console.warn("Load more tab posts failed:", err);
+      toast.error("Couldn't load more. Tap again to retry.");
     } finally {
       setLoadingMore(false);
     }

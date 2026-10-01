@@ -6,6 +6,33 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * Ceiling for a paginated page request (feed, profile tabs, notifications,
+ * explore). A serverless call or PostgREST query can stall on a cold start or
+ * a flaky connection; without this the await never settles, the "loading more"
+ * spinner stays up forever and the list looks stuck — the bug users reported
+ * as "it hangs on load more". Rejecting lets the caller drop the spinner and
+ * offer a retry instead.
+ */
+export const PAGE_REQUEST_TIMEOUT_MS = 15_000;
+
+/** Reject `promise` if it hasn't settled within `ms`; otherwise pass it through. */
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Request timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
  * On large screens the AppShell's <main> is its own scroll container
  * (lg:h-screen lg:overflow-hidden + lg:overflow-y-auto), so window scroll
  * events never fire there. These helpers talk to whichever element actually

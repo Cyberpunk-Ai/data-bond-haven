@@ -15,7 +15,14 @@ import { currentUser, getProfile } from "@/lib/profile-service";
 import { getPostsPage, getStories } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
 import { useAuth } from "@/lib/auth-state";
-import { cn, getScrollY, scrollToTop, onAppScroll } from "@/lib/utils";
+import {
+  cn,
+  getScrollY,
+  scrollToTop,
+  onAppScroll,
+  withTimeout,
+  PAGE_REQUEST_TIMEOUT_MS,
+} from "@/lib/utils";
 import { toast } from "sonner";
 
 // Story modals are only worth their (large) JS on screen: code-split them out
@@ -56,6 +63,12 @@ const tabs = ["For you", "Following", "Latest"] as const;
 // "fetch gap" flash, and older pages load on demand via the cursor.
 const FEED_PRELOAD_COUNT = 30;
 const FEED_REVEAL_STEP = 15;
+
+// A page fetch (a serverless rank call or a PostgREST query) can stall on a cold
+// start or a flaky connection. Without a ceiling the await never settles, the
+// `loadingMore` flag stays true, and the "Loading more posts…" spinner hangs
+// forever — the feed looks stuck. Cap every page request (the shared
+// PAGE_REQUEST_TIMEOUT_MS in lib/utils) and let the user retry.
 
 interface StoriesBarProps {
   stories: Story[];
@@ -257,11 +270,19 @@ function FeedPage() {
   const [visibleCount, setVisibleCount] = useState(FEED_REVEAL_STEP);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState(false);
+  // Synchronous guard: the IntersectionObserver can fire twice in quick
+  // succession (scroll + the effect re-observing), and reading `loadingMore`
+  // state inside the callback is stale until React re-renders. This ref flips
+  // the moment a fetch starts, so two overlapping fetches can never request the
+  // same cursor and desync the append.
+  const loadingMoreRef = useRef(false);
   const cursorRef = useRef<string | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setVisibleCount(FEED_REVEAL_STEP);
+    setLoadMoreError(false);
   }, [tab]);
 
   useEffect(() => {
@@ -271,7 +292,10 @@ function FeedPage() {
       (entries) => {
         if (!entries[0].isIntersecting) return;
         setVisibleCount((prev) => (prev < posts.length ? prev + FEED_REVEAL_STEP : prev));
-        if (visibleCount >= posts.length && hasMore && !loadingMore) {
+        // Only auto-load when we've revealed everything already fetched, there
+        // is a cursor to advance, and nothing is in flight or already failed
+        // (a failure waits for an explicit retry rather than hammering).
+        if (visibleCount >= posts.length && hasMore && !loadingMore && !loadMoreError) {
           void loadMorePosts();
         }
       },
@@ -283,7 +307,7 @@ function FeedPage() {
     // keeps the observer's view of `posts.length`/`hasMore` fresh without
     // resubscribing on every unrelated render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [posts.length, visibleCount, hasMore, loadingMore]);
+  }, [posts.length, visibleCount, hasMore, loadingMore, loadMoreError]);
 
   // Auto-hide tab switcher on scroll down, reveal on scroll up. Throttled to
   // one evaluation per animation frame (and a state write only on an actual
@@ -341,11 +365,14 @@ function FeedPage() {
     if (!silent) setLoading(true);
     try {
       const filterKey = tab === "Following" ? "following" : tab === "Latest" ? "latest" : "foryou";
-      const page = await getPostsPage({
-        filter: filterKey,
-        limit: FEED_PRELOAD_COUNT,
-        refresh,
-      });
+      const page = await withTimeout(
+        getPostsPage({
+          filter: filterKey,
+          limit: FEED_PRELOAD_COUNT,
+          refresh,
+        }),
+        PAGE_REQUEST_TIMEOUT_MS,
+      );
       // Ignore responses from a superseded request (user switched tabs).
       if (reqId !== feedReqId.current) return;
       if (Array.isArray(page.posts)) {
@@ -353,6 +380,7 @@ function FeedPage() {
         setPendingIncomingPosts([]);
         cursorRef.current = page.nextCursor;
         setHasMore(Boolean(page.nextCursor));
+        setLoadMoreError(false);
         setVisibleCount(FEED_REVEAL_STEP);
       }
     } catch (err) {
@@ -367,17 +395,22 @@ function FeedPage() {
   // disturbing the already-rendered cards, so infinite scroll never re-flows
   // or shifts what the user is looking at.
   async function loadMorePosts() {
-    if (loadingMore || !cursorRef.current) return;
+    if (loadingMoreRef.current || !cursorRef.current) return;
     const reqId = feedReqId.current;
     const filterKey = tab === "Following" ? "following" : tab === "Latest" ? "latest" : "foryou";
+    loadingMoreRef.current = true;
     setLoadingMore(true);
+    setLoadMoreError(false);
     try {
-      const page = await getPostsPage({
-        filter: filterKey,
-        limit: FEED_PRELOAD_COUNT,
-        cursor: filterKey === "foryou" ? (cursorRef.current ?? undefined) : undefined,
-        before: filterKey !== "foryou" ? (cursorRef.current ?? undefined) : undefined,
-      });
+      const page = await withTimeout(
+        getPostsPage({
+          filter: filterKey,
+          limit: FEED_PRELOAD_COUNT,
+          cursor: filterKey === "foryou" ? (cursorRef.current ?? undefined) : undefined,
+          before: filterKey !== "foryou" ? (cursorRef.current ?? undefined) : undefined,
+        }),
+        PAGE_REQUEST_TIMEOUT_MS,
+      );
       if (reqId !== feedReqId.current) return; // tab switched mid-flight
       setPosts((prev) => {
         const seen = new Set(prev.map((p) => p.id));
@@ -388,8 +421,12 @@ function FeedPage() {
       setVisibleCount((prev) => prev + FEED_REVEAL_STEP);
     } catch (err) {
       console.warn("Load more failed:", err);
-      setHasMore(false);
+      // Do NOT retire the feed on one bad page. Keep the cursor and `hasMore`
+      // so the sentinel stays, drop the stuck spinner, and show a retry button
+      // — a timeout or blip is not the end of the list.
+      setLoadMoreError(true);
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
   }
@@ -593,13 +630,25 @@ function FeedPage() {
         {(visibleCount < posts.length || hasMore) && (
           <div
             ref={loadMoreRef}
-            className="flex items-center justify-center gap-2 py-6 text-sm font-medium text-muted-foreground"
+            className="flex flex-col items-center justify-center gap-2 py-6 text-sm font-medium text-muted-foreground"
           >
-            {loadingMore && (
+            {loadMoreError ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin text-brand" />
-                <span>Loading more posts...</span>
+                <span>Couldn't load more posts.</span>
+                <button
+                  onClick={() => void loadMorePosts()}
+                  className="rounded-full border border-border px-4 py-1.5 text-xs font-bold text-foreground hover:bg-foreground/5 transition-colors cursor-pointer"
+                >
+                  Try again
+                </button>
               </>
+            ) : (
+              loadingMore && (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin text-brand" />
+                  <span>Loading more posts...</span>
+                </>
+              )
             )}
           </div>
         )}
