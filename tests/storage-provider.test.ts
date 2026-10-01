@@ -23,6 +23,12 @@ const S3_KEYS = [
   "R2_PUBLIC_BASE_URL",
   "SUPABASE_MEDIA_BUCKET",
   "VITE_MEDIA_BUCKET",
+  "MEDIA_PUBLIC_BUCKET",
+  "MEDIA_PRIVATE_BUCKET",
+  "SUPABASE_MEDIA_PUBLIC_BUCKET",
+  "SUPABASE_MEDIA_PRIVATE_BUCKET",
+  "S3_PUBLIC_BUCKET",
+  "R2_PUBLIC_BUCKET",
   "SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
   "VITE_SUPABASE_URL",
@@ -309,7 +315,9 @@ describe("S3 object operations", () => {
     mod.resetStorageProvider();
     const page = await mod.getStorageProvider().list!(null);
     expect(page.keys).toEqual(["posts/a.png"]);
-    expect(page.nextCursor).toBe("tok+123");
+    // The cursor is an opaque token, but it has to carry the live continuation
+    // token and the bucket the walk stopped in.
+    expect(JSON.parse(page.nextCursor!)).toEqual({ bucketIndex: 0, token: "tok+123" });
 
     await mod.getStorageProvider().list!(page.nextCursor);
     expect(seen[1]).toContain("continuation-token=tok%2B123");
@@ -379,12 +387,17 @@ describe("Supabase bucket listing", () => {
   beforeEach(clearEnv);
 
   it("walks every folder and returns only object keys", async () => {
+    // Only the legacy bucket holds bytes here; the walk must still visit the
+    // routed buckets first and finish with each key exactly once.
     vi.doMock("@/integrations/supabase/client.server", () => ({
       supabaseAdmin: {
         storage: {
-          from: () => ({
+          from: (bucketName: string) => ({
             list: async (prefix: string, opts: { limit: number; offset: number }) => ({
-              data: (TREE[prefix] ?? []).slice(opts.offset, opts.offset + opts.limit),
+              data:
+                bucketName === "media"
+                  ? (TREE[prefix] ?? []).slice(opts.offset, opts.offset + opts.limit)
+                  : [],
               error: null,
             }),
           }),

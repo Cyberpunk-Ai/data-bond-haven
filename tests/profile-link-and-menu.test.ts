@@ -49,6 +49,17 @@ describe("profile links open the full profile", () => {
     expect(route).toContain("useEffect");
     expect(route).toContain('property: "og:type", content: "profile"');
   });
+
+  it("the hand-off renders a spinner, never the profile teaser", () => {
+    const route = read("../src/routes/u.$username.tsx");
+    // The stub card that used to flash before the redirect is gone entirely.
+    expect(route).not.toContain("Open full profile");
+    expect(route).not.toContain("followers");
+    expect(route).not.toContain("profile.posts.map");
+    // Both the loader round-trip and the redirect show the same quiet state.
+    expect(route).toContain("pendingComponent: ProfileHandoff");
+    expect(route).toContain("animate-spin");
+  });
 });
 
 describe("the post-card more menu escapes the clipped card", () => {

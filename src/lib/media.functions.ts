@@ -45,9 +45,14 @@ export const deleteMyMedia = createServerFn({ method: "POST" })
     if (!profileId) return { removed: 0 };
 
     const { getStorageProvider, mediaKeyFromUrl } = await import("@/lib/storage/index.server");
+    // A caller may hand over a stored column value verbatim, and those can hold
+    // several comma-joined urls (a multi-image post), so split before mapping.
     const keys = Array.from(
       new Set(
-        urls.map((u) => mediaKeyFromUrl(u ?? undefined)).filter((k): k is string => Boolean(k)),
+        urls
+          .flatMap((u) => (u ?? "").split(","))
+          .map((u) => mediaKeyFromUrl(u.trim() || undefined))
+          .filter((k): k is string => Boolean(k)),
       ),
     );
     if (keys.length === 0) return { removed: 0 };

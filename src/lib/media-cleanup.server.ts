@@ -21,6 +21,22 @@ function mediaUrlForPath(path: string): string {
 }
 
 /**
+ * A media column may hold SEVERAL urls — the composer joins a multi-image
+ * post's attachments with commas (`posts.media_url`, and the same shape on
+ * stories/messages). Every consumer here splits first, because treating the
+ * joined string as one reference made every image of a multi-image post look
+ * unreferenced: the nightly sweep would have reclaimed the bytes under a live
+ * post, and an owner deleting their post left those bytes behind instead.
+ */
+function splitMediaRefs(value: unknown): string[] {
+  if (typeof value !== "string" || !value) return [];
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/**
  * Delete the underlying objects for the given media URLs (or raw keys) and drop
  * their `media_objects` rows. Unknown/empty URLs are ignored; failures are
  * logged, not thrown, so a storage outage never blocks a user-facing delete.
@@ -29,7 +45,10 @@ function mediaUrlForPath(path: string): string {
 export async function deleteStoredMedia(urls: Array<string | null | undefined>): Promise<number> {
   const keys = Array.from(
     new Set(
-      urls.map((u) => mediaKeyFromUrl(u ?? undefined)).filter((k): k is string => Boolean(k)),
+      urls
+        .flatMap((u) => splitMediaRefs(u))
+        .map((u) => mediaKeyFromUrl(u))
+        .filter((k): k is string => Boolean(k)),
     ),
   );
   if (keys.length === 0) return 0;
@@ -54,6 +73,7 @@ export async function deleteStoredMedia(urls: Array<string | null | undefined>):
 // Every column that can hold a media URL. A tracked object is considered "in
 // use" while any of these still references it. Kept as data so adding a new
 // media-bearing table is a one-line change rather than a hunt through the GC.
+// Columns listed here may carry several comma-joined urls (see splitMediaRefs).
 const REFERENCING_COLUMNS: Array<{ table: string; column: string }> = [
   { table: "posts", column: "media_url" },
   { table: "stories", column: "media_url" },
@@ -78,8 +98,7 @@ async function collectReferencedUrls(db: any): Promise<Set<string>> {
         continue;
       }
       for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-        const url = row[column];
-        if (typeof url === "string" && url) referenced.add(url);
+        for (const url of splitMediaRefs(row[column])) referenced.add(url);
       }
     } catch (err) {
       // A table/column missing in a not-yet-migrated environment must not abort

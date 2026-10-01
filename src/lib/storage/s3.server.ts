@@ -19,6 +19,7 @@ import type {
   StorageRead,
   StorageStat,
 } from "@/lib/storage/provider.server";
+import { isPublicMediaPath } from "@/lib/media-folders.server";
 
 export interface S3Config {
   endpoint: string;
@@ -30,6 +31,12 @@ export interface S3Config {
   pathStyle: boolean;
   /** Optional public/CDN hostname that mirrors the bucket read-only. */
   publicBaseUrl?: string;
+  /**
+   * Optional second bucket holding only the world-readable folders, so its
+   * public domain can never serve a DM attachment or a Space replay. Left unset
+   * keeps one bucket and the proxy decides visibility, as before.
+   */
+  publicBucket?: string;
 }
 
 function env(...names: string[]): string | undefined {
@@ -73,6 +80,9 @@ export function resolveS3Config(): S3Config | null {
     region: env("S3_REGION", "R2_REGION") ?? "auto",
     pathStyle: flag("S3_PATH_STYLE", true),
     publicBaseUrl: env("S3_PUBLIC_BASE_URL", "R2_PUBLIC_BASE_URL"),
+    // A separate public bucket is opt-in: without it every key stays in the
+    // primary bucket and the read proxy remains the only visibility gate.
+    publicBucket: env("S3_PUBLIC_BUCKET", "R2_PUBLIC_BUCKET"),
   };
 }
 
@@ -119,18 +129,30 @@ export function createS3Provider(input?: S3Config | null): StorageProvider {
   })();
   const scheme = config.endpoint.startsWith("http://") ? "http" : "https";
 
-  function objectUrl(key: string): string {
-    const encoded = key.split("/").map(encodeURIComponent).join("/");
+  /**
+   * Which bucket a key lives in. Public folders go to the dedicated public
+   * bucket when the operator configured one; everything else stays in the
+   * primary bucket, where only the authorized reader can reach it.
+   */
+  function bucketOfKey(key: string): string {
+    return config.publicBucket && isPublicMediaPath(key) ? config.publicBucket : config.bucket;
+  }
+
+  function encodedKey(key: string): string {
+    return key.split("/").map(encodeURIComponent).join("/");
+  }
+
+  function objectUrl(key: string, bucketName = bucketOfKey(key)): string {
     return config.pathStyle
-      ? `${config.endpoint}/${config.bucket}/${encoded}`
-      : `${scheme}://${config.bucket}.${host}/${encoded}`;
+      ? `${config.endpoint}/${bucketName}/${encodedKey(key)}`
+      : `${scheme}://${bucketName}.${host}/${encodedKey(key)}`;
   }
 
   /** Bucket root, which is where ListObjects v2 lives. */
-  function bucketUrl(query: URLSearchParams): string {
+  function bucketUrl(query: URLSearchParams, bucketName = config.bucket): string {
     return config.pathStyle
-      ? `${config.endpoint}/${config.bucket}/?${query}`
-      : `${scheme}://${config.bucket}.${host}/?${query}`;
+      ? `${config.endpoint}/${bucketName}/?${query}`
+      : `${scheme}://${bucketName}.${host}/?${query}`;
   }
 
   function toRead(res: Response, fallbackType: string, wholeSize?: number): Promise<StorageRead> {
@@ -151,7 +173,7 @@ export function createS3Provider(input?: S3Config | null): StorageProvider {
     info: {
       id: "s3",
       label: labelForEndpoint(config.endpoint),
-      bucket: config.bucket,
+      bucket: config.publicBucket ? `${config.bucket} + ${config.publicBucket}` : config.bucket,
       endpoint: host,
     },
     async put(key, body, contentType) {
@@ -206,18 +228,29 @@ export function createS3Provider(input?: S3Config | null): StorageProvider {
       };
     },
     publicUrl(key) {
+      // Never hand out a direct URL for a non-public key: a CDN domain that
+      // fronts the bucket would then serve DM attachments and replays to anybody.
+      if (!isPublicMediaPath(key)) return null;
       if (!config.publicBaseUrl) return null;
-      return `${config.publicBaseUrl.replace(/\/+$/, "")}/${key
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/")}`;
+      return `${config.publicBaseUrl.replace(/\/+$/, "")}/${encodedKey(key)}`;
     },
     async list(cursor) {
-      // ListObjectsV2, one page at a time. S3 answers XML, and object keys may
-      // contain escaped entities, so the values are unescaped before use.
+      // ListObjectsV2, one page at a time, walking the private bucket first and
+      // the public one after it so a reconciliation sees every stored byte.
+      const buckets = [...new Set([config.bucket, config.publicBucket ?? config.bucket])];
+      let page: { bucketIndex: number; token?: string } = { bucketIndex: 0 };
+      if (cursor) {
+        try {
+          page = JSON.parse(cursor);
+        } catch {
+          page = { bucketIndex: 0, token: cursor };
+        }
+      }
+      const bucketName = buckets[page.bucketIndex];
+      if (!bucketName) return { keys: [], nextCursor: null };
       const query = new URLSearchParams({ "list-type": "2", "max-keys": "1000" });
-      if (cursor) query.set("continuation-token", cursor);
-      const res = await client.fetch(bucketUrl(query), { method: "GET" });
+      if (page.token) query.set("continuation-token", page.token);
+      const res = await client.fetch(bucketUrl(query, bucketName), { method: "GET" });
       if (!res.ok) {
         throw new Error(`${this.info.label} listing failed (${res.status})`);
       }
@@ -225,7 +258,14 @@ export function createS3Provider(input?: S3Config | null): StorageProvider {
       const keys = [...xml.matchAll(/<Key>([\s\S]*?)<\/Key>/g)].map((m) => unescapeXml(m[1]));
       const truncated = /<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(xml);
       const token = xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/i)?.[1];
-      return { keys, nextCursor: truncated && token ? unescapeXml(token) : null };
+      if (truncated && token) {
+        return { keys, nextCursor: JSON.stringify({ bucketIndex: page.bucketIndex, token }) };
+      }
+      const nextIndex = page.bucketIndex + 1;
+      return {
+        keys,
+        nextCursor: nextIndex < buckets.length ? JSON.stringify({ bucketIndex: nextIndex }) : null,
+      };
     },
     async verifyAccess(): Promise<StorageProbe> {
       // HEAD on a key that cannot exist: 404 proves the credentials and the

@@ -13,6 +13,7 @@
 import type { StorageInfo, StorageProbe, StorageProvider } from "@/lib/storage/provider.server";
 import { createS3Provider, resolveS3Config } from "@/lib/storage/s3.server";
 import { createSupabaseProvider } from "@/lib/storage/supabase.server";
+import { mediaBucketNames } from "@/lib/media-folders.server";
 
 export * from "@/lib/storage/provider.server";
 
@@ -22,10 +23,13 @@ let cachedFingerprint = "";
 /** Any credential-shaped change in the environment rebuilds the provider. */
 function fingerprint(): string {
   const s3 = resolveS3Config();
+  const buckets = mediaBucketNames();
   return [
     (process.env["STORAGE_PROVIDER"] || "auto").toLowerCase(),
-    s3 ? `${s3.endpoint}|${s3.bucket}|${s3.region}|${s3.pathStyle}|${s3.publicBaseUrl ?? ""}` : "-",
-    process.env["SUPABASE_MEDIA_BUCKET"] || process.env["VITE_MEDIA_BUCKET"] || "media",
+    s3
+      ? `${s3.endpoint}|${s3.bucket}|${s3.publicBucket ?? ""}|${s3.region}|${s3.pathStyle}|${s3.publicBaseUrl ?? ""}`
+      : "-",
+    `${buckets.publicBucket}|${buckets.privateBucket}|${buckets.legacyBucket}`,
   ].join(":");
 }
 

@@ -89,11 +89,17 @@ export interface StorageProvider {
 /** Extract a storage key from a `/api/public/media/<key>` URL or a raw key. */
 export function mediaKeyFromUrl(url: string | null | undefined): string | null {
   if (!url) return null;
+  // A stored media column can hold several comma-joined urls (a multi-image
+  // post). Callers are meant to split first; cutting at the first comma here
+  // keeps a value that skipped splitting from producing a key that names two
+  // objects at once (which matches nothing, so nothing ever gets reclaimed).
+  const single = url.split(",")[0]?.trim();
+  if (!single) return null;
   const marker = "/api/public/media/";
-  const idx = url.indexOf(marker);
-  if (idx !== -1) return decodeURIComponent(url.slice(idx + marker.length).split("?")[0]);
+  const idx = single.indexOf(marker);
+  if (idx !== -1) return decodeURIComponent(single.slice(idx + marker.length).split("?")[0]);
   // A bare object path (no protocol) is already a key.
-  if (!/^https?:\/\//.test(url)) return url.replace(/^\/+/, "");
+  if (!/^https?:\/\//.test(single)) return single.replace(/^\/+/, "");
   return null;
 }
 

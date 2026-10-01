@@ -2,11 +2,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { getStorageProvider } from "@/lib/storage/index.server";
 import { readRangeIntent } from "@/lib/media-range.server";
 import { contentDisposition, sanitizeFileName } from "@/lib/media-download";
+import { isPrivateMediaPath, isPublicMediaPath } from "@/lib/media-folders.server";
 
-// `stories` moved from public to authed: the rows are already limited to the
-// author's follow network by RLS, and the bytes now enforce the same rule.
-const PUBLIC_FOLDERS = ["avatars", "posts", "media"];
-const AUTHED_FOLDERS = ["messages", "recordings", "stories"];
+// Which folders are world-readable and which need a reader check lives in
+// src/lib/media-folders.server.ts, shared with the upload route, the signed-URL
+// issuer and the storage providers (which is what decides the public/private
+// bucket each object is written to). `stories` is authed rather than public:
+// the rows are limited to the author's follow network by RLS, and the bytes
+// enforce the same rule.
 
 // Content types we are willing to render inline. Anything else (notably
 // image/svg+xml and text/html, which can carry script) is forced to a
@@ -47,7 +50,6 @@ export const Route = createFileRoute("/api/public/media/$")({
       GET: async ({ params, request }) => {
         const raw = String((params as { _splat?: string })._splat ?? "");
         const path = raw.replace(/^\/+/, "");
-        const folder = path.split("/")[0] ?? "";
         const query = new URL(request.url).searchParams;
         // `?dl=1` asks for the bytes as a file. `?name=` is the name the sender
         // chose; the storage key is a randomised uuid that means nothing to the
@@ -59,8 +61,8 @@ export const Route = createFileRoute("/api/public/media/$")({
           return new Response("Not found", { status: 404 });
         }
 
-        const isPublic = PUBLIC_FOLDERS.includes(folder);
-        const isAuthed = AUTHED_FOLDERS.includes(folder);
+        const isPublic = isPublicMediaPath(path);
+        const isAuthed = isPrivateMediaPath(path);
         if (!isPublic && !isAuthed) {
           return new Response("Not found", { status: 404 });
         }
@@ -87,11 +89,12 @@ export const Route = createFileRoute("/api/public/media/$")({
 
         const provider = getStorageProvider();
 
-        // Public, inline-safe objects can be handed straight to the bucket's
-        // own read-only domain when the operator opted into one — the bytes
-        // then travel from the CDN instead of through this server. Requires an
-        // explicit MEDIA_PUBLIC_CDN=true, because a public bucket domain serves
-        // the whole bucket, not just the folders the app treats as public.
+        // Public, inline-safe objects can be handed straight to the public
+        // bucket's own read-only domain when the operator opted into one — the
+        // bytes then travel from the CDN instead of through this server. The
+        // opt-in (MEDIA_PUBLIC_CDN) is still required, because a bucket domain
+        // serves everything that bucket holds: the app only puts declared public
+        // folders in it, so this is safe once the split buckets exist.
         // A download must come from here even when a public CDN is configured:
         // the bucket's own domain cannot be told to answer `attachment`, and a
         // redirect to it is how "Download" ended up opening the image in a tab.

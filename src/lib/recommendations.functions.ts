@@ -14,7 +14,10 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
  * post creation), freshness decay, relationship strength (follow graph +
  * historical interactions with the author), and an author-diversity cap.
  * Posts the viewer has already been shown are demoted, and once shown 3+
- * times without engaging, dropped entirely so a session doesn't loop.
+ * times without engaging they sink behind everything unseen — the feed only
+ * replays them once the platform genuinely has no fresh candidate left, so a
+ * session doesn't loop while there is something new to show and never runs
+ * dry when there isn't.
  *
  * Pagination is cursor based (`(score, id)` composite, base64 encoded) and
  * the score for a given post is stable within a "ranking epoch" (bucketed to
@@ -193,33 +196,45 @@ export const getForYouPosts = createServerFn({ method: "GET" })
 
     // ---- candidate generation ------------------------------------------------
     // Pool 1: recent posts (covers followed + 2nd degree + everything else).
-    // Pool 2: trending — highest engagement in the last 48h, independent of recency rank,
-    // so a viral post a viewer hasn't seen yet still surfaces.
-    const [recentRes, trendingRes] = await Promise.all([
-      supabase
+    // Fetched in chunks so the pool holds EVERY visible post, not just the
+    // newest few hundred — an older post can only leave the feed because it
+    // ranked below the page window, never because a `limit` silently cut it
+    // off. The short chunk answers fast, so stopping there costs nothing.
+    const POOL_CHUNK = 500;
+    const POOL_MAX = 2000;
+    const recentRows: any[] = [];
+    for (let from = 0; from < POOL_MAX; from += POOL_CHUNK) {
+      const { data, error } = await supabase
         .from("posts")
         .select("*")
         .eq("hidden", false)
         .order("created_at", { ascending: false })
-        .limit(400),
-      supabase
-        .from("posts")
-        .select("*")
-        .eq("hidden", false)
-        .gte("created_at", new Date(Date.now() - 48 * 3_600_000).toISOString())
-        .order("like_count", { ascending: false })
-        .limit(150),
-    ]);
+        .range(from, from + POOL_CHUNK - 1);
+      if (error || !data?.length) break;
+      recentRows.push(...data);
+      if (data.length < POOL_CHUNK) break;
+    }
+    // Pool 2: trending — highest engagement in the last 48h, independent of recency rank,
+    // so a viral post a viewer hasn't seen yet still surfaces.
+    const trendingRes = await supabase
+      .from("posts")
+      .select("*")
+      .eq("hidden", false)
+      .gte("created_at", new Date(Date.now() - 48 * 3_600_000).toISOString())
+      .order("like_count", { ascending: false })
+      .limit(300);
 
     const byId = new Map<string, any>();
-    for (const row of recentRes.data ?? []) byId.set(row.id, row);
+    for (const row of recentRows) byId.set(row.id, row);
     for (const row of trendingRes.data ?? []) if (!byId.has(row.id)) byId.set(row.id, row);
 
-    // "For you" recommends OTHER people's content: your own posts live on your
-    // profile and the Latest tab, so they never occupy recommendation slots.
-    // Tags the viewer muted through the post menu are dropped here too.
+    // Every visible post is feed material — including your own: "show all
+    // available posts" means the ranker never hides a category by fiat, and
+    // the 2-per-10-window diversity cap below already stops one account
+    // (including the viewer) from flooding a screenful. Tags the viewer
+    // muted through the post menu are still dropped here.
     const rows = [...byId.values()].filter(
-      (r) => r.user_id !== myId && !mutedAuthors.has(r.user_id) && !hasMutedTag(r.tags, mutedTags),
+      (r) => !mutedAuthors.has(r.user_id) && !hasMutedTag(r.tags, mutedTags),
     );
 
     const personalised =
@@ -291,72 +306,83 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     // An explicit refresh opts out and ranks with the live clock.
     const epoch = data.refresh ? Date.now() : Math.floor(Date.now() / (10 * 60_000)) * 10 * 60_000;
 
-    const scored: Array<{ row: any; score: number }> = rows
-      .filter((row: any) => (impressionCount.get(row.id) ?? 0) < 3 || engagedWeight.has(row.id))
-      .map((row: any) => {
-        const ageHours = Math.max(0.1, (epoch - new Date(row.created_at).getTime()) / 3_600_000);
-        const decay = Math.exp(-ageHours / 36); // ~1.5 day half-life-ish
+    const scored: Array<{ row: any; score: number }> = rows.map((row: any) => {
+      const ageHours = Math.max(0.1, (epoch - new Date(row.created_at).getTime()) / 3_600_000);
+      const decay = Math.exp(-ageHours / 36); // ~1.5 day half-life-ish
 
-        // Engagement velocity: interactions per hour since posting, weighted by type.
-        const rawEngagement =
-          (row.like_count ?? 0) * 1 + (row.comment_count ?? 0) * 2.2 + (row.repost_count ?? 0) * 3;
-        const velocity = rawEngagement / ageHours;
-        const views = Math.max(1, row.view_count ?? 1);
-        const quality = Math.log1p(velocity * 10) * (0.5 + Math.min(1, rawEngagement / views));
+      // Engagement velocity: interactions per hour since posting, weighted by type.
+      const rawEngagement =
+        (row.like_count ?? 0) * 1 + (row.comment_count ?? 0) * 2.2 + (row.repost_count ?? 0) * 3;
+      const velocity = rawEngagement / ageHours;
+      const views = Math.max(1, row.view_count ?? 1);
+      const quality = Math.log1p(velocity * 10) * (0.5 + Math.min(1, rawEngagement / views));
 
-        const authorScore = Math.log1p(authorAffinity.get(row.user_id) ?? 0) * 2.2;
-        // Post tags are matched through the same normaliser the affinity map is
-        // keyed with, so `#AI` and `ai` are one topic.
-        const tagScore =
-          ((row.tags ?? []) as string[]).reduce(
-            (sum, tag) => sum + Math.log1p(tagAffinity.get(normalizeTag(tag)) ?? 0),
-            0,
-          ) * 1.6;
+      const authorScore = Math.log1p(authorAffinity.get(row.user_id) ?? 0) * 2.2;
+      // Post tags are matched through the same normaliser the affinity map is
+      // keyed with, so `#AI` and `ai` are one topic.
+      const tagScore =
+        ((row.tags ?? []) as string[]).reduce(
+          (sum, tag) => sum + Math.log1p(tagAffinity.get(normalizeTag(tag)) ?? 0),
+          0,
+        ) * 1.6;
 
-        // Relationship strength: graph proximity plus how much this viewer has
-        // historically engaged with this specific author.
-        const relationship =
-          (firstDegree.has(row.user_id) ? 3 : secondDegree.has(row.user_id) ? 1.4 : 0) +
-          Math.min(2, Math.log1p(authorAffinity.get(row.user_id) ?? 0) * 0.6);
+      // Relationship strength: graph proximity plus how much this viewer has
+      // historically engaged with this specific author.
+      const relationship =
+        (firstDegree.has(row.user_id) ? 3 : secondDegree.has(row.user_id) ? 1.4 : 0) +
+        Math.min(2, Math.log1p(authorAffinity.get(row.user_id) ?? 0) * 0.6);
 
-        const seenTimes = impressionCount.get(row.id) ?? 0;
-        const seenPenalty = seenTimes > 0 && !engagedWeight.has(row.id) ? -1.5 * seenTimes : 0;
+      const seenTimes = impressionCount.get(row.id) ?? 0;
+      const seenPenalty = seenTimes > 0 && !engagedWeight.has(row.id) ? -1.5 * seenTimes : 0;
 
-        // Discovery nudge: content completely outside this viewer's known
-        // world (unfollowed, never-engaged author AND no affinity tags) gets a
-        // small per-(viewer, post, epoch) bonus — up to +1.4, bounded so it
-        // can never out-rank genuinely relevant posts. Because the seed
-        // carries the viewer id, different users explore different corners of
-        // the same pool instead of everyone converging on one global ranking;
-        // because it is multiplied through the decay term, only fresh unknowns
-        // get the lift, which is what "discover new things" should mean.
-        const tagsArr = (row.tags ?? []) as string[];
-        const outsideKnownWorld =
-          !firstDegree.has(row.user_id) &&
-          !secondDegree.has(row.user_id) &&
-          !authorAffinity.has(row.user_id) &&
-          !tagsArr.some((tag) => tagAffinity.has(normalizeTag(tag)));
-        const discovery = outsideKnownWorld ? jitter01(`${myId}:${row.id}:${epoch}`) * 1.4 : 0;
+      // Discovery nudge: content completely outside this viewer's known
+      // world (unfollowed, never-engaged author AND no affinity tags) gets a
+      // small per-(viewer, post, epoch) bonus — up to +1.4, bounded so it
+      // can never out-rank genuinely relevant posts. Because the seed
+      // carries the viewer id, different users explore different corners of
+      // the same pool instead of everyone converging on one global ranking;
+      // because it is multiplied through the decay term, only fresh unknowns
+      // get the lift, which is what "discover new things" should mean.
+      const tagsArr = (row.tags ?? []) as string[];
+      const outsideKnownWorld =
+        !firstDegree.has(row.user_id) &&
+        !secondDegree.has(row.user_id) &&
+        !authorAffinity.has(row.user_id) &&
+        !tagsArr.some((tag) => tagAffinity.has(normalizeTag(tag)));
+      const discovery = outsideKnownWorld ? jitter01(`${myId}:${row.id}:${epoch}`) * 1.4 : 0;
 
-        const base = authorScore + tagScore + relationship + quality + discovery;
-        // Paid team workspaces boost by the workspace (or its owner's) plan;
-        // personal posts boost by the author's plan.
-        const reachBoost = row.workspace_id
-          ? (wsBoost.get(row.workspace_id) ?? planBoost.get(row.user_id) ?? 1)
-          : (planBoost.get(row.user_id) ?? 1);
-        const score = (base * (0.35 + decay) + decay * 2) * reachBoost + seenPenalty;
+      const base = authorScore + tagScore + relationship + quality + discovery;
+      // Paid team workspaces boost by the workspace (or its owner's) plan;
+      // personal posts boost by the author's plan.
+      const reachBoost = row.workspace_id
+        ? (wsBoost.get(row.workspace_id) ?? planBoost.get(row.user_id) ?? 1)
+        : (planBoost.get(row.user_id) ?? 1);
+      const score = (base * (0.35 + decay) + decay * 2) * reachBoost + seenPenalty;
 
-        return { row, score };
-      });
+      return { row, score };
+    });
 
     // Stable tie-break by id keeps ordering deterministic within an epoch.
     scored.sort((a, b) => b.score - a.score || (a.row.id < b.row.id ? -1 : 1));
+
+    // Seen-3+-times-without-engaging posts sink to the back of the queue
+    // instead of leaving it: while unseen content can still fill a page the
+    // replayed ones stay hidden (a session doesn't loop), but once the fresh
+    // supply runs out they become candidates again — every available post
+    // stays reachable through the feed.
+    const unseen = scored.filter(
+      (s) => (impressionCount.get(s.row.id) ?? 0) < 3 || engagedWeight.has(s.row.id),
+    );
+    const replayed = scored.filter(
+      (s) => (impressionCount.get(s.row.id) ?? 0) >= 3 && !engagedWeight.has(s.row.id),
+    );
+    const queue = unseen.length >= data.limit ? unseen : [...unseen, ...replayed];
 
     // Diversity cap: at most 2 posts per author inside any 10-post sliding
     // window (a very prolific author still reaches deeper pages — unlike a
     // hard global cap — but no one floods a screenful).
     const ranked: Array<{ row: any; score: number }> = [];
-    for (const item of scored) {
+    for (const item of queue) {
       let inWindow = 0;
       for (let i = Math.max(0, ranked.length - 9); i < ranked.length; i++) {
         if (ranked[i].row.user_id === item.row.user_id) inWindow++;

@@ -1,11 +1,8 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { ArrowLeft } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { AppShell, Panel } from "@/components/social/AppShell";
-import { Avatar } from "@/components/social/Avatar";
-import { TimeAgo } from "@/components/social/TimeAgo";
 import { DefaultRail } from "@/components/social/RightRail";
-import { compact } from "@/lib/formatters";
 import { getSharedProfile } from "@/lib/share.functions";
 
 export const Route = createFileRoute("/u/$username")({
@@ -31,88 +28,58 @@ export const Route = createFileRoute("/u/$username")({
     };
   },
   component: PublicProfilePage,
+  // Same quiet hand-off state while the share loader round-trips.
+  pendingComponent: ProfileHandoff,
 });
+
+/**
+ * `/u/<username>` exists for link previews: crawlers read the SSR meta tags
+ * above and stop there. Real visitors are only ever passing through to the
+ * full profile, so the page shows a spinner instead of the old teaser card
+ * (avatar, follower count, post snippets and a button asking them to continue
+ * manually) that used to flash before the redirect landed.
+ */
+function ProfileHandoff() {
+  return (
+    <AppShell title="Profile" right={<DefaultRail />}>
+      <div className="mx-auto flex w-full max-w-2xl items-center justify-center gap-2 rounded-3xl border border-border bg-card py-16 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" /> Opening profile…
+      </div>
+    </AppShell>
+  );
+}
 
 function PublicProfilePage() {
   const profile = Route.useLoaderData();
   const navigate = useNavigate();
 
-  // Copied profile links are /u/<username>, and this page used to be a share
-  // preview that stopped there — following the link never opened the actual
-  // profile unless the visitor found and tapped "Open full profile". Real
-  // visitors are now forwarded straight through (replace, so Back doesn't
-  // loop); crawlers and link previews still get this page's SSR meta tags,
-  // because effects never run on the server.
+  // Copied profile links are /u/<username>. Forward visitors straight to the
+  // full profile (replace, so Back doesn't loop into this hand-off page);
+  // effects never run on the server, so link previews keep the meta shell.
   useEffect(() => {
     if (profile) {
       void navigate({ to: "/profile", search: { user: profile.username }, replace: true });
     }
   }, [profile, navigate]);
 
-  return (
-    <AppShell title="Profile" right={<DefaultRail />}>
-      <div className="mx-auto w-full max-w-2xl space-y-5">
-        <Link
-          to="/explore"
-          className="inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" /> Explore
-        </Link>
-
-        {!profile ? (
+  if (!profile) {
+    return (
+      <AppShell title="Profile" right={<DefaultRail />}>
+        <div className="mx-auto w-full max-w-2xl">
           <Panel className="flex flex-col items-center gap-3 py-14 text-center">
             <p className="text-lg font-bold">We couldn't find that account</p>
             <p className="text-sm text-muted-foreground">The username may have changed.</p>
+            <Link
+              to="/explore"
+              className="mt-1 inline-flex rounded-full bg-gradient-to-r from-brand to-brand-pink px-5 py-2.5 text-sm font-bold text-white"
+            >
+              Explore profiles
+            </Link>
           </Panel>
-        ) : (
-          <>
-            <Panel className="space-y-4 p-5 sm:p-6">
-              <div className="flex items-center gap-4">
-                <Avatar
-                  name={profile.displayName}
-                  src={profile.avatarUrl ?? undefined}
-                  className="h-16 w-16 text-lg"
-                />
-                <div className="min-w-0">
-                  <h1 className="truncate text-xl font-black">{profile.displayName}</h1>
-                  <p className="truncate text-sm text-muted-foreground">@{profile.username}</p>
-                  <p className="mt-1 text-sm font-semibold">
-                    {compact(profile.followers)}{" "}
-                    <span className="font-normal text-muted-foreground">followers</span>
-                  </p>
-                </div>
-              </div>
-              {profile.bio && <p className="text-sm leading-relaxed">{profile.bio}</p>}
-              <Link
-                to="/profile"
-                search={{ user: profile.username }}
-                className="inline-flex rounded-full bg-gradient-to-r from-brand to-brand-pink px-5 py-2.5 text-sm font-bold text-white"
-              >
-                Open full profile
-              </Link>
-            </Panel>
+        </div>
+      </AppShell>
+    );
+  }
 
-            <div className="space-y-3">
-              {profile.posts.map((p) => (
-                <Link
-                  key={p.id}
-                  to="/post/$id"
-                  params={{ id: p.id }}
-                  className="glass-panel block rounded-3xl p-4 shadow-soft transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lift"
-                >
-                  <p className="line-clamp-4 text-sm leading-relaxed">{p.content}</p>
-                  <TimeAgo iso={p.createdAt} className="mt-2 block text-xs text-muted-foreground" />
-                </Link>
-              ))}
-              {profile.posts.length === 0 && (
-                <Panel className="py-10 text-center text-sm text-muted-foreground">
-                  No posts yet.
-                </Panel>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-    </AppShell>
-  );
+  return <ProfileHandoff />;
 }

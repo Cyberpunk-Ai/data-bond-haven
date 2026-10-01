@@ -1,23 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createHash, randomBytes } from "crypto";
 import { isAllowedContentType, sizeLimitFor, getStorageProvider } from "@/lib/storage/index.server";
+import { isUploadFolder, visibilityOfPath } from "@/lib/media-folders.server";
 import { signatureMatches } from "@/lib/media-signature";
 import { declaredBodyBytes, readCappedBody } from "@/lib/upload-limits";
 
-const FOLDERS = new Set(["avatars", "posts", "stories", "media", "messages", "recordings"]);
-
-// Storage visibility per folder, recorded as a database fact in `media_objects`
-// (plan §4.5/§S11). avatars/posts/media are world-readable through the media
-// proxy; stories/messages/recordings are authorized per reader (stories are
-// limited to the author's follow network, mirroring the rows' RLS).
-const VISIBILITY_BY_FOLDER: Record<string, "public" | "authed" | "private"> = {
-  avatars: "public",
-  posts: "public",
-  stories: "authed",
-  media: "public",
-  messages: "private",
-  recordings: "private",
-};
+// Storage visibility per folder lives in src/lib/media-folders.server.ts — the
+// same map the read proxy and the storage providers route buckets by, so an
+// upload can never file a private object into the public bucket by accident.
+// avatars/posts/media are world-readable; stories/messages/recordings are
+// authorized per reader (stories mirror the rows' follow-network RLS).
+function visibilityForFolder(folder: string): "public" | "authed" | "private" {
+  return visibilityOfPath(`${folder}/x`) ?? "authed";
+}
 
 // New uploads per authenticated user per minute. Cheap DoS/burst defence now
 // that the bytes are being tracked; adjustable without a redeploy of logic.
@@ -98,7 +93,7 @@ export const Route = createFileRoute("/api/uploads/")({
 
         const url = new URL(request.url);
         const folder = (url.searchParams.get("folder") || "media").toLowerCase();
-        if (!FOLDERS.has(folder)) {
+        if (!isUploadFolder(folder)) {
           return json({ error: "That upload destination isn't allowed." }, 400);
         }
 
@@ -233,7 +228,7 @@ export const Route = createFileRoute("/api/uploads/")({
             path: key,
             owner_profile_id: profileId,
             folder,
-            visibility: VISIBILITY_BY_FOLDER[folder] ?? "authed",
+            visibility: visibilityForFolder(folder),
             content_type: contentType,
             bytes: buffer.byteLength,
             sha256,

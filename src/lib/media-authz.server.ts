@@ -9,21 +9,21 @@
  * after the same check the proxy would have applied.
  */
 
-const PUBLIC_FOLDERS = new Set(["avatars", "posts", "media"]);
-// `stories` objects are addressed by public URL but are only readable inside
-// the author's follow network — the same rule the `stories graph read` RLS
-// policy applies to the rows, enforced here on the bytes (plan: stories are
-// for followers/following, not everybody).
-const PRIVATE_FOLDERS = new Set(["messages", "recordings", "stories"]);
+import { visibilityOfPath } from "@/lib/media-folders.server";
 
 export type MediaAccess = "public" | "private" | "unknown";
 
-/** Classify an object path by its leading folder. */
+/**
+ * Classify an object path by its leading folder, from the shared folder map
+ * (src/lib/media-folders.server.ts) — the same map that decides which bucket
+ * the object was written to, so a reader rule and a bucket placement can never
+ * disagree. `stories` is addressed by a public URL but is only readable inside
+ * the author's follow network, mirroring the rows' RLS policy on the bytes.
+ */
 export function classifyMediaPath(path: string): MediaAccess {
-  const folder = path.split("/")[0] ?? "";
-  if (PUBLIC_FOLDERS.has(folder)) return "public";
-  if (PRIVATE_FOLDERS.has(folder)) return "private";
-  return "unknown";
+  const visibility = visibilityOfPath(path);
+  if (visibility === null) return "unknown";
+  return visibility === "public" ? "public" : "private";
 }
 
 interface MediaIdentity {
