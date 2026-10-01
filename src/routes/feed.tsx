@@ -665,7 +665,10 @@ function FeedPage() {
 
         {visibleCount >= posts.length && !hasMore && posts.length > 0 && (
           <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground font-medium">
-            <Sparkles className="h-4 w-4 text-brand" /> You're all caught up ({posts.length} posts)
+            {/* No post count: this is the viewer's loaded page, not the platform
+                total, and showing it invites "why not all posts?" — the admin
+                dashboard keeps the real number. */}
+            <Sparkles className="h-4 w-4 text-brand" /> You're all caught up
           </div>
         )}
       </div>

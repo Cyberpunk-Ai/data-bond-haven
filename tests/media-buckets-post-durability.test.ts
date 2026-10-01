@@ -240,4 +240,26 @@ describe("For-you candidate pool covers every post", () => {
       /unseen\.length >= data\.limit \? unseen : \[\.\.\.unseen, \.\.\.replayed\]/,
     );
   });
+
+  it("diversity cap defers a blocked post to a later pass, never drops it", () => {
+    // The old single-pass `if (inWindow >= 2) continue;` permanently swallowed
+    // an author's third-plus posts whenever other authors kept refilling the
+    // window — the feed then claimed "all caught up" over a pool it had
+    // truncated itself. A blocked item now goes to `deferred` and the loop
+    // only ends when nothing is left pending.
+    expect(src).not.toMatch(/if \(inWindow >= 2\) continue;/);
+    expect(src).toMatch(/\(inWindow >= 2 \? deferred : placed\)\.push\(item\)/);
+    expect(src).toMatch(/while \(pending\.length\)/);
+    // A saturated window places ONE best leftover and re-evaluates, so the
+    // cap still bounds flooding while coverage stays total.
+    expect(src).toMatch(/placed\.push\(pending\[0\]\);/);
+  });
+
+  it("the end-of-feed marker shows no post count", () => {
+    // The tail banner is the viewer's loaded page, not the platform total —
+    // printing "(N posts)" advertised a number that never matched admin's 41.
+    const feed = readFileSync(join(process.cwd(), "src", "routes", "feed.tsx"), "utf8");
+    expect(feed).toMatch(/You're all caught up/);
+    expect(feed).not.toMatch(/all caught up \(\$\{posts\.length\}/);
+  });
 });

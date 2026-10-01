@@ -380,15 +380,40 @@ export const getForYouPosts = createServerFn({ method: "GET" })
 
     // Diversity cap: at most 2 posts per author inside any 10-post sliding
     // window (a very prolific author still reaches deeper pages — unlike a
-    // hard global cap — but no one floods a screenful).
+    // hard global cap — but no one floods a screenful). A post that fails the
+    // window on this pass is DEFERRED to the next one, never dropped: a
+    // single-pass `continue` used to permanently hide an author's third-plus
+    // posts whenever the window kept refilling with other people's content,
+    // so the feed quietly swallowed part of the pool. Each pass re-evaluates
+    // against the (now longer) ranked tail, and the leftovers are appended in
+    // score order once no placement can honour the window.
     const ranked: Array<{ row: any; score: number }> = [];
-    for (const item of queue) {
-      let inWindow = 0;
-      for (let i = Math.max(0, ranked.length - 9); i < ranked.length; i++) {
-        if (ranked[i].row.user_id === item.row.user_id) inWindow++;
+    let pending = queue;
+    while (pending.length) {
+      const deferred: typeof pending = [];
+      const placed: typeof pending = [];
+      // The candidate tail is `ranked` followed by this pass's `placed`, so a
+      // window slot maps onto one or the other depending on its position.
+      const at = (i: number) => (i < ranked.length ? ranked[i] : placed[i - ranked.length]);
+      for (const item of pending) {
+        const total = ranked.length + placed.length;
+        let inWindow = 0;
+        for (let i = Math.max(0, total - 9); i < total; i++) {
+          if (at(i).row.user_id === item.row.user_id) inWindow++;
+        }
+        (inWindow >= 2 ? deferred : placed).push(item);
       }
-      if (inWindow >= 2) continue;
-      ranked.push(item);
+      if (!placed.length) {
+        // Stall-break: the window is genuinely saturated for every leftover
+        // (more posts from one author than 10-slots can hold at 2 each).
+        // Place only the BEST deferred item, then re-evaluate the rest
+        // against the advanced tail — full coverage without ever flooding.
+        placed.push(pending[0]);
+        pending = pending.slice(1);
+      } else {
+        pending = deferred;
+      }
+      ranked.push(...placed);
     }
 
     const cursor = decodeCursor(data.cursor);
