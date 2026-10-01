@@ -38,7 +38,16 @@ export function attachRemoteRecord<T>(opts: {
     if (!userId) return;
     if (pending) clearTimeout(pending);
     pending = setTimeout(() => {
-      void db.from(opts.table).upsert({ user_id: userId, ...opts.toRow(state) });
+      // supabase-js resolves a rejected write instead of throwing, and nothing
+      // here awaits the result: without this check a theme, a billing cycle or a
+      // branding choice that never reached the database is indistinguishable from
+      // one that saved. The local store still shows it as saved, so say so.
+      void db
+        .from(opts.table)
+        .upsert({ user_id: userId, ...opts.toRow(state) })
+        .then((res: { error?: { message?: string } | null }) => {
+          if (res?.error) console.error(`${opts.table} write-through failed:`, res.error.message);
+        });
     }, 250);
   }
 

@@ -204,7 +204,19 @@ export const cancelMySubscription = createServerFn({ method: "POST" })
     if (planError) {
       // Put the billing record back the way it was rather than leave the two rows
       // disagreeing about what this account pays.
-      await admin.from("subscriptions").update({ status: "active" }).eq("user_id", profile.id);
+      const { error: undoError } = await admin
+        .from("subscriptions")
+        .update({ status: "active" })
+        .eq("user_id", profile.id);
+      // If the undo itself was refused we are exactly where this branch exists to
+      // prevent — a canceled billing record over a plan that still says "plus".
+      // The caller is told the cancel failed; this says the state is worse than
+      // "nothing happened".
+      if (undoError)
+        console.error(
+          "cancelSubscription rollback failed, subscriptions row left canceled:",
+          undoError.message,
+        );
       throw new Error(planError.message || "Could not cancel the subscription.");
     }
     return { plan: "free" as PlanTier };

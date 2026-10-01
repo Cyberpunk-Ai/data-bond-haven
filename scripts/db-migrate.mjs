@@ -29,6 +29,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { loadEnv, connect, die, repoRoot } from "./db-utils.mjs";
+import { duplicateVersions, sortMigrationFiles, unresolvedPins } from "./migration-order.mjs";
 
 const migrationsDir = join(repoRoot, "db", "migrations");
 
@@ -42,7 +43,26 @@ const MODE = args.has("--status")
       : "apply";
 
 async function listMigrationFiles() {
-  const names = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
+  // Numeric-aware, with pins for the files whose prefix lies about where they
+  // belong: a plain `.sort()` puts `…0000011_…` before `…000001_…`, which
+  // replays history out of order and breaks a fresh database. See
+  // scripts/migration-order.mjs; tests/migration-order.test.ts pins it.
+  const names = sortMigrationFiles(
+    (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")),
+  );
+  for (const pin of unresolvedPins(names)) {
+    console.warn(
+      `! ${pin.file} is pinned to run after ${pin.after}, but one of them is missing ` +
+        `from db/migrations — it will run wherever its prefix puts it.`,
+    );
+  }
+  const clashes = duplicateVersions(names);
+  for (const group of clashes) {
+    console.warn(
+      `! ${group.length} migrations share the version prefix ${group[0].match(/^(\d+)/)[0]}: ` +
+        `${group.join(", ")} — they will apply in filename order.`,
+    );
+  }
   return Promise.all(
     names.map(async (name) => {
       const sql = await readFile(join(migrationsDir, name), "utf8");

@@ -1,48 +1,65 @@
 import { Loader2, MapPin } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { appConfig } from "@/lib/config";
+import { locationSearch } from "@/lib/geo.functions";
 
 interface Props {
   onSelect: (place: string) => void;
   fallback: string[];
 }
 
-/** Type-ahead location search. Uses an OpenStreetMap-compatible geocoder (VITE_GEOCODER_URL). */
+/**
+ * Type-ahead location search. The lookup runs on our own server
+ * (`lib/geo.functions.ts`), which forwards it to the configured geocoder — a
+ * browser call to a third-party host would be refused by the CSP's `connect-src`
+ * allowlist, and OpenStreetMap wants an identifying User-Agent a page cannot
+ * set. Failures are shown as such, never dressed up as "no matches".
+ */
 export function LocationField({ onSelect, fallback }: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // An answer that lands after the user kept typing belongs to a query that no
+  // longer exists, so tag every request and drop anything stale.
+  const requestId = useRef(0);
 
   useEffect(() => {
     const q = query.trim();
+    const id = ++requestId.current;
     if (timer.current) clearTimeout(timer.current);
     if (q.length < 2) {
       setResults([]);
+      setLoading(false);
+      setUnavailable(false);
       return;
     }
-    const ctrl = new AbortController();
+    setLoading(true);
     timer.current = setTimeout(async () => {
-      setLoading(true);
       try {
-        const url = `${appConfig.geocoder.url}?format=json&limit=6&q=${encodeURIComponent(q)}`;
-        const res = await fetch(url, {
-          signal: ctrl.signal,
-          headers: { Accept: "application/json" },
-        });
-        const json = (await res.json()) as Array<{ display_name: string }>;
-        setResults(json.map((r) => r.display_name.split(",").slice(0, 3).join(",").trim()));
+        const answer = await locationSearch({ data: { query: q } });
+        if (id !== requestId.current) return;
+        setResults(answer.places);
+        setUnavailable(answer.degraded);
       } catch {
-        setResults(fallback.filter((f) => f.toLowerCase().includes(q.toLowerCase())));
+        // Rate-limited, offline, or the server refused: presets plus free text
+        // still work, and the note below says why the list is not real results.
+        if (id !== requestId.current) return;
+        setResults([]);
+        setUnavailable(true);
       } finally {
-        setLoading(false);
+        if (id === requestId.current) setLoading(false);
       }
     }, 300);
-    return () => ctrl.abort();
-  }, [query, fallback]);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [query]);
 
-  const shown = query.trim().length < 2 ? fallback : results;
+  const q = query.trim();
+  const presetMatches = fallback.filter((f) => f.toLowerCase().includes(q.toLowerCase()));
+  const shown = q.length < 2 ? fallback : results.length > 0 ? results : presetMatches;
 
   return (
     <div className="mt-2 rounded-2xl border border-border/80 bg-foreground/5 p-3 animate-in fade-in">
@@ -79,16 +96,22 @@ export function LocationField({ onSelect, fallback }: Props) {
             {loc}
           </button>
         ))}
-        {query.trim().length >= 2 && !loading && results.length === 0 && (
+        {q.length >= 2 && !loading && results.length === 0 && (
           <button
             type="button"
-            onClick={() => onSelect(query.trim())}
+            onClick={() => onSelect(q)}
             className="rounded-full border border-dashed border-border px-3 py-1 text-xs font-semibold text-muted-foreground"
           >
-            Use “{query.trim()}”
+            Use “{q}”
           </button>
         )}
       </div>
+      {unavailable && q.length >= 2 && (
+        <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+          Location search is not answering right now, so this is the preset list. Your place name is
+          stored exactly as you type it.
+        </p>
+      )}
     </div>
   );
 }

@@ -3,7 +3,9 @@ import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { requireFlag } from "@/lib/feature-flags.server";
-import { PLAN_DETAILS, type PlanTier } from "@/lib/plans";
+import { getPlanLimits } from "@/lib/plan-guard.server";
+import { aiDailyLimitOrThrow } from "@/lib/plan-limits";
+import { PLAN_DETAILS } from "@/lib/plans";
 import { env } from "@/lib/env.server";
 
 /**
@@ -38,14 +40,20 @@ async function consumeQuota(authUserId: string) {
 
   const { data: profile } = await admin
     .from("profiles")
-    .select("id, plan")
+    .select("id")
     .eq("auth_user_id", authUserId)
     .maybeSingle();
 
   if (!profile) throw new Error("Profile not found");
 
-  const plan = ((profile.plan as PlanTier) || "free") as PlanTier;
-  const limit = PLAN_DETAILS[plan]?.limits.aiDraftsPerDay ?? 3;
+  // The allowance is read from `plan_limits` through the same resolver every
+  // other guard uses — not from the `PLAN_DETAILS` copy that ships in the
+  // client bundle. A hard-coded number here silently outranks the console: an
+  // operator lowering a quota would see the pricing page change while real
+  // generation kept allowing the old, higher count (and it cost gateway money).
+  const limits = await getPlanLimits(profile.id);
+  const limit = aiDailyLimitOrThrow(limits.ai_drafts_per_day);
+  const planName = PLAN_DETAILS[limits.plan]?.name ?? limits.plan;
 
   const { data: sub } = await admin
     .from("subscriptions")
@@ -56,16 +64,20 @@ async function consumeQuota(authUserId: string) {
   const sameDay = sub?.ai_usage_date === today();
   const used = sameDay ? Number(sub?.ai_drafts_used ?? 0) : 0;
 
-  if (Number.isFinite(limit) && limit > 0 && used >= limit) {
+  if (limit === 0) {
+    // `0` is configuration, not an outage: the plan simply does not include it.
+    throw new Error(`AI drafting isn't included in the ${planName} plan. Upgrade for more.`);
+  }
+  if (used >= limit) {
     throw new Error(
-      `You've used all ${limit} AI generations for today on the ${PLAN_DETAILS[plan].name} plan. Upgrade for more.`,
+      `You've used all ${limit} AI generations for today on the ${planName} plan. Upgrade for more.`,
     );
   }
 
   const { error: usageError } = await admin.from("subscriptions").upsert(
     {
       user_id: profile.id,
-      plan,
+      plan: limits.plan,
       ai_drafts_used: used + 1,
       ai_usage_date: today(),
     },
@@ -78,7 +90,7 @@ async function consumeQuota(authUserId: string) {
     throw new Error(usageError.message || "Could not record that generation.");
   }
 
-  return { profileId: profile.id, plan, used: used + 1, limit };
+  return { profileId: profile.id, plan: limits.plan, used: used + 1, limit };
 }
 
 async function chat(system: string, user: string): Promise<string> {

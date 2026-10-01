@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Heart, DollarSign, Sparkles, Check, X, ShieldCheck } from "lucide-react";
+import { Heart, DollarSign, Sparkles, X, ShieldCheck } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
 import { WorkspaceBadge } from "@/components/social/WorkspaceBadge";
@@ -71,7 +71,6 @@ export function TipModal({ isOpen, onClose, recipient, team, postId, spaceId }: 
   const [customAmount, setCustomAmount] = useState<string>("");
   const [message, setMessage] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
 
   const isTeam = !!team;
   const displayName = isTeam ? (team as { name: string }).name : recipient.display_name;
@@ -274,20 +273,6 @@ export function TipModal({ isOpen, onClose, recipient, team, postId, spaceId }: 
                 withdrawal fee
               </p>
             </div>
-          </div>
-        ) : isSuccess ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center space-y-3">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-500 ring-8 ring-emerald-500/10">
-              <Check className="h-8 w-8 stroke-[3]" />
-            </div>
-            <h3 className="text-xl font-extrabold">Tip Sent Successfully!</h3>
-            <p className="text-sm text-muted-foreground">
-              You sent <strong className="text-foreground">${effectiveAmount.toFixed(2)}</strong> to{" "}
-              <strong className="text-foreground">
-                {isTeam ? displayName : `@${recipient.username}`}
-              </strong>
-              .
-            </p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-5">

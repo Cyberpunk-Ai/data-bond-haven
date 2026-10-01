@@ -86,7 +86,7 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
                 ? "reversed"
                 : "failed";
           if (tx.transfer_code) {
-            const { data: updated } = await admin
+            const { data: updated, error: statusError } = await admin
               .from("payouts")
               .update({
                 status,
@@ -97,8 +97,17 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
               .select("user_id, amount, amount_usd, currency, workspace_id")
               .maybeSingle();
 
+            // supabase-js reports a rejected write as a resolved promise, so the
+            // only signal is `error`. Answering 200 here would retire the event:
+            // Paystack stops retrying and the withdrawal sits `pending` forever
+            // while the bank has already moved the money. Settlement is keyed on
+            // transfer_code, so a retry is safe.
+            if (statusError) {
+              console.error("paystack webhook: payout status write failed:", statusError.message);
+              return new Response("payout_status_error", { status: 500 });
+            }
+
             // Tell the creator/owner the outcome (personal or team withdrawal).
-            // A no-op for already-resolved rows since `updated` is null then.
             if (updated && (status === "paid" || status === "failed")) {
               // USD is what every screen and notification on the platform speaks.
               const amount =
@@ -123,6 +132,11 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
               if (noticeError) {
                 console.error("paystack webhook: payout notice not stored:", noticeError.message);
               }
+            } else if (status === "paid" || status === "failed") {
+              // The write succeeded and matched nothing. That is either a code we
+              // never issued or a row a previous delivery already resolved; the
+              // audit trail above has the event, so this is logged, not retried.
+              console.warn(`paystack webhook: no payout row for transfer ${tx.transfer_code}`);
             }
           }
           return new Response("ok");

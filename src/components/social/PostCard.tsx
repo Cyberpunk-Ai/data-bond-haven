@@ -529,6 +529,9 @@ function PostCardBase({
   // Poll interactive state
   const [poll, setPoll] = useState<Poll | undefined>(post.poll || undefined);
   const hasVotedInPoll = poll?.options.some((o) => o.votedByMe);
+  // The feed's tally read can fail; the counts on this object are then not the
+  // real ones, so the card says so rather than drawing an empty result.
+  const resultsUnknown = poll?.resultsUnavailable === true;
 
   useEffect(() => {
     if (post.poll) {
@@ -538,6 +541,7 @@ function PostCardBase({
 
   async function handleVote(optionId: string) {
     if (!poll || hasVotedInPoll) return;
+    const before = poll;
     setPoll((prev) => {
       if (!prev) return prev;
       return {
@@ -555,6 +559,9 @@ function PostCardBase({
       }
       toast.success("Vote recorded!");
     } catch {
+      // Undo the optimistic +1: a ballot that was never stored must not leave a
+      // tally behind that says it was.
+      setPoll(before);
       toast.error("Failed to submit vote");
     }
   }
@@ -1365,6 +1372,8 @@ function PostCardBase({
             {poll.options.map((opt) => {
               const pct = poll.totalVotes > 0 ? Math.round((opt.votes / poll.totalVotes) * 100) : 0;
               const isSelected = opt.votedByMe;
+              // Results only mean something when the counts actually arrived.
+              const showResults = Boolean(hasVotedInPoll) && !resultsUnknown;
 
               return (
                 <button
@@ -1381,7 +1390,7 @@ function PostCardBase({
                   )}
                 >
                   {/* Animated Fill Bar */}
-                  {hasVotedInPoll && (
+                  {showResults && (
                     <div
                       style={{ width: `${pct}%` }}
                       className={cn(
@@ -1400,7 +1409,7 @@ function PostCardBase({
                         {opt.text}
                       </span>
                     </span>
-                    {hasVotedInPoll && (
+                    {showResults && (
                       <span className="tabular-nums shrink-0 font-bold text-muted-foreground">
                         {pct}% ({compact(opt.votes)})
                       </span>
@@ -1412,8 +1421,16 @@ function PostCardBase({
           </div>
 
           <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 px-1">
-            <span>{compact(poll.totalVotes)} total votes</span>
-            <span>{hasVotedInPoll ? "Final results" : "Click an option to vote"}</span>
+            {resultsUnknown ? (
+              // Never print a total we do not have: "0 total votes" on a poll
+              // that has 40 is a wrong answer, not an empty one.
+              <span>Vote counts aren't loading right now.</span>
+            ) : (
+              <>
+                <span>{compact(poll.totalVotes)} total votes</span>
+                <span>{hasVotedInPoll ? "Final results" : "Click an option to vote"}</span>
+              </>
+            )}
           </div>
         </div>
       )}

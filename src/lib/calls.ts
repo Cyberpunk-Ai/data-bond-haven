@@ -35,22 +35,24 @@ export async function createCall(calleeId: string, kind: CallKind): Promise<Call
  * caller already cancelled should stop the ring instead of joining a dead room).
  */
 export async function answerCall(callId: string): Promise<boolean> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("calls")
     .update({ status: "active", answered_at: new Date().toISOString() })
     .eq("id", callId)
     .eq("status", "ringing")
     .select("id");
+  if (error) console.error("answerCall write failed:", error.message);
   return (data?.length ?? 0) > 0;
 }
 
 export async function declineCall(callId: string): Promise<boolean> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("calls")
     .update({ status: "declined", ended_at: new Date().toISOString() })
     .eq("id", callId)
     .eq("status", "ringing")
     .select("id");
+  if (error) console.error("declineCall write failed:", error.message);
   return (data?.length ?? 0) > 0;
 }
 
@@ -109,13 +111,16 @@ export function subscribeCallStatus(callId: string, onChange: (call: CallRow) =>
 
 export async function markCallMissed(callId: string): Promise<boolean> {
   // Guarded on "ringing": the caller's timeout must never flip a call the
-  // callee already picked up over to "missed".
-  const { data } = await supabase
+  // callee already picked up over to "missed". A rejected write answers the
+  // same way as a lost race — `false` — so log it, or a caller that rings on
+  // forever looks like a call somebody else already resolved.
+  const { data, error } = await supabase
     .from("calls")
     .update({ status: "missed", ended_at: new Date().toISOString() })
     .eq("id", callId)
     .eq("status", "ringing")
     .select("id");
+  if (error) console.error("markCallMissed write failed:", error.message);
   return (data?.length ?? 0) > 0;
 }
 

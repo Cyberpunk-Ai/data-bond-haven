@@ -151,6 +151,12 @@ export interface Poll {
   hasVoted?: boolean;
   userVotedOptionId?: string;
   closed?: boolean;
+  /**
+   * The tally read failed, so `totalVotes` and the per-option counts are *not*
+   * known. Set by `hydratePolls`/`votePoll` so the card can say "counts aren't
+   * loading" instead of drawing a live poll as an empty result.
+   */
+  resultsUnavailable?: boolean;
 }
 
 export interface PostComment {

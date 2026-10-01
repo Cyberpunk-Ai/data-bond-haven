@@ -20,6 +20,8 @@
 
 let cached: ServerEnv | undefined;
 
+const DEFAULT_GEOCODER_URL = "https://nominatim.openstreetmap.org/search";
+
 type ServerEnv = {
   appEnv: string;
   isProduction: boolean;
@@ -34,6 +36,7 @@ type ServerEnv = {
   webhookMaxAttempts: number;
   allowedApiOrigins: string[];
   turn: { restUrl?: string; username?: string; apiKey?: string; ttlSeconds: number };
+  geocoder: { url: string; userAgent: string };
 };
 
 function read(name: string): string | undefined {
@@ -56,6 +59,14 @@ function numOr(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function firstText(...names: string[]): string {
+  for (const name of names) {
+    const value = read(name);
+    if (value) return value;
+  }
+  return "";
+}
+
 function build(): ServerEnv {
   const appEnv = read("APP_ENV") ?? read("NODE_ENV") ?? "development";
   const isProduction = appEnv === "production";
@@ -73,6 +84,11 @@ function build(): ServerEnv {
       "PAYSTACK_SECRET_KEY does not look like a live key in production (expected sk_live_…).",
     );
   }
+
+  // Identity for outbound lookups that a browser could not attest to itself
+  // (see the geocoder below): who is calling, and how the other side can reach us.
+  const geoName = firstText("APP_NAME", "VITE_APP_NAME") || "Spaces1";
+  const geoContact = firstText("SUPPORT_EMAIL", "VITE_SUPPORT_EMAIL");
 
   return {
     appEnv,
@@ -109,6 +125,15 @@ function build(): ServerEnv {
       username: read("TURN_REST_USERNAME"),
       apiKey: read("TURN_REST_API_KEY"),
       ttlSeconds: numOr("TURN_TTL_SECONDS", 3600),
+    },
+    // Composer location labels. The lookup runs server-side (lib/geocoder.server.ts)
+    // so the browser never needs a second origin in the CSP's connect-src, and the
+    // outbound request can carry the identifying User-Agent OpenStreetMap's usage
+    // policy asks for. VITE_GEOCODER_URL is still read so deployments that only
+    // set the old browser variable keep working.
+    geocoder: {
+      url: firstText("GEOCODER_URL", "VITE_GEOCODER_URL") || DEFAULT_GEOCODER_URL,
+      userAgent: `${geoName}/1.0 (post location labels${geoContact ? `; ${geoContact}` : ""})`,
     },
   };
 }

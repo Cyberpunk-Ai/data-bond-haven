@@ -78,6 +78,12 @@ async function profileIdFor(supabase: any, userId: string): Promise<string> {
   return String(data.id);
 }
 
+/** Spend a rate-limit slot before we open a checkout (see checkout-guard). */
+async function assertCheckoutAllowed(scope: "plan" | "tip", profileId: string) {
+  const { assertCheckoutAllowed: guard } = await import("@/lib/checkout-guard.server");
+  return guard(scope, profileId);
+}
+
 /** Turn a USD amount into the settlement-currency charge we send to Paystack. */
 function chargeFromUsd(usd: number, usdRate: number): ChargedTip {
   return quoteTip({ usd, rate: usdRate });
@@ -94,6 +100,9 @@ export const startPaystackCheckout = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId, claims } = context as any;
     const profileId = await profileIdFor(supabase, userId);
+    // Counted before anything is asked of the provider, so a refused burst costs
+    // one counter read instead of a Paystack initialize plus a pending row.
+    await assertCheckoutAllowed("plan", profileId);
 
     const { currency, usdRate } = await paystackConfig();
     const email = claims?.email ?? `${profileId}@users.noreply.app`;
@@ -183,6 +192,7 @@ export const startTipCheckout = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId, claims } = context as any;
     const profileId = await profileIdFor(supabase, userId);
+    await assertCheckoutAllowed("tip", profileId);
 
     const cleanUsername = (data.recipientUsername ?? "").replace(/^@/, "");
     let recipientId: string;

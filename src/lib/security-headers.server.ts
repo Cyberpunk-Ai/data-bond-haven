@@ -51,6 +51,15 @@ function supabaseHost(): string | null {
 const CF_INSIGHTS_SCRIPT = "https://static.cloudflareinsights.com";
 const CF_INSIGHTS_RUM = "https://cloudflareinsights.com";
 
+/**
+ * Hosts the browser is allowed to talk to. This list is a hard refusal, not a
+ * warning: a `fetch`/`WebSocket` to any origin missing here fails in production
+ * with only a console message, and the feature looks broken-or-empty to the
+ * user (the composer's location search lived out exactly that). So when a
+ * feature needs a new third-party origin, the default answer is to call it from
+ * the server instead — see `src/lib/geocoder.server.ts` — and name the host here
+ * only when the browser genuinely has to reach it itself.
+ */
 function buildCsp(enforce: boolean): string {
   const sb = supabaseHost();
   const connectTargets = [

@@ -4,9 +4,14 @@
  * re-pointed at a different deployment without code edits.
  *
  * Server-only resources (object storage, AI keys and models, TURN, payments,
- * upload caps) are deliberately absent: the browser must never learn them, and
- * the server never trusts a browser-supplied copy. Storage config lives in
- * `src/lib/storage/`, the rest in `src/lib/env.server.ts`.
+ * upload caps, the geocoder endpoint) are deliberately absent: the browser must
+ * never learn them, and the server never trusts a browser-supplied copy. Storage
+ * config lives in `src/lib/storage/`, the rest in `src/lib/env.server.ts`.
+ *
+ * A browser call to a host that is not in the CSP's `connect-src` allowlist is
+ * refused in production with nothing but a console error, so anything listed
+ * below as a URL the page talks to has to be allowlisted too — prefer a server
+ * proxy (see `lib/geocoder.server.ts`) over widening the policy.
  */
 
 type EnvRecord = Record<string, string | boolean | undefined>;
@@ -43,9 +48,6 @@ export const appConfig = {
     // Composer cap. The server's own ceiling is higher (post-edit.functions.ts
     // rejects > 5000 chars) so this stays a UX choice, not a security boundary.
     postLength: num("VITE_MAX_POST_LENGTH", 1000),
-  },
-  geocoder: {
-    url: str("VITE_GEOCODER_URL", "https://nominatim.openstreetmap.org/search"),
   },
   realtime: {
     // TURN relay is intentionally absent: the browser never learns a relay URL,

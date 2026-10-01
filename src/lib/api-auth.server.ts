@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
-import { assertSafeUrl, UnsafeUrlError } from "@/lib/ssrf-guard.server";
+import { safeExternalFetch, UnsafeUrlError } from "@/lib/ssrf-guard.server";
 import { bearerToken, checkRateLimit } from "@/lib/identity.server";
 
 /**
@@ -203,21 +203,10 @@ export async function dispatchDueWebhooks(limit = 50) {
     const ts = Math.floor(Date.now() / 1000).toString();
     let status = 0;
     try {
-      // SSRF guard: refuse to dial internal/metadata/link-local endpoints.
-      await assertSafeUrl(hook.url);
-    } catch (err) {
-      const reason = err instanceof UnsafeUrlError ? err.message : "unsafe endpoint";
-      await mark(d.id, {
-        status: "failed",
-        attempts: d.attempts + 1,
-        response_status: null,
-        last_error: reason,
-      });
-      failed++;
-      continue;
-    }
-    try {
-      const res = await fetch(hook.url, {
+      // Guard and request in one call: the host is resolved and screened before
+      // anything is dialled, and a `3xx` answer fails instead of walking the
+      // customer's signature and payload to an address that was never checked.
+      const res = await safeExternalFetch(hook.url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -227,11 +216,22 @@ export async function dispatchDueWebhooks(limit = 50) {
           "x-webhook-signature": `sha256=${signPayload(hook.secret, body, ts)}`,
         },
         body,
-        signal: AbortSignal.timeout(10_000),
       });
       status = res.status;
-    } catch {
-      status = 0;
+    } catch (err) {
+      if (err instanceof UnsafeUrlError) {
+        // An endpoint we will never be allowed to reach: failing it retries
+        // nothing, it just keeps the queue moving.
+        await mark(d.id, {
+          status: "failed",
+          attempts: d.attempts + 1,
+          response_status: null,
+          last_error: err.message,
+        });
+        failed++;
+        continue;
+      }
+      status = 0; // timeout or connection failure — back off and try again
     }
     const attempts = d.attempts + 1;
     if (status >= 200 && status < 300) {

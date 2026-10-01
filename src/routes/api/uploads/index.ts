@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createHash, randomBytes } from "crypto";
 import { isAllowedContentType, sizeLimitFor, getStorageProvider } from "@/lib/storage/index.server";
 import { signatureMatches } from "@/lib/media-signature";
+import { declaredBodyBytes, readCappedBody } from "@/lib/upload-limits";
 
 const FOLDERS = new Set(["avatars", "posts", "stories", "media", "messages", "recordings"]);
 
@@ -61,6 +62,18 @@ function json(body: unknown, status = 200) {
   });
 }
 
+/** 413 with the plan named, so the client can route the refusal to an upgrade. */
+function tooLarge(plan: string, limitBytes: number) {
+  const maxMb = Math.round(limitBytes / (1024 * 1024));
+  return json(
+    {
+      error: `That file is too large for your ${plan} plan. Max size is ${maxMb}MB.`,
+      upgrade: true,
+    },
+    413,
+  );
+}
+
 /**
  * Authenticated media upload endpoint. Every write is namespaced by the
  * caller's own **profile** id (not the auth uid — the media reader authorizes
@@ -97,7 +110,73 @@ export const Route = createFileRoute("/api/uploads/")({
           return json({ error: "That file type isn't supported." }, 415);
         }
 
-        const buffer = new Uint8Array(await request.arrayBuffer());
+        // Per-user upload rate limit (atomic Postgres fixed-window counter).
+        // Ahead of the body read on purpose: a burst should cost one counter
+        // read, not a buffered payload.
+        if (
+          !(await checkRateLimit(
+            `upload:${profileId}`,
+            UPLOAD_RATE_LIMIT,
+            UPLOAD_RATE_WINDOW_SECONDS,
+          ))
+        ) {
+          return json({ error: "You're uploading too quickly. Please wait a moment." }, 429);
+        }
+
+        // Enforce the caller's plan, not just the global cap (plan §5) — decided
+        // *before* the body is read. `media_upload_max_mb` goes up to 1024 on Pro,
+        // and this handler runs in the same process as the SSR app, so buffering
+        // first and refusing afterwards let one oversized upload take the
+        // process's memory with it.
+        const { getPlanLimits, requirePlanCapability, UpgradeRequiredError } =
+          await import("@/lib/plan-guard.server");
+        const { requireSpaceStorageQuota, isSpaceStorageFull } =
+          await import("@/lib/space-storage.server");
+
+        const globalLimit = sizeLimitFor(contentType);
+        let plan = "free";
+        let effectiveLimit = globalLimit;
+        try {
+          if (folder === "recordings") {
+            await requirePlanCapability(profileId, "spaces_recording");
+          }
+          const limits = await getPlanLimits(profileId);
+          plan = limits.plan;
+          effectiveLimit = Math.min(limits.media_upload_max_mb * 1024 * 1024, globalLimit);
+
+          // A declared length that cannot fit is refused without reading a byte.
+          // It is only the client's word, so the real size is checked again below.
+          const declared = declaredBodyBytes(request);
+          if (declared > effectiveLimit) {
+            return tooLarge(plan, effectiveLimit);
+          }
+          // A live Space stores nothing; a saved replay does, and it has to fit
+          // the host's replay budget — so an over-budget recording never becomes
+          // a replay, while the broadcast itself is untouched.
+          if (folder === "recordings" && declared > 0) {
+            await requireSpaceStorageQuota(profileId, declared);
+          }
+        } catch (err) {
+          if (err instanceof UpgradeRequiredError) {
+            return json({ error: err.message, upgrade: true }, 402);
+          }
+          // 507: the host's replay budget is spent. `upgrade` is set because the
+          // client routes any storage refusal to a useful next step — for a full
+          // plan that is deleting an old replay, which the message says.
+          if (isSpaceStorageFull(err)) {
+            return json({ error: err.message, upgrade: true }, 507);
+          }
+          throw err;
+        }
+
+        // Reads at most `effectiveLimit` bytes and cancels the stream past that,
+        // so an oversized body is never fully taken into memory.
+        const { bytes, tooLarge: oversized } = await readCappedBody(request.body, effectiveLimit);
+        if (oversized) {
+          return tooLarge(plan, effectiveLimit);
+        }
+
+        const buffer = bytes;
         if (buffer.byteLength === 0) {
           return json({ error: "The file appears to be empty." }, 400);
         }
@@ -109,52 +188,19 @@ export const Route = createFileRoute("/api/uploads/")({
           return json({ error: "That file's contents don't match its declared type." }, 415);
         }
 
-        // Per-user upload rate limit (atomic Postgres fixed-window counter).
-        if (
-          !(await checkRateLimit(
-            `upload:${profileId}`,
-            UPLOAD_RATE_LIMIT,
-            UPLOAD_RATE_WINDOW_SECONDS,
-          ))
-        ) {
-          return json({ error: "You're uploading too quickly. Please wait a moment." }, 429);
-        }
-
-        // Enforce the caller's plan, not just the global cap (plan §5).
-        const { getPlanLimits, requirePlanCapability, UpgradeRequiredError } =
-          await import("@/lib/plan-guard.server");
-        const { requireSpaceStorageQuota, isSpaceStorageFull } =
-          await import("@/lib/space-storage.server");
+        // The authoritative size checks, against the bytes actually held rather
+        // than the length the client claimed.
         try {
-          if (folder === "recordings") {
-            await requirePlanCapability(profileId, "spaces_recording");
-            // A live Space stores nothing; a saved replay does, and it has to fit
-            // the host's replay budget. Checked with the real body size before a
-            // single byte is written, so an over-budget recording simply never
-            // becomes a replay — the broadcast itself is untouched.
-            await requireSpaceStorageQuota(profileId, buffer.byteLength);
-          }
-          const limits = await getPlanLimits(profileId);
-          const planLimitBytes = limits.media_upload_max_mb * 1024 * 1024;
-          const globalLimit = sizeLimitFor(contentType);
-          const effectiveLimit = Math.min(planLimitBytes, globalLimit);
           if (buffer.byteLength > effectiveLimit) {
-            const maxMb = Math.round(effectiveLimit / (1024 * 1024));
-            return json(
-              {
-                error: `That file is too large for your ${limits.plan} plan. Max size is ${maxMb}MB.`,
-                upgrade: true,
-              },
-              413,
-            );
+            return tooLarge(plan, effectiveLimit);
+          }
+          if (folder === "recordings") {
+            await requireSpaceStorageQuota(profileId, buffer.byteLength);
           }
         } catch (err) {
           if (err instanceof UpgradeRequiredError) {
             return json({ error: err.message, upgrade: true }, 402);
           }
-          // 507: the host's replay budget is spent. `upgrade` is set because the
-          // client routes any storage refusal to a useful next step — for a full
-          // plan that is deleting an old replay, which the message says.
           if (isSpaceStorageFull(err)) {
             return json({ error: err.message, upgrade: true }, 507);
           }

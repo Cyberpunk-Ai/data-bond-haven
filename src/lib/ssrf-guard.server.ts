@@ -8,13 +8,23 @@ import { isIP } from "net";
  * Developer Portal) run from the application server, which sits inside the
  * private network and can reach cloud instance-metadata services. A plain
  * string deny-list is insufficient because a hostname can resolve to an
- * internal address, and because DNS rebidding can make a name resolve
- * differently at check time vs connect time.
+ * internal address.
  *
- * `assertSafeUrl` therefore resolves the host *before* connecting and rejects
- * the request if ANY resolved record falls in a blocked range. The dispatcher
- * uses the returned, already-resolved address so the checked record and the
- * connected record cannot diverge.
+ * What this guard does, and what it does not claim:
+ *   • resolves the host *before* connecting and rejects the URL if ANY resolved
+ *     record is in a blocked range;
+ *   • hands the request over itself (`safeExternalFetch`), with redirects
+ *     refused — following a `302` to `http://169.254.169.254` would otherwise
+ *     walk straight past the check on the operator-approved first hop;
+ *   • bounds the connection with a timeout so a stalled listener cannot pin a
+ *     worker.
+ *
+ * It does NOT pin the TCP connection to the address it just checked, so a
+ * DNS-rebinding host can still answer differently between this lookup and the
+ * socket connect. Closing that needs a custom connector/`lookup` hook in the
+ * HTTP client (undici `Agent` with a pinned `connect`), not a URL check —
+ * tracked as the follow-up that would replace `safeExternalFetch`'s fetch call,
+ * not its callers.
  */
 
 // CIDR blocks that must never be reachable from the app server: loopback,
@@ -87,6 +97,14 @@ const ALLOW_INSECURE_LOOPBACK_DEV =
  * only outside production to keep local webhook testing workable.
  */
 export async function assertSafeUrl(raw: string): Promise<URL> {
+  return (await checkSafeUrl(raw)).url;
+}
+
+/**
+ * `assertSafeUrl` plus the addresses behind the name, for callers that want to
+ * log or pin what was actually checked.
+ */
+export async function checkSafeUrl(raw: string): Promise<{ url: URL; addresses: string[] }> {
   let url: URL;
   try {
     url = new URL(raw);
@@ -100,7 +118,9 @@ export async function assertSafeUrl(raw: string): Promise<URL> {
   if (url.protocol === "https:") {
     // ok
   } else if (url.protocol === "http:" && ALLOW_INSECURE_LOOPBACK_DEV && isLoopbackName) {
-    return url; // dev-only loopback exemption, no DNS needed
+    // Dev-only loopback exemption, deliberately not resolved: the host name is
+    // reported as-is because nothing was looked up.
+    return { url, addresses: [url.hostname] };
   } else {
     throw new UnsafeUrlError("Only https:// endpoints are allowed.");
   }
@@ -128,5 +148,36 @@ export async function assertSafeUrl(raw: string): Promise<URL> {
       throw new UnsafeUrlError("That address is not reachable from the platform.");
     }
   }
-  return url;
+  return { url, addresses };
+}
+
+/**
+ * The only outbound helper callers should use for a user-supplied URL: checks
+ * the address *and* issues the request, so a handler cannot fetch a URL it never
+ * validated or let a redirect carry the request somewhere the guard refused.
+ *
+ * `redirect: "error"` is deliberate — a receiver that answers a webhook POST
+ * with a 3xx is not the contract (it must answer 2xx), and following it would
+ * send the customer's HMAC signature and payload to a second, unchecked host.
+ */
+export async function safeExternalFetch(
+  raw: string,
+  init: RequestInit,
+  timeoutMs = 10_000,
+): Promise<Response> {
+  const { url } = await checkSafeUrl(raw);
+  try {
+    return await fetch(url.toString(), {
+      ...init,
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/redirect/i.test(message)) {
+      throw new UnsafeUrlError("That endpoint redirects; webhook receivers must answer directly.");
+    }
+    throw err;
+  }
 }

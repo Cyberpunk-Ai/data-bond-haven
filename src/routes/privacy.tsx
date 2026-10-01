@@ -325,9 +325,10 @@ function Privacy() {
         <p>
           <strong className="text-foreground">Location labels on posts.</strong> If you tag a
           location while composing, the text you type is looked up against the OpenStreetMap
-          Nominatim geocoder, so that service receives the place name you searched for. Only the
-          label you choose is stored with the post — never a live location and never a precise
-          coordinate you did not type.
+          Nominatim geocoder, so that service receives the place name you searched for. The lookup
+          is sent from our servers, so it does not carry your device or IP address. Only the label
+          you choose is stored with the post — never a live location and never a precise coordinate
+          you did not type.
         </p>
       </Section>
 

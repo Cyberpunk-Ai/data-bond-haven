@@ -238,39 +238,61 @@ export async function getBookmarkedPosts(limit = 50): Promise<Post[]> {
 }
 
 /**
- * Poll tallies live in the vote table, never on the post, so every viewer sees
- * the true counts and only their own choice.
+ * Poll tallies come back as counts, never as ballots.
+ *
+ * `poll_votes` used to be world-readable and were counted in the browser, which
+ * published who picked what on every poll (a "which tool should we use?" poll
+ * becoming a public list of colleagues' answers) and downloaded one row per
+ * vote per feed page. `poll_tallies()` answers only the two questions a card
+ * asks — votes per option, and whether *this* viewer is one of them — with the
+ * viewer resolved inside Postgres from `auth.uid()`, which is what let the
+ * per-voter read be revoked (migration 20261001000096).
  */
 async function hydratePolls(posts: Post[]) {
   const withPolls = posts.filter((p) => p.poll && (p.poll as any).options?.length && isDbId(p.id));
   if (withPolls.length === 0) return;
-  const viewer = me();
-  const { data } = await db
-    .from("poll_votes")
-    .select("post_id, option_id, user_id")
-    .in(
-      "post_id",
-      withPolls.map((p) => p.id),
-    );
-  const rows = (data ?? []) as any[];
+  const { data, error } = await db.rpc("poll_tallies", {
+    _post_ids: withPolls.map((p) => p.id),
+  });
+  const rows = ((data ?? []) as TallyRow[]).filter((r) => r && r.post_id);
+  if (error) {
+    // Missing counts is a real state; zero counts are a lie about a live poll.
+    // Mark it so the card says "not loading" instead of drawing an empty result.
+    console.warn("poll tallies failed:", error.message);
+    for (const post of withPolls) (post.poll as any).resultsUnavailable = true;
+    return;
+  }
+  const byPost = new Map<string, TallyRow[]>();
+  for (const row of rows) {
+    const list = byPost.get(row.post_id) ?? [];
+    list.push(row);
+    byPost.set(row.post_id, list);
+  }
   for (const post of withPolls) {
-    const votes = rows.filter((v) => v.post_id === post.id);
-    const counts = new Map<string, number>();
-    let mine: string | undefined;
-    for (const v of votes) {
-      counts.set(v.option_id, (counts.get(v.option_id) ?? 0) + 1);
-      if (viewer && v.user_id === viewer) mine = v.option_id;
-    }
+    const tallies = byPost.get(post.id) ?? [];
     const poll = post.poll as any;
-    poll.options = poll.options.map((o: any) => ({
-      ...o,
-      votes: counts.get(o.id) ?? 0,
-      votedByMe: mine === o.id,
-    }));
-    poll.totalVotes = votes.length;
+    const mine = tallies.find((t) => t.voted_by_me)?.option_id;
+    poll.options = poll.options.map((o: any) => {
+      const tally = tallies.find((t) => t.option_id === o.id);
+      return {
+        ...o,
+        votes: Number(tally?.votes ?? 0),
+        votedByMe: tally?.voted_by_me === true,
+      };
+    });
+    poll.totalVotes = tallies.reduce((sum, t) => sum + Number(t.votes ?? 0), 0);
     poll.hasVoted = Boolean(mine);
     poll.userVotedOptionId = mine;
+    poll.resultsUnavailable = false;
   }
+}
+
+/** One row of `poll_tallies`: an option's count, plus this viewer's own choice. */
+interface TallyRow {
+  post_id: string;
+  option_id: string;
+  votes: number | string;
+  voted_by_me: boolean;
 }
 
 /** Stamp each post with the signed-in user's like/repost/bookmark state. */
@@ -879,14 +901,18 @@ export async function getPostComments(postId: string): Promise<PostComment[]> {
 }
 
 /**
- * One vote per person, stored as its own row. Tallies are always recounted from
- * those rows so nobody inherits somebody else's choice.
+ * One vote per person, stored as its own row. Tallies are always recounted by
+ * the database from those rows so nobody inherits somebody else's choice, and
+ * no viewer ever receives another person's ballot.
  */
 export async function votePoll(postId: string, optionId: string) {
   const userId = me();
   if (!userId || userId === "guest") throw new Error("Sign in to vote");
   if (!isDbId(postId) || !isDbId(userId))
     throw new Error("Voting isn't available on sample posts.");
+  // Owner-scoped read (migration 20261001000096): this can only ever find *our*
+  // row, so the pre-check is a friendly message and the unique index below is
+  // the actual guarantee under a double click.
   const { data: prior } = await db
     .from("poll_votes")
     .select("option_id")
@@ -907,13 +933,22 @@ export async function votePoll(postId: string, optionId: string) {
   const poll = postRow?.poll ?? null;
   if (!poll?.options) return { poll };
 
-  const { data: voteRows } = await db
-    .from("poll_votes")
-    .select("option_id, user_id")
-    .eq("post_id", postId);
-  const rows = (voteRows ?? []) as any[];
-  const counts = new Map<string, number>();
-  for (const v of rows) counts.set(v.option_id, (counts.get(v.option_id) ?? 0) + 1);
+  const { data: tallyRows, error: tallyError } = await db.rpc("poll_tallies", {
+    _post_ids: [postId],
+  });
+  if (tallyError) {
+    // The vote is stored — say so — but the counts are unknown, so the card is
+    // told not to render a total it does not have.
+    console.warn("poll tallies failed after vote:", tallyError.message);
+    poll.options = poll.options.map((o: any) => ({ ...o, votedByMe: o.id === optionId }));
+    poll.hasVoted = true;
+    poll.userVotedOptionId = optionId;
+    poll.resultsUnavailable = true;
+    return { poll };
+  }
+  const rows = (tallyRows ?? []) as TallyRow[];
+  const counts = new Map(rows.map((r) => [r.option_id, Number(r.votes ?? 0)]));
+  const total = rows.reduce((sum, r) => sum + Number(r.votes ?? 0), 0);
 
   const tallies = poll.options.map((o: any) => ({ id: o.id, votes: counts.get(o.id) ?? 0 }));
   poll.options = poll.options.map((o: any) => ({
@@ -921,12 +956,13 @@ export async function votePoll(postId: string, optionId: string) {
     votes: counts.get(o.id) ?? 0,
     votedByMe: o.id === optionId,
   }));
-  poll.totalVotes = rows.length;
+  poll.totalVotes = total;
   poll.hasVoted = true;
   poll.userVotedOptionId = optionId;
+  poll.resultsUnavailable = false;
 
   // Everyone else gets the counts only — their own vote state stays theirs.
-  emitRealtime("poll_updated", { postId, tallies, totalVotes: rows.length });
+  emitRealtime("poll_updated", { postId, tallies, totalVotes: total });
   return { poll };
 }
 
@@ -2746,13 +2782,24 @@ function process_uptime() {
   return 0;
 }
 
+/** Live heap size from an environment that may or may not be Node, or 0.
+ *  Exported separately from `nodeMemoryMb` so the two shapes can be tested
+ *  directly instead of by deleting the worker's `process` global — which made
+ *  every other test on the same worker race against it. */
+export function heapMbFrom(
+  env: { memoryUsage?: () => { heapUsed: number } } | undefined | null,
+): number {
+  const heap = env?.memoryUsage?.()?.heapUsed;
+  if (typeof heap !== "number" || !Number.isFinite(heap) || heap < 0) return 0;
+  return Math.round(heap / 1024 / 1024);
+}
+
 /** Live heap size, or 0 when the caller isn't Node. `process` is an undeclared
  *  identifier in the browser, so `process.memoryUsage?.()` still throws
  *  ReferenceError — only `typeof` may test it. This throw sits inside the
  *  overview payload, so it rejected an otherwise successful page of stats. */
 function nodeMemoryMb(): number {
-  if (typeof process === "undefined") return 0;
-  return Math.round((process.memoryUsage?.().heapUsed ?? 0) / 1024 / 1024);
+  return heapMbFrom(typeof process === "undefined" ? undefined : process);
 }
 
 // ---------------------------------------------------------------------------

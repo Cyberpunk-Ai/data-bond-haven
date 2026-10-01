@@ -15,6 +15,7 @@ import { createServerFn } from "@tanstack/react-start";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { DISPLAY_CURRENCY, round2, toUsd, usdToSettlement } from "@/lib/money";
+import { feeBpsOrThrow } from "@/lib/plan-limits";
 import { accountNamesMatch, resolveBankCode } from "@/lib/payout-verify";
 
 // Server-only modules are imported lazily inside handlers: this file is
@@ -37,18 +38,25 @@ export const MINIMUM_PAYOUT = 1;
  * The platform's take, charged ONCE when a creator withdraws (never per tip):
  * 5% free · 3% plus · 1% pro. Rates live in `plan_limits.fee_bps` — the same
  * single source of truth the pricing page and settlement read.
+ *
+ * There is deliberately no fallback value. A withdrawal moves real money and
+ * writes the rate onto the ledger row, so inventing 5% for a Pro creator on a
+ * 1% plan would over-charge them on a record that stays in the books forever
+ * (and under-charge the other way round). If the rate cannot be read, the
+ * request fails and the balance is untouched.
  */
-const FALLBACK_FEE_BPS = 500;
-
 async function withdrawalFeeBps(profileId: string): Promise<number> {
   const { getPlanLimits } = await import("@/lib/plan-guard.server");
+  let limits: Awaited<ReturnType<typeof getPlanLimits>>;
   try {
-    const limits = await getPlanLimits(profileId);
-    const bps = Number(limits.fee_bps);
-    return Number.isFinite(bps) && bps >= 0 && bps <= 10000 ? Math.round(bps) : FALLBACK_FEE_BPS;
-  } catch {
-    return FALLBACK_FEE_BPS;
+    limits = await getPlanLimits(profileId);
+  } catch (err) {
+    // Still a refusal, just one the creator can read: the raw error here talks
+    // about missing table rows, which is our problem and not something to show.
+    console.error("Could not read plan_limits for a withdrawal:", err);
+    throw new Error("We couldn't confirm your withdrawal fee. Please try again in a moment.");
   }
+  return feeBpsOrThrow(limits.fee_bps, limits.plan);
 }
 
 async function payoutCurrency() {
