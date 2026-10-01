@@ -35,6 +35,22 @@ function supabaseHost(): string | null {
   }
 }
 
+/**
+ * Cloudflare Web Analytics, if the zone has it switched on.
+ *
+ * The beacon is injected by Cloudflare at the edge: no file in this repository
+ * references it, so there is no script tag here to remove. An allowlist that
+ * omits it therefore blocks a script the operator enabled deliberately and logs
+ * a Content Security Policy error on every single page view — while collecting
+ * nothing. Both halves are needed: the script's own host, and the RUM endpoint
+ * it reports to, which `connect-src` would refuse on its own.
+ *
+ * To retire the feature, turn off "Automatic setup" / Web Analytics in the
+ * Cloudflare dashboard rather than leaving it enabled-but-refused here.
+ */
+const CF_INSIGHTS_SCRIPT = "https://static.cloudflareinsights.com";
+const CF_INSIGHTS_RUM = "https://cloudflareinsights.com";
+
 function buildCsp(enforce: boolean): string {
   const sb = supabaseHost();
   const connectTargets = [
@@ -43,6 +59,7 @@ function buildCsp(enforce: boolean): string {
     sb ? `wss://${sb}` : "",
     "https://api.paystack.co",
     "https://connect.paystack.co",
+    CF_INSIGHTS_RUM,
   ]
     .filter(Boolean)
     .join(" ");
@@ -54,7 +71,10 @@ function buildCsp(enforce: boolean): string {
   // inline scripts. Modern browsers ignore 'unsafe-inline' the moment any
   // nonce/hash is present, so this only takes effect for the current
   // nonce-less setup and does not weaken a future nonce rollout.
-  const scriptSrc = "'self' 'unsafe-inline' 'wasm-unsafe-eval'";
+  //
+  // Still a host allowlist, never `https:` — one named vendor at a time, so an
+  // injected third-party script has to be a deliberate decision here.
+  const scriptSrc = `'self' 'unsafe-inline' 'wasm-unsafe-eval' ${CF_INSIGHTS_SCRIPT}`;
 
   return [
     `default-src 'self'`,
