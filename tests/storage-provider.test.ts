@@ -264,6 +264,66 @@ describe("S3 object operations", () => {
     );
   });
 
+  it("routes public writes to the public bucket when the token reaches both", async () => {
+    configureS3();
+    process.env.S3_PUBLIC_BUCKET = "media-public";
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        seen.push(urlOf(input));
+        return new Response(null, { status: 200 });
+      }) as never,
+    );
+    const mod = await loadIndex();
+    mod.resetStorageProvider();
+    await mod.getStorageProvider().put("posts/x.png", new Uint8Array([1]), "image/png");
+    // A reachable public bucket takes the world-readable key directly.
+    expect(seen[0]).toContain("/media-public/posts/x.png");
+    vi.unstubAllGlobals();
+  });
+
+  it("falls back to the primary bucket when a public-bucket write is refused", async () => {
+    configureS3();
+    // A token scoped to only the private bucket answers 403 for the public one.
+    process.env.S3_PUBLIC_BUCKET = "media-public";
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const method = (input as Request).method;
+        const url = urlOf(input);
+        seen.push(`${method} ${url}`);
+        if (method === "PUT") {
+          return url.includes("/media-public/")
+            ? new Response(null, { status: 403 })
+            : new Response(null, { status: 200 });
+        }
+        // Reads miss everywhere so every candidate bucket is visited in turn.
+        return new Response(null, { status: 404 });
+      }) as never,
+    );
+    const mod = await loadIndex();
+    mod.resetStorageProvider();
+    const provider = mod.getStorageProvider();
+
+    // A half-configured switch must never fail the upload: it lands in primary.
+    await expect(provider.put("posts/x.png", new Uint8Array([1]), "image/png")).resolves.toEqual({
+      key: "posts/x.png",
+    });
+    expect(seen).toContain("PUT https://acct.r2.cloudflarestorage.com/media-public/posts/x.png");
+    expect(seen).toContain("PUT https://acct.r2.cloudflarestorage.com/media/posts/x.png");
+
+    // Once the public bucket is marked down, reads still try it — an object
+    // that landed there before the fallback must not disappear: primary first,
+    // then the public bucket as a fallback.
+    seen.length = 0;
+    await provider.get("posts/x.png");
+    expect(seen[0]).toBe("GET https://acct.r2.cloudflarestorage.com/media/posts/x.png");
+    expect(seen).toContain("GET https://acct.r2.cloudflarestorage.com/media-public/posts/x.png");
+    vi.unstubAllGlobals();
+  });
+
   it("lists the bucket and unescapes keys the XML carried encoded", async () => {
     configureS3();
     const seen: string[] = [];

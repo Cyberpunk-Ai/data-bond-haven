@@ -262,4 +262,32 @@ describe("For-you candidate pool covers every post", () => {
     expect(feed).toMatch(/You're all caught up/);
     expect(feed).not.toMatch(/all caught up \(\$\{posts\.length\}/);
   });
+
+  it("re-ranks the pool once per epoch, then pages from the cached snapshot", () => {
+    // The compute-heavy pool walk + rescoring must run ONCE per viewer per
+    // 10-minute epoch, not on every "load more". A warm page is served straight
+    // from the ranked snapshot; only a cold miss (or a manual refresh) walks.
+    expect(src).toMatch(/const epochBucket = Math\.floor\(Date\.now\(\) \/ RANK_EPOCH_MS\);/);
+    // Cache read happens BEFORE the behaviour queries, gated on `!data.refresh`.
+    const readAt = src.indexOf("snapshotFor(myId, epochBucket)");
+    const queriesAt = src.indexOf('from("likes")');
+    expect(readAt).toBeGreaterThan(-1);
+    expect(readAt).toBeLessThan(queriesAt);
+    expect(src).toMatch(/if \(!data\.refresh\) \{/);
+    // Both return paths (recency-led and personalised) store then page from the
+    // snapshot, so the shared cursor logic is identical cold vs warm.
+    expect(src).toMatch(
+      /rememberSnapshot\(myId, epochBucket, \{ entries: ranked, personalised: true \}\);/,
+    );
+    expect(src).toMatch(
+      /rememberSnapshot\(myId, epochBucket, \{ entries, personalised: false \}\);/,
+    );
+    expect(src).toMatch(/return pageFromSnapshot\(ranked, true, data\.cursor, data\.limit\);/);
+    expect(src).toMatch(
+      /return pageFromSnapshot\(cached\.entries, cached\.personalised, data\.cursor, data\.limit\);/,
+    );
+    // No leftover inline pagination in the handler: it all routes through the
+    // shared helper (the old `ranked.slice(startIdx, ...)` is gone).
+    expect(src).not.toMatch(/ranked\.slice\(startIdx/);
+  });
 });

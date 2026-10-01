@@ -79,6 +79,93 @@ function decodeCursor(cursor?: string | null): { rank: number; id: string } | nu
 }
 
 /**
+ * Slice one page out of an already-ranked list. Shared by the cold path (fresh
+ * pool walk) and the warm path (snapshot hit) so pagination is byte-identical
+ * whether the list was just computed or replayed from cache. Personalised
+ * cursors carry `(score, id)`; the recency-led fallback carries `(0, id)` and
+ * pages purely by id. This is what lets a scroll session paginate against the
+ * SAME ranked list without re-walking the pool on every page.
+ */
+function pageFromSnapshot(
+  entries: Array<{ row: any; score: number }>,
+  personalised: boolean,
+  cursor: string | undefined,
+  limit: number,
+) {
+  const decoded = decodeCursor(cursor);
+  let startIdx = 0;
+  if (decoded) {
+    if (personalised) {
+      const idx = entries.findIndex(
+        (e) => e.row.id === decoded.id && Math.abs(e.score - decoded.rank) < 1e-6,
+      );
+      startIdx = idx >= 0 ? idx + 1 : entries.findIndex((e) => e.score <= decoded.rank);
+      if (startIdx < 0) startIdx = entries.length;
+    } else {
+      startIdx = entries.findIndex((e) => e.row.id === decoded.id) + 1;
+      if (startIdx <= 0) startIdx = 0;
+    }
+  }
+  const page = entries.slice(startIdx, startIdx + limit);
+  const last = page[page.length - 1];
+  return {
+    posts: page.map((e) => e.row),
+    personalised,
+    nextCursor: last ? encodeCursor(personalised ? last.score : 0, last.row.id) : null,
+  };
+}
+
+/**
+ * Per-viewer ranked snapshots, keyed by viewer + the 10-minute ranking epoch
+ * they were computed for. Without this, EVERY page of "For you" re-fetched
+ * the entire visible pool and re-scored it — a scroll through a 1,500-post
+ * library was 1,500 rows of compute per screen, most of it identical to the
+ * last page. One scroll session now costs one pool walk.
+ */
+interface RankedSnapshot {
+  entries: Array<{ row: any; score: number }>;
+  personalised: boolean;
+  expiresAt: number;
+}
+const rankedSnapshots = new Map<string, RankedSnapshot>();
+const SNAPSHOT_MAX = 200;
+const RANK_EPOCH_MS = 10 * 60_000;
+
+function snapshotFor(myId: string, epochBucket: number): RankedSnapshot | null {
+  const hit = rankedSnapshots.get(`${myId}:${epochBucket}`);
+  if (!hit) return null;
+  if (hit.expiresAt < Date.now()) {
+    rankedSnapshots.delete(`${myId}:${epochBucket}`);
+    return null;
+  }
+  return hit;
+}
+
+function rememberSnapshot(
+  myId: string,
+  epochBucket: number,
+  snapshot: Omit<RankedSnapshot, "expiresAt">,
+) {
+  const now = Date.now();
+  // Live until a minute past the end of the epoch: a scroll that crosses the
+  // boundary finishes its stable list instead of paying for a re-rank.
+  rankedSnapshots.set(`${myId}:${epochBucket}`, {
+    ...snapshot,
+    expiresAt: (epochBucket + 1) * RANK_EPOCH_MS + 60_000,
+  });
+  // Opportunistic trim: epoch keys die naturally, but a burst of distinct
+  // viewers could still pile up.
+  for (const [key, snap] of rankedSnapshots) {
+    if (snap.expiresAt < now) rankedSnapshots.delete(key);
+  }
+  while (rankedSnapshots.size > SNAPSHOT_MAX) {
+    const oldest = rankedSnapshots.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    rankedSnapshots.delete(oldest);
+  }
+}
+
+/**
  * Deterministic per-key jitter in [0,1). Used for discovery: mixing the
  * viewer id into the seed means two users with similar-but-different histories
  * get genuinely different tails of content, while the same (viewer, post,
@@ -117,6 +204,18 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       .maybeSingle();
     if (!me) return { posts: [] as any[], personalised: false, nextCursor: null };
     const myId = me.id as string;
+
+    // One ranked list per viewer per 10-minute epoch, reused across every page
+    // of a scroll session: the pool walk, the six behaviour queries, the plan
+    // lookups and the rescoring below then run ONCE, not on each "load more".
+    // A manual refresh skips the read so Refresh can never hand back an
+    // identical page, and overwrites the snapshot as the new baseline.
+    const epochBucket = Math.floor(Date.now() / RANK_EPOCH_MS);
+    if (!data.refresh) {
+      const cached = snapshotFor(myId, epochBucket);
+      if (cached)
+        return pageFromSnapshot(cached.entries, cached.personalised, data.cursor, data.limit);
+    }
 
     // ---- behaviour signals -------------------------------------------------
     const [likes, reposts, bookmarks, comments, impressions, feedPrefsRow] = await Promise.all([
@@ -249,15 +348,9 @@ export const getForYouPosts = createServerFn({ method: "GET" })
         new Date(r.created_at).getTime() +
         (jitter01(`${myId}:${r.id}:${newBucket}`) - 0.5) * 12 * 3_600_000;
       const sorted = rows.sort((a, b) => adjusted(b) - adjusted(a));
-      const cursor = decodeCursor(data.cursor);
-      const startIdx = cursor ? sorted.findIndex((r) => r.id === cursor.id) + 1 : 0;
-      const page = sorted.slice(startIdx, startIdx + data.limit);
-      const last = page[page.length - 1];
-      return {
-        posts: page,
-        personalised: false,
-        nextCursor: last ? encodeCursor(0, last.id) : null,
-      };
+      const entries = sorted.map((row) => ({ row, score: 0 }));
+      rememberSnapshot(myId, epochBucket, { entries, personalised: false });
+      return pageFromSnapshot(entries, false, data.cursor, data.limit);
     }
 
     // Plan-based discovery boost: paid creators AND paid team workspaces reach
@@ -416,24 +509,8 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       ranked.push(...placed);
     }
 
-    const cursor = decodeCursor(data.cursor);
-    let startIdx = 0;
-    if (cursor) {
-      const idx = ranked.findIndex(
-        (r) => r.row.id === cursor.id && Math.abs(r.score - cursor.rank) < 1e-6,
-      );
-      startIdx = idx >= 0 ? idx + 1 : ranked.findIndex((r) => r.score <= cursor.rank);
-      if (startIdx < 0) startIdx = ranked.length;
-    }
-
-    const page = ranked.slice(startIdx, startIdx + data.limit);
-    const lastItem = page[page.length - 1];
-
-    return {
-      posts: page.map((p) => p.row),
-      personalised: true,
-      nextCursor: lastItem ? encodeCursor(lastItem.score, lastItem.row.id) : null,
-    };
+    rememberSnapshot(myId, epochBucket, { entries: ranked, personalised: true });
+    return pageFromSnapshot(ranked, true, data.cursor, data.limit);
   });
 
 /**

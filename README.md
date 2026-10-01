@@ -103,6 +103,111 @@ backend is live. Health (`/api/public/health`) and the admin console's _System
 settings → Storage backend_ card report the active backend and probe its
 credentials, so a misconfigured switch is visible instead of silent.
 
+#### Bucket layout — public vs private (what to create in R2)
+
+Every object's folder prefix decides its visibility, and visibility decides its
+bucket. The mapping lives in one place —
+[`src/lib/media-folders.server.ts`](src/lib/media-folders.server.ts) — and the
+writer, reader and signed-URL issuer all derive from it, so a folder can never
+be public to one and private to another.
+
+| Folder        | Visibility | Where it lives                                | How it is read                            |
+| ------------- | ---------- | --------------------------------------------- | ----------------------------------------- |
+| `avatars/`    | public     | public bucket (or primary if none configured) | direct CDN URL, or proxy                  |
+| `posts/`      | public     | public bucket                                 | direct CDN URL, or proxy                  |
+| `media/`      | public     | public bucket                                 | direct CDN URL, or proxy                  |
+| `stories/`    | authed     | **primary (private) bucket only**             | proxy, gated by the story's owner/network |
+| `messages/`   | private    | **primary (private) bucket only**             | proxy, owner/recipient only               |
+| `recordings/` | private    | **primary (private) bucket only**             | proxy, participants only                  |
+
+For a Cloudflare R2 setup that means **two buckets**:
+
+1. **A private bucket** — your `R2_BUCKET` / `S3_BUCKET`. It holds _everything_
+   by default, and is the only home for the `authed`/`private` folders
+   (stories, DM attachments, Space replays). **Do not attach a public dev domain
+   to it** — an R2 bucket domain serves every object in the bucket, which would
+   leak DMs and replays. These bytes only ever leave through the authorized
+   proxy with a short-lived `?mt=` HMAC token.
+2. **An optional public bucket** — your `S3_PUBLIC_BUCKET` / `R2_PUBLIC_BUCKET`.
+   It holds only the three world-readable folders, so you _can_ safely give it
+   an R2 public bucket domain (`S3_PUBLIC_BASE_URL` / `R2_PUBLIC_BASE_URL`).
+
+```env
+# private / primary bucket (everything unless a public bucket is configured)
+R2_ACCOUNT_ID=<account id>
+R2_BUCKET=spaces1-media            # keep this bucket private
+R2_ACCESS_KEY_ID=<token id>
+R2_SECRET_ACCESS_KEY=<token secret>
+S3_REGION=auto
+# optional public bucket for avatars/posts/media only
+S3_PUBLIC_BUCKET=spaces1-media-public
+R2_PUBLIC_BASE_URL=https://pub-<hash>.r2.dev   # dev domain on the PUBLIC bucket
+MEDIA_PUBLIC_CDN=true                           # opt in to 302-serving public bytes from R2
+```
+
+How it behaves:
+
+- **No public bucket configured** → one bucket, and the read proxy is the only
+  visibility gate. Perfectly safe; you just don't get direct-CDN serving.
+- **Public bucket configured + `MEDIA_PUBLIC_CDN=true`** → a public, inline-safe
+  object 302-redirects to its R2 domain (bytes come from Cloudflare, not this
+  server). Downloads (`?download`) still stream through the proxy, because a
+  bucket domain can't be told to answer `Content-Disposition: attachment`.
+- **R2 tokens are per-bucket.** A token minted for only one bucket gets a 403
+  from the other. The first time a write to the public bucket is rejected (403)
+  or missing (404), the app logs a warning, marks the public bucket _down_, and
+  lands the object in the primary bucket instead — the proxy still serves it
+  with the correct visibility, so a half-configured switch never fails an
+  upload. To use direct public URLs, mint **one token scoped to both buckets**
+  (R2 → Manage R2 API Tokens → include both buckets, `Object Read & Write`).
+- Reads, deletes and stats try the routed bucket, then the fallback bucket, so
+  objects that landed before a public↔private change are still found and
+  removed from every copy.
+
+The Supabase names mirror this layout: `media-public` / `media-private` (created
+by `db/migrations/20261001000099_media_public_private_buckets.sql`), with the
+pre-split `media` bucket kept readable until relocated.
+The one idea to hold onto
+Media is split by what it is, decided automatically by the folder each file lives in:
+Folder	Examples	Who may see it	Bucket it goes to
+avatars/, posts/, media/	profile pics, post images/video	the whole world	Public bucket
+stories/, messages/, recordings/	stories, DM files, Space replays	only the owner/friends	Private bucket
+The app routes each upload to the right bucket on its own. You just create the buckets and point two env vars at them.
+Two valid ways to set it up
+Option A — Simplest: ONE bucket (recommended to start)
+Create a single private R2 bucket. The app puts everything in it, and the read proxy decides who's allowed to see each file. Zero risk of leaking private media.
+Cloudflare dashboard → R2 Object Storage → Create bucket → name it e.g. spaces1-media.
+Do NOT enable "Custom Domains" / a public dev domain on it.
+.env:
+STORAGE_PROVIDER=auto
+R2_ACCOUNT_ID=<your account id>
+R2_BUCKET=spaces1-media
+R2_ACCESS_KEY_ID=<token id>
+R2_SECRET_ACCESS_KEY=<token secret>
+S3_REGION=auto
+That's it. This already works safely. The only thing you lose is serving public images straight from Cloudflare's CDN (they stream through your app instead) — which is fine.
+Option B — Best performance: TWO buckets
+Only worth doing once A is working. Adds a second public bucket so avatars/post images load directly from Cloudflare's fast domain.
+Bucket 1: spaces1-media — private, no public domain (holds stories/messages/recordings, plus everything).
+Bucket 2: spaces1-media-public — public. Open it → Settings → Public Development Domain → enable it → copy the URL like https://pub-abc123.r2.dev.
+.env (add two lines to Option A):
+S3_PUBLIC_BUCKET=spaces1-media-public
+R2_PUBLIC_BASE_URL=https://pub-abc123.r2.dev
+MEDIA_PUBLIC_CDN=true
+Now the app writes avatars/posts/media into spaces1-media-public and hands browsers the r2.dev URL directly; stories/DMs/replays stay in the private bucket behind the proxy.
+The one gotcha that trips people: R2 API tokens are per-bucket
+When you make a token (R2 → Manage R2 API Tokens → Create API Token → Just Read & Write):
+Option A: scope it to the single spaces1-media bucket. Done.
+Option B: scope one token to BOTH buckets (the bucket selector lets you pick multiple / "All buckets").
+If you only give the token access to one bucket, writes to the other get a 403. The app is built to survive that — it logs a warning, marks the public bucket "down," and keeps working from the primary bucket — but you'd never get direct CDN URLs. So for two buckets, use one token that covers both.
+My concrete suggestion
+Do Option A now: one private bucket, fill in the 6 env lines, restart. Confirm uploads + feed images work. Then, later, add the second public bucket (Option B) purely as a speed upgrade. Nothing breaks when you go from A → B, and old uploads keep resolving because the app stores keys, not bucket URLs.Want me to add a short "R2 in 5 minutes (Option A / Option B)" copy-paste block to the README so this exact recipe lives next to the reference table?
+
+
+
+
+
+
 #### Why references survive a switch (and what does not)
 
 A database row that recorded `https://<ref>.supabase.co/storage/v1/object/…`

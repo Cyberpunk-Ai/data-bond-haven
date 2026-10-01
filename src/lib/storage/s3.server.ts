@@ -37,6 +37,14 @@ export interface S3Config {
    * keeps one bucket and the proxy decides visibility, as before.
    */
   publicBucket?: string;
+  /**
+   * True once the public bucket proves unusable (missing, or a token scoped to
+   * the other bucket cannot reach it — R2 tokens are per-bucket). Writes then
+   * stay in the primary bucket, where the read proxy still serves them with
+   * the correct visibility, so a half-configured R2 switch never fails an
+   * upload.
+   */
+  publicBucketDown?: boolean;
 }
 
 function env(...names: string[]): string | undefined {
@@ -82,7 +90,9 @@ export function resolveS3Config(): S3Config | null {
     publicBaseUrl: env("S3_PUBLIC_BASE_URL", "R2_PUBLIC_BASE_URL"),
     // A separate public bucket is opt-in: without it every key stays in the
     // primary bucket and the read proxy remains the only visibility gate.
-    publicBucket: env("S3_PUBLIC_BUCKET", "R2_PUBLIC_BUCKET"),
+    // Names double as the Supabase-side names (MEDIA_PUBLIC_BUCKET) so one env
+    // line configures the public bucket wherever media currently lives.
+    publicBucket: env("S3_PUBLIC_BUCKET", "R2_PUBLIC_BUCKET", "MEDIA_PUBLIC_BUCKET"),
   };
 }
 
@@ -106,12 +116,21 @@ function labelForEndpoint(endpoint: string): string {
 /** A key that will never exist, used to probe credentials without writing. */
 const PROBE_KEY = ".spaces1-access-probe";
 
+/** Buckets proven unreachable, keyed by name: R2 tokens are per-bucket, so a
+ * write to a public bucket the token was not minted for fails 403 forever. */
+const PUBLIC_BUCKET_DOWN = new Set<string>();
+
 export function createS3Provider(input?: S3Config | null): StorageProvider {
   const candidate = input ?? resolveS3Config();
   if (!candidate) {
     throw new Error("createS3Provider called with no S3 credentials configured");
   }
   const config: S3Config = candidate;
+  // Shared across providers built from the same config object; survives the
+  // provider rebuilds that env fingerprints trigger, so a dead public bucket
+  // is probed once per process, not once per upload.
+  if (config.publicBucketDown === undefined && PUBLIC_BUCKET_DOWN.has(config.publicBucket ?? ""))
+    config.publicBucketDown = true;
 
   const client = new AwsClient({
     accessKeyId: config.accessKeyId,
@@ -135,7 +154,23 @@ export function createS3Provider(input?: S3Config | null): StorageProvider {
    * primary bucket, where only the authorized reader can reach it.
    */
   function bucketOfKey(key: string): string {
-    return config.publicBucket && isPublicMediaPath(key) ? config.publicBucket : config.bucket;
+    return config.publicBucket && !config.publicBucketDown && isPublicMediaPath(key)
+      ? config.publicBucket
+      : config.bucket;
+  }
+
+  /**
+   * Buckets a read should try, in order. When the public bucket was marked
+   * down, its earlier objects are still there — the primary misses and the
+   * public bucket catches them, so nothing that landed before the fallback
+   * disappears.
+   */
+  function readBucketsFor(key: string): string[] {
+    const primary = bucketOfKey(key);
+    const alternates = config.publicBucket
+      ? [config.publicBucket, config.bucket].filter((b) => b !== primary)
+      : [];
+    return [primary, ...alternates];
   }
 
   function encodedKey(key: string): string {
@@ -177,55 +212,89 @@ export function createS3Provider(input?: S3Config | null): StorageProvider {
       endpoint: host,
     },
     async put(key, body, contentType) {
-      const res = await client.fetch(objectUrl(key), {
+      let target = bucketOfKey(key);
+      let res = await client.fetch(objectUrl(key, target), {
         method: "PUT",
         headers: { "content-type": contentType },
         body: body as BodyInit,
       });
+      // A public bucket that does not exist yet (404) or that this token was
+      // never minted for (403) must not fail the upload: remember it is down,
+      // and land the object in the primary bucket, where the read proxy serves
+      // it with the same visibility rules as before the split.
+      if (!res.ok && target === config.publicBucket && (res.status === 403 || res.status === 404)) {
+        console.warn(
+          `[storage] public bucket "${target}" is not reachable (${res.status}) — ` +
+            `writing to "${config.bucket}" instead. Grant this token access to both ` +
+            `buckets (or create the public one) to use direct public URLs.`,
+        );
+        config.publicBucketDown = true;
+        if (config.publicBucket) PUBLIC_BUCKET_DOWN.add(config.publicBucket);
+        target = config.bucket;
+        res = await client.fetch(objectUrl(key, target), {
+          method: "PUT",
+          headers: { "content-type": contentType },
+          body: body as BodyInit,
+        });
+      }
       if (!res.ok) throw new Error(`${this.info.label} upload failed (${res.status})`);
       return { key };
     },
     async get(key) {
-      const res = await client.fetch(objectUrl(key), { method: "GET" });
-      if (res.status === 404 || res.status === 403) return null;
-      if (!res.ok) throw new Error(`${this.info.label} read failed (${res.status})`);
-      return toRead(res, "application/octet-stream");
+      for (const bucketName of readBucketsFor(key)) {
+        const res = await client.fetch(objectUrl(key, bucketName), { method: "GET" });
+        if (res.status === 404 || res.status === 403) continue;
+        if (!res.ok) throw new Error(`${this.info.label} read failed (${res.status})`);
+        return toRead(res, "application/octet-stream");
+      }
+      return null;
     },
     async getRange(key, start, end) {
       const last = end === undefined ? "" : String(Math.max(start, end));
-      const res = await client.fetch(objectUrl(key), {
-        method: "GET",
-        headers: { range: `bytes=${start}-${last}` },
-      });
-      if (res.status === 404 || res.status === 416) return null;
-      if (!res.ok && res.status !== 206 && res.status !== 200) {
-        throw new Error(`${this.info.label} range read failed (${res.status})`);
+      for (const bucketName of readBucketsFor(key)) {
+        const res = await client.fetch(objectUrl(key, bucketName), {
+          method: "GET",
+          headers: { range: `bytes=${start}-${last}` },
+        });
+        if (res.status === 404 || res.status === 416) continue;
+        if (!res.ok && res.status !== 206 && res.status !== 200) {
+          throw new Error(`${this.info.label} range read failed (${res.status})`);
+        }
+        // Some gateways answer 200 with the whole object when they ignore Range;
+        // `partial` then tells the proxy it must not claim a 206.
+        return toRead(res, "application/octet-stream");
       }
-      // Some gateways answer 200 with the whole object when they ignore Range;
-      // `partial` then tells the proxy it must not claim a 206.
-      return toRead(res, "application/octet-stream");
+      return null;
     },
     async delete(keys) {
       const removed: string[] = [];
       // S3 DELETE is idempotent and a 404 means "already gone", which is a
       // success for us. Sequential keeps this dependency-free (no multipart
       // DeleteObjects XML body to sign) and deletes are always small-N.
+      // Every candidate bucket is visited, or a key that predates the public
+      // bucket fallback would resurrect itself through the un-removed copy.
       for (const key of keys) {
         if (!key) continue;
-        const res = await client.fetch(objectUrl(key), { method: "DELETE" });
-        if (res.ok || res.status === 404 || res.status === 204) removed.push(key);
-        else console.error(`${this.info.label} delete failed (${res.status}) for ${key}`);
+        for (const bucketName of readBucketsFor(key)) {
+          const res = await client.fetch(objectUrl(key, bucketName), { method: "DELETE" });
+          if (res.ok || res.status === 404 || res.status === 204) {
+            if (!removed.includes(key)) removed.push(key);
+          } else console.error(`${this.info.label} delete failed (${res.status}) for ${key}`);
+        }
       }
       return removed;
     },
     async stat(key) {
-      const res = await client.fetch(objectUrl(key), { method: "HEAD" });
-      if (res.status === 404 || res.status === 403) return null;
-      if (!res.ok) throw new Error(`${this.info.label} stat failed (${res.status})`);
-      return {
-        size: Number(res.headers.get("content-length") ?? 0),
-        contentType: res.headers.get("content-type") || "application/octet-stream",
-      };
+      for (const bucketName of readBucketsFor(key)) {
+        const res = await client.fetch(objectUrl(key, bucketName), { method: "HEAD" });
+        if (res.status === 404 || res.status === 403) continue;
+        if (!res.ok) throw new Error(`${this.info.label} stat failed (${res.status})`);
+        return {
+          size: Number(res.headers.get("content-length") ?? 0),
+          contentType: res.headers.get("content-type") || "application/octet-stream",
+        };
+      }
+      return null;
     },
     publicUrl(key) {
       // Never hand out a direct URL for a non-public key: a CDN domain that
