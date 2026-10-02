@@ -166,20 +166,17 @@ describe("the other paged lists honour the same contract", () => {
   });
 });
 
-describe("the for-you ranker is bounded inside getPostsPage", () => {
+describe("the for-you feed read is no longer time-boxed", () => {
   const client = read("../src/lib/api-client.ts");
 
-  it("caps the ranker below the shared page timeout and degrades to recency", () => {
-    // A slow ranker cold path used to blow the 15s client guard and reject the
-    // whole feed ("Feed fetch failed / Load more failed: timed out after
-    // 15000ms"). It is now bounded so over-budget rejects into the recency
-    // catch instead — the feed always paints.
-    const match = client.match(/const RANKER_BUDGET_MS = ([\d_]+);/);
-    expect(match, "RANKER_BUDGET_MS must be defined").not.toBeNull();
-    expect(Number(match![1].replace(/_/g, ""))).toBeGreaterThan(0);
-    expect(Number(match![1].replace(/_/g, ""))).toBeLessThan(PAGE_REQUEST_TIMEOUT_MS);
-    // ...and the ranker call actually runs through that budget.
-    expect(client).toMatch(/withBudget\(\s*getForYouPosts\(/);
+  it("drops the request-time budget now that ranking runs in a worker", () => {
+    // Serving "For you" is a bounded read of a precomputed timeline (ranked by
+    // the background worker), so the old 9s withBudget guard around getForYouPosts
+    // is gone — there is no inline ranking left to bound. A real failure still
+    // falls through to the chronological recency query.
+    expect(client).not.toMatch(/RANKER_BUDGET_MS/);
+    expect(client).not.toMatch(/withBudget\(/);
+    expect(client).toMatch(/await getForYouPosts\(\{/);
   });
 
   it("retrieves via two concurrent Postgres RPCs (no ~13-query cold path)", () => {

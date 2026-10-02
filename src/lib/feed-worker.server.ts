@@ -20,7 +20,7 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { RANK_EPOCH_MS, rankForYou } from "@/lib/feed-rank-core";
 
-const TICK_MS = 20_000; // rebuild cadence
+const TICK_MS = 10_000; // rebuild cadence (cold misses / refreshes queue due-now jobs)
 const VIEWERS_PER_TICK = 10; // hard cap on ranking work per tick
 const TIMELINE_STORE_MAX = 300; // rows kept per viewer
 const PAGE = 30; // ranker page size (drives the seen-3 replay decision only)
@@ -84,7 +84,7 @@ async function rebuildViewer(supabase: any, viewerId: string): Promise<void> {
     limit: PAGE,
   });
   // A brand-new / unpersonalized viewer has nothing worth materializing yet;
-  // their first read ranks inline (recency) and the trigger/epoch sweep will
+  // their read serves a recency seed, and the fan-out trigger / epoch sweep will
   // build a real timeline once they have signals.
   if (personalised) await writeTimeline(supabase, viewerId, entries);
 }

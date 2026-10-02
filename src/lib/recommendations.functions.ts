@@ -3,9 +3,9 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import {
   RANK_EPOCH_MS,
+  decodeCursor,
   finalizePage,
   pageFromSnapshot,
-  rankForYou,
   readFeedPrefs,
   hasMutedTag,
   normalizeTag,
@@ -18,9 +18,9 @@ import {
  * Ranking is no longer done here. A background worker (lib/feed-worker.server)
  * materializes each viewer's ranked timeline into `timeline_items` ahead of the
  * request, so opening the feed is ONE indexed read (<=300 slim rows) plus a page
- * hydrate — not a 2,000-row pool transfer + rescore that could blow the caller's
- * 9s budget and stall the whole node process. The scoring formulas themselves
- * live, unchanged, in lib/feed-rank-core.
+ * hydrate — never a 2,000-row pool transfer + rescore inside the request (that
+ * is what used to stall the shared node event loop and slow the first paint).
+ * The scoring formulas themselves live, unchanged, in lib/feed-rank-core.
  *
  * Freshness without re-introducing the cost:
  *   - a new post fans out to a re-rank job (SQL trigger) and the worker rebuilds
@@ -28,64 +28,79 @@ import {
  *   - the first page of a warm read also pull-merges brand-new posts from the
  *     authors you directly follow (a handful of rows, no RPC) so following
  *     someone shows their post immediately;
- *   - a brand-new / unranked viewer (or a manual refresh) runs the inline ranker
- *     once, stores it as their timeline, and serves from it thereafter.
+ *   - a brand-new / unranked viewer gets a cheap recency page immediately and a
+ *     ranked timeline on the worker's next tick — the request never ranks itself.
  *
  * Pagination keeps the `(score, id)` cursor from the snapshot helper, so a
  * materialized timeline and a freshly-computed one page identically.
  */
 
-// The materialized timeline is capped when stored and read so the serve path is
-// bounded; a scroll session rarely reaches row 300 before the next epoch.
-const TIMELINE_STORE_MAX = 300;
+// The serve path reads a bounded slice of the materialized timeline; a scroll
+// session rarely reaches row 300 before the next epoch. Writes are capped and
+// performed by the background worker (lib/feed-worker.server), not here.
 const TIMELINE_READ_MAX = 300;
 // Pull-merge stays cheap: a bounded follow scan + a bounded fresh-post scan.
 const FOLLOW_SCAN_MAX = 200;
 const FRESH_SCAN_MAX = 50;
+// Cold-miss recency seed: enough to fill the first scroll before the worker
+// materializes the real timeline, without a heavy scan.
+const SEED_MAX = 60;
 
 /**
- * Store a freshly-ranked list as this viewer's timeline for the epoch (top
- * `TIMELINE_STORE_MAX`). Runs on the VIEWER's own token, so RLS
- * (`owns_profile(viewer_id)`) already scopes the write to their rows. Best
- * effort: a failed store only means the next read re-ranks, never a wrong feed.
+ * Cold miss: no materialized timeline yet. Serve a cheap, current recency page
+ * straight away (an indexed newest-first read that honors the viewer's mutes)
+ * and let the background worker build the ranked list. The request NEVER runs
+ * the ranker — that 2,000-row pool transfer + rescore is exactly what made the
+ * first paint slow and tripped the old 9s budget. Returns score-0 entries so
+ * the caller pages them chronologically (personalised=false), the same shape as
+ * the client's recency fallback.
  */
-async function persistTimeline(
+async function serveRecencySeed(
   supabase: any,
   myId: string,
-  epochBucket: number,
-  entries: Array<{ row: any; score: number }>,
-) {
+): Promise<Array<{ row: any; score: number }>> {
   try {
-    await supabase
-      .from("timeline_items")
-      .delete()
-      .eq("viewer_id", myId)
-      .eq("kind", "foryou");
-    const top = entries.slice(0, TIMELINE_STORE_MAX);
-    if (top.length === 0) return;
-    const rows = top.map((e) => ({
-      viewer_id: myId,
-      kind: "foryou",
-      post_id: e.row.id,
-      author_id: e.row.user_id,
-      score: e.score,
-      epoch: epochBucket,
-      created_at: new Date(e.row.created_at).toISOString(),
-    }));
-    await supabase.from("timeline_items").insert(rows);
-  } catch (err) {
-    console.warn("timeline store failed (will re-rank next read):", err);
+    const { data: prefRow } = await supabase
+      .from("feed_preferences")
+      .select("prefs")
+      .eq("user_id", myId)
+      .maybeSingle();
+    const { mutedTags, mutedAuthors } = readFeedPrefs((prefRow as any)?.prefs);
+    const { data: posts } = await supabase
+      .from("posts")
+      .select("id,user_id,created_at,tags")
+      .eq("hidden", false)
+      .order("created_at", { ascending: false })
+      .limit(SEED_MAX);
+    return ((posts ?? []) as any[])
+      .filter((p) => !mutedAuthors.has(p.user_id) && !hasMutedTag(p.tags, mutedTags))
+      .map((row) => ({ row, score: 0 }));
+  } catch {
+    return [];
   }
 }
 
-/** Nudge the queue so the worker refreshes this viewer again next epoch. */
-async function enqueueRankJob(supabase: any, myId: string) {
+/**
+ * Queue this viewer for a background re-rank. `immediate` (due now) is used on a
+ * cold miss / manual refresh so the worker builds the timeline on its very next
+ * tick; the default schedules the next epoch so active viewers stay fresh
+ * without any per-request ranking. Best-effort: a dropped enqueue just means the
+ * epoch sweep re-ranks later.
+ */
+async function enqueueRankJob(supabase: any, myId: string, immediate = false) {
   try {
-    const dueAt = new Date((Math.floor(Date.now() / RANK_EPOCH_MS) + 1) * RANK_EPOCH_MS).toISOString();
+    const dueAt = immediate
+      ? new Date().toISOString()
+      : new Date((Math.floor(Date.now() / RANK_EPOCH_MS) + 1) * RANK_EPOCH_MS).toISOString();
     await supabase
       .from("feed_rank_jobs")
       .upsert(
-        { viewer_id: myId, reason: "read", due_at: dueAt, updated_at: new Date().toISOString() },
+        {
+          viewer_id: myId,
+          reason: immediate ? "cold" : "read",
+          due_at: dueAt,
+          updated_at: new Date().toISOString(),
+        },
         { onConflict: "viewer_id" },
       );
   } catch {
@@ -171,15 +186,24 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     if (!me) return { posts: [] as any[], personalised: false, nextCursor: null };
     const myId = me.id as string;
 
-    const epochBucket = Math.floor(Date.now() / RANK_EPOCH_MS);
+    // ---- serve: read the materialized timeline; never rank in the request ----
+    // A viewer holds exactly one epoch's rows, so we serve the latest stored
+    // timeline regardless of epoch. A cold miss serves a cheap recency page now
+    // and asks the worker to build the ranked list on its next tick; a manual
+    // refresh schedules an immediate rebuild but still returns instantly from
+    // what is already stored. The request path never runs the ranker — that is
+    // the whole point, and why the old 9s budget no longer exists.
+    //
+    // Session consistency: a scroll that BEGAN on a cold recency seed pages by
+    // post id (a `rank:0` cursor). If the worker materializes a timeline mid-
+    // scroll we must not switch that in-flight session to score-based paging —
+    // its id cursor wouldn't resolve against the ranked list and would falsely
+    // end the feed. So any cursor carrying rank 0 keeps serving recency.
+    const resumeRecency = !!data.cursor && decodeCursor(data.cursor)?.rank === 0;
 
-    // ---- warm path: read the materialized timeline (no ranking here) --------
-    // A viewer holds exactly one epoch's rows (both persist paths delete-then-
-    // insert), so we serve the latest stored timeline regardless of epoch and
-    // let the worker/next-refresh advance it — no inline re-rank at a rollover.
     let entries: Array<{ row: any; score: number }> | null = null;
     let personalised = true;
-    if (!data.refresh) {
+    if (!resumeRecency) {
       const { data: rows } = await supabase
         .from("timeline_items")
         .select("post_id, score, author_id, created_at")
@@ -196,18 +220,16 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       }
     }
 
-    // ---- cold miss / refresh: rank inline once, then store + serve from it --
-    // The caller bounds this call with its own budget; if it overruns, the catch
-    // there falls back to recency exactly as before. Storing means the NEXT read
-    // is a plain index scan, which is the whole point of the redesign.
-    if (!entries) {
-      const ranked = await rankForYou(supabase, myId, {
-        refresh: data.refresh,
-        limit: data.limit,
-      });
-      personalised = ranked.personalised;
-      entries = ranked.entries;
-      if (personalised) await persistTimeline(supabase, myId, epochBucket, entries);
+    if (entries) {
+      // Refresh can't re-rank here without cost, so nudge the worker to rebuild
+      // against the live clock; keep serving the stored order until it lands.
+      if (data.refresh) void enqueueRankJob(supabase, myId, true);
+    } else {
+      // Cold first load, or a session resuming its recency seed: serve newest-
+      // first now; only a fresh (cursorless) load kicks an immediate build.
+      personalised = false;
+      entries = await serveRecencySeed(supabase, myId);
+      if (!data.cursor) void enqueueRankJob(supabase, myId, true);
     }
 
     // Surface genuinely-new followed posts on the head page without a re-rank.

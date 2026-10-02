@@ -273,21 +273,22 @@ describe("For-you candidate pool covers every post", () => {
     expect(feed).not.toMatch(/all caught up \(\$\{posts\.length\}/);
   });
 
-  it("materializes the ranked timeline and serves the feed as an indexed read", () => {
-    // The in-memory ranked snapshot is gone: the background worker stores each
-    // viewer's ranked list in `timeline_items`, and the serve path reads it back
-    // (one indexed query) instead of re-walking the pool inside the request. The
-    // server fn no longer touches the ranking RPCs directly — only the shared
-    // core does, on a cold miss / refresh.
+  it("serves the feed as an indexed read while the worker owns ranking", () => {
+    // The background worker stores each viewer's ranked list in `timeline_items`;
+    // the serve path reads it back (one indexed query). It no longer ranks or
+    // writes on the request path: a cold miss seeds a cheap recency page and
+    // queues a due-now job, and the retrieval RPCs live only in the shared core.
     const reader = readFileSync(
       join(process.cwd(), "src", "lib", "recommendations.functions.ts"),
       "utf8",
     );
     expect(reader).toMatch(/from\("timeline_items"\)/);
-    expect(reader).toMatch(/from\("timeline_items"\)\.insert\(/);
-    // Cold miss / manual refresh runs the shared pipeline once, then stores it.
-    expect(reader).toMatch(/await rankForYou\(supabase, myId, \{/);
-    // ...but the request path itself is a READ: the retrieval RPCs live in core.
+    // Writes + ranking moved to the worker: the request path never inserts and
+    // never calls the ranker.
+    expect(reader).not.toMatch(/from\("timeline_items"\)\.insert\(/);
+    expect(reader).not.toMatch(/rankForYou\(/);
+    expect(reader).toMatch(/serveRecencySeed\(supabase, myId\)/);
+    // The request path is a READ: the retrieval RPCs live in core, not here.
     expect(reader).not.toMatch(/rpc\("for_you_candidates"/);
     expect(reader).not.toMatch(/rpc\("for_you_signals"/);
     // Pagination is still the shared (score, id) helper, so a materialized list

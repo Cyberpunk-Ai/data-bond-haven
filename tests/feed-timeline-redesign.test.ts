@@ -79,10 +79,14 @@ describe("the serve path is a read, not a re-rank", () => {
     expect(reader).not.toMatch(/rpc\("for_you_signals"/);
   });
 
-  it("only ranks inline on a cold miss / refresh, through the shared core", () => {
-    expect(reader).toMatch(/if \(!entries\) \{/);
-    expect(reader).toMatch(/await rankForYou\(supabase, myId, \{/);
-    expect(reader).toMatch(/persistTimeline\(supabase, myId, epochBucket, entries\)/);
+  it("never ranks on the request path: a cold miss seeds recency + queues work", () => {
+    // The request no longer runs the ranker at all — that pool transfer/rescore
+    // is what slowed the first paint. A cold miss serves a cheap recency page and
+    // queues a due-now job; ranking + timeline writes live ONLY in the worker.
+    expect(reader).not.toMatch(/rankForYou\(/);
+    expect(reader).toMatch(/serveRecencySeed\(supabase, myId\)/);
+    expect(reader).not.toMatch(/from\("timeline_items"\)\.insert\(/);
+    expect(reader).toMatch(/enqueueRankJob\(supabase, myId, true\)/);
   });
 
   it("keeps the client's (score, id) pagination + page hydration intact", () => {
@@ -135,14 +139,15 @@ describe("initial load is de-risked for returning users", () => {
   });
 });
 
-describe("the safety net around the reader is intact", () => {
+describe("the request path has no artificial budget blocker", () => {
   const client = read("src", "lib", "api-client.ts");
 
-  it("still bounds getForYouPosts and degrades to recency if the cold miss overruns", () => {
-    // Removing inline ranking does NOT remove the guard: a brand-new viewer's
-    // first-ever request still runs the (now rare) inline path, and that is the
-    // one call we keep under a budget so it can never hang the feed.
-    expect(client).toMatch(/withBudget\(\s*getForYouPosts\(/);
-    expect(client).toMatch(/const RANKER_BUDGET_MS = [\d_]+;/);
+  it("drops the 9s ranker budget now that serving is a bounded read", () => {
+    // Ranking never happens inside getPostsPage anymore, so there is nothing to
+    // time-box: withBudget + RANKER_BUDGET_MS are gone, and the feed call is a
+    // plain await that can only fail into the recency fallback.
+    expect(client).not.toMatch(/RANKER_BUDGET_MS/);
+    expect(client).not.toMatch(/withBudget\(/);
+    expect(client).toMatch(/await getForYouPosts\(\{/);
   });
 });
