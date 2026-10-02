@@ -13,7 +13,10 @@ import { getPostById } from "@/lib/api-client";
 import type { Post } from "@/lib/types";
 
 export const Route = createFileRoute("/post/$id")({
-  loader: ({ params }) => getSharedPost({ data: { id: params.id } }),
+  // `.catch` keeps a failed intent-preload from surfacing as an unhandled
+  // rejection; a null loaderData renders the "unavailable" head/body below.
+  loader: ({ params }) =>
+    getSharedPost({ data: { id: params.id } }).catch(() => null),
   head: ({ loaderData }) => {
     if (!loaderData) {
       return {

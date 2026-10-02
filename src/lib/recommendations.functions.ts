@@ -181,6 +181,74 @@ function jitter01(key: string): number {
   return h / 4294967296;
 }
 
+/**
+ * Candidate-pool ceiling. Kept at 2000 to preserve the feed-completeness
+ * invariant: a post only leaves "For you" because it ranked below the page
+ * window, never because a smaller `limit` cut it off. The pool is now fetched
+ * SLIM (scoring columns only) via the `for_you_candidates` RPC and cached once
+ * per epoch for every viewer, so the ceiling no longer costs a full 2000-row
+ * content-bearing transfer per viewer.
+ */
+const POOL_MAX = 2000;
+
+interface SharedPoolCache {
+  epochBucket: number;
+  rows: any[];
+}
+let poolCache: SharedPoolCache | null = null;
+
+/**
+ * The viewer-INDEPENDENT candidate pool, cached process-locally for the current
+ * ranking epoch. `for_you_candidates` returns recent UNION trending posts as
+ * slim rows with the author/workspace plan pre-joined; because that set is
+ * identical for every viewer it is fetched ONCE per epoch (on the long-lived
+ * node server) instead of once per viewer per epoch. Callers must treat the
+ * returned array as read-only (the ranker scores a filtered copy).
+ */
+async function getSharedPool(supabase: any, epochBucket: number): Promise<any[]> {
+  if (poolCache && poolCache.epochBucket === epochBucket) return poolCache.rows;
+  const { data, error } = await supabase.rpc("for_you_candidates", { p_limit: POOL_MAX });
+  if (error) throw error;
+  const rows = Array.isArray(data) ? data : [];
+  // Only cache a non-empty result, so a transient empty (e.g. the migration not
+  // applied yet, or a brand-new platform) retries rather than sticking for the epoch.
+  if (rows.length > 0) poolCache = { epochBucket, rows };
+  return rows;
+}
+
+/**
+ * One round trip for the viewer's behaviour, follow graph, impressions and feed
+ * tuning (see `for_you_signals`). Runs under the viewer's own token, so it sees
+ * exactly what the six behaviour queries + two follow queries + prefs read saw.
+ */
+async function fetchViewerSignals(supabase: any, myId: string): Promise<any> {
+  const { data, error } = await supabase.rpc("for_you_signals", { p_viewer: myId });
+  if (error) throw error;
+  return data ?? {};
+}
+
+/**
+ * Fetch FULL rows for just the ranked page. Scoring ran on slim rows; only the
+ * <=limit posts actually being shown need content/media/poll to render.
+ * Preserves ranked order and falls back to the slim row if a full row is gone.
+ */
+async function hydratePageRows(supabase: any, slimRows: any[]): Promise<any[]> {
+  const ids = slimRows.map((r) => r?.id).filter(Boolean);
+  if (ids.length === 0) return slimRows;
+  const { data } = await supabase.from("posts").select("*").in("id", ids);
+  const full = new Map<string, any>((data ?? []).map((row: any) => [row.id, row]));
+  return slimRows.map((s) => full.get(s?.id) ?? s);
+}
+
+/** Slice a page from a ranked list and hydrate it to full rows for the client. */
+async function finalizePage(
+  supabase: any,
+  page: { posts: any[]; personalised: boolean; nextCursor: string | null },
+) {
+  page.posts = await hydratePageRows(supabase, page.posts);
+  return page;
+}
+
 export const getForYouPosts = createServerFn({ method: "GET" })
   .inputValidator((data: unknown) => {
     const d = (data ?? {}) as { limit?: number; cursor?: string; refresh?: boolean };
@@ -206,117 +274,60 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     const myId = me.id as string;
 
     // One ranked list per viewer per 10-minute epoch, reused across every page
-    // of a scroll session: the pool walk, the six behaviour queries, the plan
-    // lookups and the rescoring below then run ONCE, not on each "load more".
-    // A manual refresh skips the read so Refresh can never hand back an
-    // identical page, and overwrites the snapshot as the new baseline.
+    // of a scroll session: the candidate retrieval, the signal fan-in and the
+    // rescoring below then run ONCE, not on each "load more". A manual refresh
+    // skips the read so Refresh can never hand back an identical page, and
+    // overwrites the snapshot as the new baseline.
     const epochBucket = Math.floor(Date.now() / RANK_EPOCH_MS);
     if (!data.refresh) {
       const cached = snapshotFor(myId, epochBucket);
       if (cached)
-        return pageFromSnapshot(cached.entries, cached.personalised, data.cursor, data.limit);
+        return finalizePage(
+          supabase,
+          pageFromSnapshot(cached.entries, cached.personalised, data.cursor, data.limit),
+        );
     }
 
-    // ---- independent reads, started concurrently ----------------------------
-    // The behaviour signals, the first-degree follow graph and the (heavy)
-    // candidate pool depend only on the viewer id (or nothing at all), so their
-    // round trips are STARTED together instead of one phase awaiting the next.
-    // Each Supabase query resolves to {data,error} rather than rejecting, so these
-    // promises are held and awaited where their results are consumed — this
-    // collapses the cold path from ~9 sequential waves to ~4 so it lands well
-    // inside the client fetch budget instead of timing out.
-    const behaviourPromise = Promise.all([
-      supabase.from("likes").select("post_id").eq("user_id", myId).limit(300),
-      supabase.from("reposts").select("post_id").eq("user_id", myId).limit(300),
-      supabase.from("bookmarks").select("post_id").eq("user_id", myId).limit(300),
-      supabase.from("comments").select("post_id").eq("user_id", myId).limit(300),
-      supabase.from("post_impressions").select("post_id").eq("user_id", myId).limit(1000),
-      supabase.from("feed_preferences").select("prefs").eq("user_id", myId).maybeSingle(),
-    ]);
-    const followingPromise = supabase
-      .from("follows")
-      .select("target_id")
-      .eq("follower_id", myId);
-
-    // Candidate pool. Fetched as ONE parallel batch (chunked recent posts + a
-    // trending pass): the ceiling still covers EVERY visible post, but the whole
-    // pool lands in ~a single round trip rather than a sequential walk, and it is
-    // started here so it resolves while the behaviour/graph work proceeds.
-    const POOL_CHUNK = 500;
-    const POOL_MAX = 2000;
-    const trendingSince = new Date(Date.now() - 48 * 3_600_000).toISOString();
-    const poolBatchPromise = Promise.all([
-      ...Array.from({ length: POOL_MAX / POOL_CHUNK }, (_, i) =>
-        supabase
-          .from("posts")
-          .select("*")
-          .eq("hidden", false)
-          .order("created_at", { ascending: false })
-          .range(i * POOL_CHUNK, i * POOL_CHUNK + POOL_CHUNK - 1),
-      ),
-      // Pool 2: trending — highest engagement in the last 48h, independent of
-      // recency rank, so a viral post a viewer hasn't seen yet still surfaces.
-      supabase
-        .from("posts")
-        .select("*")
-        .eq("hidden", false)
-        .gte("created_at", trendingSince)
-        .order("like_count", { ascending: false })
-        .limit(300),
+    // ---- retrieve: two round trips replace ~13 ------------------------------
+    // `for_you_candidates` returns the viewer-INDEPENDENT pool (recent UNION
+    // 48h-trending) as SLIM rows with the plan pre-joined, cached once per epoch
+    // for everyone; `for_you_signals` fans the viewer's behaviour/graph/
+    // impression/tuning into one jsonb. Both are SECURITY INVOKER and run under
+    // this viewer's token, so they see exactly what the old per-query reads saw.
+    // The only full-row transfer left is the single page hydrate below.
+    const [pool, signals] = await Promise.all([
+      getSharedPool(supabase, epochBucket),
+      fetchViewerSignals(supabase, myId),
     ]);
 
-    const [likes, reposts, bookmarks, comments, impressions, feedPrefsRow] = await behaviourPromise;
-
-    const weighted: Array<[any[], number]> = [
-      [likes.data ?? [], 3],
-      [reposts.data ?? [], 4],
-      [bookmarks.data ?? [], 4],
-      [comments.data ?? [], 3],
-    ];
+    // ---- behaviour affinity (same values the six behaviour queries gave) ----- 
     const engagedWeight = new Map<string, number>();
-    for (const [rows, w] of weighted) {
-      for (const r of rows) {
-        if (!r?.post_id) continue;
-        engagedWeight.set(r.post_id, (engagedWeight.get(r.post_id) ?? 0) + w);
+    const addEngaged = (ids: unknown, w: number) => {
+      for (const pid of (Array.isArray(ids) ? ids : []) as string[]) {
+        if (pid) engagedWeight.set(pid, (engagedWeight.get(pid) ?? 0) + w);
       }
-    }
+    };
+    addEngaged(signals.likes, 3);
+    addEngaged(signals.reposts, 4);
+    addEngaged(signals.bookmarks, 4);
+    addEngaged(signals.comments, 3);
     const engagedIds = [...engagedWeight.keys()].slice(0, 400);
 
     // Impression counts: 1 = seen once (mild demotion), 3+ = drop from feed.
     const impressionCount = new Map<string, number>();
-    for (const r of impressions.data ?? []) {
-      if (!r?.post_id) continue;
-      impressionCount.set(r.post_id, (impressionCount.get(r.post_id) ?? 0) + 1);
+    for (const pid of (Array.isArray(signals.impressions) ? signals.impressions : []) as string[]) {
+      if (pid) impressionCount.set(pid, (impressionCount.get(pid) ?? 0) + 1);
     }
 
     const authorAffinity = new Map<string, number>();
     const tagAffinity = new Map<string, number>();
 
     // Preference-driven interests from explicit feed tuning (mute/boost tags & authors).
-    const { preferredTags, mutedTags, mutedAuthors } = readFeedPrefs(feedPrefsRow.data?.prefs);
+    const { preferredTags, mutedTags, mutedAuthors } = readFeedPrefs(signals.prefs);
     for (const tag of preferredTags) tagAffinity.set(tag, (tagAffinity.get(tag) ?? 0) + 5);
-
-    // Second wave: the engaged-post lookup (needs engagedIds) and the
-    // second-degree graph (needs firstDegree) depend only on wave one and not on
-    // each other, so resolve them together. firstDegree is ready immediately
-    // because its query was kicked off at the top of the handler.
-    const followingRes = await followingPromise;
-    const firstDegree = new Set<string>((followingRes.data ?? []).map((f: any) => f.target_id));
-    const [engagedRes, theirFollowsRes] = await Promise.all([
-      engagedIds.length
-        ? supabase.from("posts").select("id, user_id, tags").in("id", engagedIds)
-        : Promise.resolve({ data: null as any }),
-      firstDegree.size
-        ? supabase
-            .from("follows")
-            .select("target_id")
-            .in("follower_id", [...firstDegree].slice(0, 200))
-        : Promise.resolve({ data: null as any }),
-    ]);
-
-    for (const p of engagedRes.data ?? []) {
+    for (const p of (Array.isArray(signals.engagedPosts) ? signals.engagedPosts : []) as any[]) {
       const w = engagedWeight.get(p.id) ?? 1;
-      authorAffinity.set(p.user_id, (authorAffinity.get(p.user_id) ?? 0) + w);
+      if (p.user_id) authorAffinity.set(p.user_id, (authorAffinity.get(p.user_id) ?? 0) + w);
       for (const tag of (p.tags ?? []) as string[]) {
         // Keyed the same way preferredTags is (normalised) so an affinity boost
         // survives a creator typing "#AI" where the viewer tuned "ai".
@@ -325,34 +336,33 @@ export const getForYouPosts = createServerFn({ method: "GET" })
         tagAffinity.set(norm, (tagAffinity.get(norm) ?? 0) + w);
       }
     }
+
+    // ---- relationship (follow graph, resolved inside for_you_signals) -------- 
+    const firstDegree = new Set<string>(
+      ((Array.isArray(signals.following) ? signals.following : []) as string[]).filter(Boolean),
+    );
     const secondDegree = new Set<string>(
-      (theirFollowsRes.data ?? [])
-        .map((f: any) => f.target_id)
-        .filter((id: string) => id !== myId && !firstDegree.has(id)),
+      ((Array.isArray(signals.friendFollows) ? signals.friendFollows : []) as string[]).filter(
+        (id) => id && id !== myId && !firstDegree.has(id),
+      ),
     );
 
-    // ---- candidate generation ------------------------------------------------
-    // Await the pool already in flight above — the pool walk no longer serialises
-    // behind the behaviour and graph phases.
-    const poolBatch = await poolBatchPromise;
-    const recentRows: any[] = [];
-    for (const res of poolBatch.slice(0, -1)) {
-      if (!res.error && res.data?.length) recentRows.push(...res.data);
-    }
-    const trendingRes = poolBatch[poolBatch.length - 1];
-
-    const byId = new Map<string, any>();
-    for (const row of recentRows) byId.set(row.id, row);
-    for (const row of trendingRes.data ?? []) if (!byId.has(row.id)) byId.set(row.id, row);
-
-    // Every visible post is feed material — including your own: "show all
-    // available posts" means the ranker never hides a category by fiat, and
-    // the 2-per-10-window diversity cap below already stops one account
-    // (including the viewer) from flooding a screenful. Tags the viewer
-    // muted through the post menu are still dropped here.
-    const rows = [...byId.values()].filter(
-      (r) => !mutedAuthors.has(r.user_id) && !hasMutedTag(r.tags, mutedTags),
+    // ---- candidate set (mutes still applied per-viewer; the pool is shared) -- 
+    // Every visible post is feed material — including your own: the ranker never
+    // hides a category by fiat, and the 2-per-10-window diversity cap below
+    // already stops one account (including the viewer) from flooding a screenful.
+    // Tags/authors the viewer muted through the post menu are dropped here.
+    const rows = pool.filter(
+      (r: any) => !mutedAuthors.has(r.user_id) && !hasMutedTag(r.tags, mutedTags),
     );
+
+    // Plan-based discovery boost: paid creators AND paid team workspaces reach
+    // further; free still reaches. The effective plan is pre-joined by
+    // for_you_candidates — a workspace post inherits the workspace (or its
+    // owner's) plan, falling back to the author's personal plan when there is no
+    // readable workspace — so no per-viewer plan lookups are needed.
+    const planFactor = (plan?: string | null) =>
+      plan === "pro" ? 1.35 : plan === "plus" ? 1.18 : 1;
 
     const personalised =
       engagedIds.length > 0 || firstDegree.size > 0 || preferredTags.size > 0 || mutedTags.size > 0;
@@ -365,51 +375,10 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       const adjusted = (r: any) =>
         new Date(r.created_at).getTime() +
         (jitter01(`${myId}:${r.id}:${newBucket}`) - 0.5) * 12 * 3_600_000;
-      const sorted = rows.sort((a, b) => adjusted(b) - adjusted(a));
-      const entries = sorted.map((row) => ({ row, score: 0 }));
+      const sorted = rows.sort((a: any, b: any) => adjusted(b) - adjusted(a));
+      const entries = sorted.map((row: any) => ({ row, score: 0 }));
       rememberSnapshot(myId, epochBucket, { entries, personalised: false });
-      return pageFromSnapshot(entries, false, data.cursor, data.limit);
-    }
-
-    // Plan-based discovery boost: paid creators AND paid team workspaces reach
-    // further; free still reaches. A workspace post inherits the boost from the
-    // workspace's own plan, falling back to its owner's personal plan when the
-    // workspace itself is on the free tier — so a Pro/Plus account boosts the
-    // reach of the team brand it posts under, not just its personal handle.
-    const planFactor = (plan?: string | null) =>
-      plan === "pro" ? 1.35 : plan === "plus" ? 1.18 : 1;
-    const authorIds = [...new Set(rows.map((r: any) => r.user_id))];
-    const wsIds = [...new Set(rows.map((r: any) => r.workspace_id).filter(Boolean))];
-    const planBoost = new Map<string, number>();
-    const wsBoost = new Map<string, number>();
-    if (authorIds.length) {
-      const { data: plans } = await supabase
-        .from("profiles")
-        .select("id, plan")
-        .in("id", authorIds);
-      for (const p of plans ?? []) planBoost.set(p.id, planFactor(p.plan));
-    }
-    if (wsIds.length) {
-      const { data: wsRows } = await supabase
-        .from("workspaces")
-        .select("id, plan, owner_id")
-        .in("id", wsIds);
-      const ownerIds = [
-        ...new Set(
-          (wsRows ?? [])
-            .filter((w: any) => !w.plan || w.plan === "free")
-            .map((w: any) => w.owner_id),
-        ),
-      ];
-      const ownerPlan = new Map<string, string>();
-      if (ownerIds.length) {
-        const { data: op } = await supabase.from("profiles").select("id, plan").in("id", ownerIds);
-        for (const p of op ?? []) ownerPlan.set(p.id, p.plan);
-      }
-      for (const w of wsRows ?? []) {
-        const eff = w.plan && w.plan !== "free" ? w.plan : ownerPlan.get(w.owner_id);
-        wsBoost.set(w.id, planFactor(eff));
-      }
+      return finalizePage(supabase, pageFromSnapshot(entries, false, data.cursor, data.limit));
     }
 
     // Ranking epoch: bucket "now" to a 10-minute window so scores (and thus
@@ -463,11 +432,13 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       const discovery = outsideKnownWorld ? jitter01(`${myId}:${row.id}:${epoch}`) * 1.4 : 0;
 
       const base = authorScore + tagScore + relationship + quality + discovery;
-      // Paid team workspaces boost by the workspace (or its owner's) plan;
-      // personal posts boost by the author's plan.
-      const reachBoost = row.workspace_id
-        ? (wsBoost.get(row.workspace_id) ?? planBoost.get(row.user_id) ?? 1)
-        : (planBoost.get(row.user_id) ?? 1);
+      // Reach boost from the plan pre-joined by for_you_candidates: a workspace
+      // post inherits its workspace (or the owner's) plan, falling back to the
+      // author's personal plan; a personal post uses the author's plan.
+      const effPlan = row.workspace_id
+        ? (row.workspace_plan ?? row.author_plan)
+        : row.author_plan;
+      const reachBoost = planFactor(effPlan);
       const score = (base * (0.35 + decay) + decay * 2) * reachBoost + seenPenalty;
 
       return { row, score };
@@ -528,7 +499,7 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     }
 
     rememberSnapshot(myId, epochBucket, { entries: ranked, personalised: true });
-    return pageFromSnapshot(ranked, true, data.cursor, data.limit);
+    return finalizePage(supabase, pageFromSnapshot(ranked, true, data.cursor, data.limit));
   });
 
 /**

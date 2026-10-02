@@ -182,12 +182,16 @@ describe("the for-you ranker is bounded inside getPostsPage", () => {
     expect(client).toMatch(/withBudget\(\s*getForYouPosts\(/);
   });
 
-  it("overlaps the ranker's independent cold-path reads (no ~9-wave serial walk)", () => {
+  it("retrieves via two concurrent Postgres RPCs (no ~13-query cold path)", () => {
     const recs = read("../src/lib/recommendations.functions.ts");
-    // Behaviour, follow graph and the candidate pool are started together and
-    // awaited where consumed, collapsing the cold path.
-    expect(recs).toMatch(/const behaviourPromise = Promise\.all\(/);
-    expect(recs).toMatch(/const followingPromise = supabase/);
-    expect(recs).toMatch(/const poolBatchPromise = Promise\.all\(/);
+    // The old fan-out of behaviour + graph + pool + plan queries is gone: the
+    // ranker fires the shared pool and the viewer signals concurrently, so a cold
+    // epoch is two round trips rather than a dozen across many waves.
+    expect(recs).toMatch(/const \[pool, signals\] = await Promise\.all\(\[/);
+    expect(recs).toMatch(/getSharedPool\(supabase, epochBucket\)/);
+    expect(recs).toMatch(/fetchViewerSignals\(supabase, myId\)/);
+    // ...backed by the two RPCs.
+    expect(recs).toMatch(/rpc\("for_you_candidates"/);
+    expect(recs).toMatch(/rpc\("for_you_signals"/);
   });
 });

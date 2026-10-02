@@ -220,18 +220,23 @@ describe("For-you candidate pool covers every post", () => {
     "utf8",
   );
 
-  it("fetches the full pool as one parallel batch (no shallow newest-400, no sequential walk)", () => {
+  it("retrieves candidates + signals via Postgres RPCs (slim pool, no full-row walk)", () => {
+    // The 2,000-row `select("*")` pool walk is gone: stage 1 returns SLIM rows
+    // from the `for_you_candidates` RPC (cached once per epoch and shared across
+    // viewers), stage 2 folds the behaviour/graph/prefs fan-in into
+    // `for_you_signals`, and the only full-row read left is the <=limit page
+    // hydration.
     expect(src).not.toMatch(/\.limit\(400\)/);
-    expect(src).toMatch(/POOL_CHUNK/);
-    expect(src).toMatch(/POOL_MAX/);
-    // The pool is walked with explicit range windows, not a shallow limit.
-    expect(src).toMatch(/\.range\(i \* POOL_CHUNK, i \* POOL_CHUNK \+ POOL_CHUNK - 1\)/);
-    // ...issued concurrently in a single Promise.all started up front (and
-    // awaited where consumed), rather than a sequential for-loop walk, so a cold
-    // epoch can't stall past the client fetch timeout.
-    expect(src).toMatch(/const poolBatchPromise = Promise\.all\(/);
-    expect(src).toMatch(/const poolBatch = await poolBatchPromise;/);
-    expect(src).not.toMatch(/for \(let from = 0; from < POOL_MAX;/);
+    expect(src).toMatch(/POOL_MAX = 2000/);
+    expect(src).toMatch(/supabase\.rpc\("for_you_candidates", \{ p_limit: POOL_MAX \}\)/);
+    expect(src).toMatch(/supabase\.rpc\("for_you_signals", \{ p_viewer: myId \}\)/);
+    // The pool is fetched once per epoch and reused, not re-walked per viewer.
+    expect(src).toMatch(/if \(poolCache && poolCache\.epochBucket === epochBucket\)/);
+    // The ONLY full-row fetch is page hydration, keyed by the page's ids.
+    expect(src).toMatch(/from\("posts"\)\.select\("\*"\)\.in\("id", ids\)/);
+    // No chunked `select("*")` pool walk survives.
+    expect(src).not.toMatch(/POOL_CHUNK/);
+    expect(src).not.toMatch(/\.range\(i \* POOL_CHUNK/);
   });
 
   it("no longer excludes the viewer's own posts from recommendation slots", () => {
@@ -276,26 +281,85 @@ describe("For-you candidate pool covers every post", () => {
     // 10-minute epoch, not on every "load more". A warm page is served straight
     // from the ranked snapshot; only a cold miss (or a manual refresh) walks.
     expect(src).toMatch(/const epochBucket = Math\.floor\(Date\.now\(\) \/ RANK_EPOCH_MS\);/);
-    // Cache read happens BEFORE the behaviour queries, gated on `!data.refresh`.
+    // Cache read happens BEFORE the retrieval call site, gated on `!data.refresh`.
     const readAt = src.indexOf("snapshotFor(myId, epochBucket)");
-    const queriesAt = src.indexOf('from("likes")');
+    const queriesAt = src.indexOf("getSharedPool(supabase, epochBucket)");
     expect(readAt).toBeGreaterThan(-1);
+    expect(queriesAt).toBeGreaterThan(-1);
     expect(readAt).toBeLessThan(queriesAt);
     expect(src).toMatch(/if \(!data\.refresh\) \{/);
     // Both return paths (recency-led and personalised) store then page from the
-    // snapshot, so the shared cursor logic is identical cold vs warm.
+    // snapshot, so the shared cursor logic is identical cold vs warm. Each page
+    // is run through `finalizePage` to hydrate its full rows before returning.
     expect(src).toMatch(
       /rememberSnapshot\(myId, epochBucket, \{ entries: ranked, personalised: true \}\);/,
     );
     expect(src).toMatch(
       /rememberSnapshot\(myId, epochBucket, \{ entries, personalised: false \}\);/,
     );
-    expect(src).toMatch(/return pageFromSnapshot\(ranked, true, data\.cursor, data\.limit\);/);
     expect(src).toMatch(
-      /return pageFromSnapshot\(cached\.entries, cached\.personalised, data\.cursor, data\.limit\);/,
+      /return finalizePage\(supabase, pageFromSnapshot\(ranked, true, data\.cursor, data\.limit\)\);/,
     );
     // No leftover inline pagination in the handler: it all routes through the
     // shared helper (the old `ranked.slice(startIdx, ...)` is gone).
     expect(src).not.toMatch(/ranked\.slice\(startIdx/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. The retrieval the ranker relies on lives in Postgres, RLS-scoped
+// ---------------------------------------------------------------------------
+
+describe("the ranker's retrieval is pushed into Postgres and stays invoker-scoped", () => {
+  const mig = readFileSync(
+    join(process.cwd(), "db", "migrations", "20261002000095_for_you_rank_functions.sql"),
+    "utf8",
+  );
+  const recs = readFileSync(
+    join(process.cwd(), "src", "lib", "recommendations.functions.ts"),
+    "utf8",
+  );
+
+  it("defines both functions and grants execute to authenticated only", () => {
+    expect(mig).toMatch(/create or replace function public\.for_you_candidates\(p_limit integer\)/);
+    expect(mig).toMatch(/create or replace function public\.for_you_signals\(p_viewer uuid\)/);
+    expect(mig).toMatch(
+      /grant execute on function public\.for_you_candidates\(integer\) to authenticated;/,
+    );
+    expect(mig).toMatch(
+      /grant execute on function public\.for_you_signals\(uuid\) to authenticated;/,
+    );
+    expect(mig).toMatch(
+      /revoke execute on function public\.for_you_candidates\(integer\) from public, anon;/,
+    );
+  });
+
+  it("runs as the invoker so the RPCs see exactly what the viewer-scoped client saw", () => {
+    // SECURITY DEFINER would bypass the per-viewer RLS the server bearer token
+    // relies on; the functions must stay STABLE SQL and default (invoker) rights.
+    // The phrase may appear in prose comments, so assert it never follows the
+    // language attribute as a DDL clause.
+    expect(mig.toLowerCase()).not.toMatch(/language sql[\s\S]{0,80}security definer/);
+    expect(mig).toMatch(/returns jsonb/);
+    expect(mig).toMatch(/language sql/);
+    expect(mig).toMatch(/stable/);
+  });
+
+  it("hydrates the page in the app so the pool itself never carries content", () => {
+    // The single place the app fetches full post rows for "For you" is the page
+    // hydration helper (by page ids) — not the candidate pool.
+    expect(recs).toMatch(/async function hydratePageRows/);
+    expect(recs).toMatch(/\.in\("id", ids\)/);
+  });
+});
+
+describe("intent-preload cannot surface a rejected share-route loader", () => {
+  it("catches loader failures to null on the post and profile share routes", () => {
+    const post = readFileSync(join(process.cwd(), "src", "routes", "post.$id.tsx"), "utf8");
+    const profile = readFileSync(join(process.cwd(), "src", "routes", "u.$username.tsx"), "utf8");
+    expect(post).toMatch(/getSharedPost\(\{ data: \{ id: params\.id \} \}\)\.catch\(\(\) => null\)/);
+    expect(profile).toMatch(
+      /getSharedProfile\(\{ data: \{ username: params\.username \} \}\)\.catch\(\(\) => null\)/,
+    );
   });
 });

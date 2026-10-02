@@ -6,7 +6,10 @@ import { DefaultRail } from "@/components/social/RightRail";
 import { getSharedProfile } from "@/lib/share.functions";
 
 export const Route = createFileRoute("/u/$username")({
-  loader: ({ params }) => getSharedProfile({ data: { username: params.username } }),
+  // `.catch` keeps a failed intent-preload from surfacing as an unhandled
+  // rejection; a null loaderData renders the "unavailable" head/body below.
+  loader: ({ params }) =>
+    getSharedProfile({ data: { username: params.username } }).catch(() => null),
   head: ({ loaderData }) => {
     if (!loaderData) {
       return {

@@ -1,5 +1,7 @@
 import {
   createContext,
+  lazy,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
@@ -12,7 +14,6 @@ import { Phone, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Avatar } from "@/components/social/Avatar";
-import { CallModal } from "@/components/social/CallModal";
 import { useAuth } from "@/lib/auth-state";
 import {
   ensureNotificationsWorker,
@@ -35,6 +36,17 @@ import {
   type CallKind,
 } from "@/lib/calls";
 import type { Profile } from "@/lib/types";
+
+/**
+ * The in-call UI (and its WebRTC peer/screen-share/chat machinery) is only
+ * needed the instant a call connects, not on every page. Loading it lazily
+ * keeps that whole stack out of the always-loaded root bundle; it fetches on
+ * demand when `activeCall` first appears, and the provider's lightweight
+ * incoming-call ring overlay stays eager so nothing about ringing is delayed.
+ */
+const CallModal = lazy(() =>
+  import("@/components/social/CallModal").then((m) => ({ default: m.CallModal })),
+);
 
 const RING_TIMEOUT_MS = 45_000;
 
@@ -322,7 +334,8 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
       {children}
 
       {activeCall && (
-        <CallModal
+        <Suspense fallback={null}>
+          <CallModal
           partner={activeCall.user}
           type={activeCall.type}
           isOpen
@@ -345,7 +358,8 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
             }
             setActiveCall(null);
           }}
-        />
+          />
+        </Suspense>
       )}
 
       {incomingCall && (
