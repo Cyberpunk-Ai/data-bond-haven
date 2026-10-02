@@ -48,6 +48,19 @@ export function approxLocal(amount: number, currency: string): string {
   }
 }
 
+/**
+ * "March 2025"-style account-age label for the profile "Joined …" line. Fixed
+ * `en-US` (like `usd`) so the server render and the client hydration agree and
+ * never flicker. Returns "" for a missing/invalid date so the caller can drop
+ * the whole line rather than show "Joined" with nothing after it.
+ */
+export function memberSince(isoString?: string | null): string {
+  if (!isoString) return "";
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(date);
+}
+
 export function timeAgo(isoString: string, _now?: unknown): string {
   if (!isoString) return "";
   const date = new Date(isoString);

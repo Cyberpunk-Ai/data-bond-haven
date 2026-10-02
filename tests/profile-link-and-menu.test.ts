@@ -14,6 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { memberSince } from "@/lib/formatters";
 
 function read(rel: string): string {
   return readFileSync(new URL(rel, import.meta.url), "utf8");
@@ -79,6 +80,25 @@ describe("the post-card more menu escapes the clipped card", () => {
     const effect = between(card, "if (!showMenu) {", "// Autoplay/Pause video");
     expect(effect).toContain("openUp");
     expect(effect).toContain("getBoundingClientRect()");
+  });
+});
+
+describe("the profile header shows the member's join date", () => {
+  it("renders Joined {date} via memberSince, not a hard-coded placeholder", () => {
+    const route = read("../src/routes/profile.tsx");
+    // The literal that used to sit where the date belongs is gone.
+    expect(route).not.toContain("Joined Spaces Community");
+    expect(route).toContain("memberSince(userProfile.joined_at)");
+    expect(route).toContain("Joined {since}");
+  });
+
+  it("memberSince formats a stable en-US month/year and hides an empty date", () => {
+    // Fixed en-US keeps the server render identical to client hydration.
+    expect(memberSince("2025-03-08T10:00:00.000Z")).toBe("March 2025");
+    expect(memberSince("")).toBe("");
+    expect(memberSince(null)).toBe("");
+    expect(memberSince(undefined)).toBe("");
+    expect(memberSince("not-a-date")).toBe("");
   });
 });
 

@@ -27,7 +27,7 @@ import { DefaultRail } from "@/components/social/RightRail";
 import { FollowButton } from "@/components/social/RightRail";
 import { EditProfileModal } from "@/components/social/EditProfileModal";
 import { TipModal } from "@/components/social/TipModal";
-import { compact } from "@/lib/formatters";
+import { compact, memberSince } from "@/lib/formatters";
 import { currentUser as defaultUser, getProfile, fetchProfile } from "@/lib/profile-service";
 import { getProfileTabPosts } from "@/lib/profile.functions";
 import type { Post, Profile } from "@/lib/types";
@@ -579,9 +579,14 @@ function ProfilePage() {
                     <Link2 className="h-4 w-4" /> {userProfile.website}
                   </a>
                 )}
-                <span className="flex items-center gap-1.5">
-                  <CalendarDays className="h-4 w-4" /> Joined Spaces Community
-                </span>
+                {(() => {
+                  const since = memberSince(userProfile.joined_at);
+                  return since ? (
+                    <span className="flex items-center gap-1.5">
+                      <CalendarDays className="h-4 w-4" /> Joined {since}
+                    </span>
+                  ) : null;
+                })()}
               </div>
 
               <div className="mt-4 flex gap-6 text-sm">
