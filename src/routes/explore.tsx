@@ -4,7 +4,6 @@ import {
   Flame,
   TrendingUp,
   Users,
-  Hash,
   Search,
   X,
   Loader2,
@@ -19,18 +18,17 @@ import {
 import { AppShell, Panel, PageHeader } from "@/components/social/AppShell";
 import { PostCard } from "@/components/social/PostCard";
 import { FeedSkeleton } from "@/components/social/PostSkeleton";
-import { FollowButton, RailFooter } from "@/components/social/RightRail";
+import { FollowButton, DefaultRail } from "@/components/social/RightRail";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
 import { compact } from "@/lib/formatters";
 import { currentUser, profileRegistry, getProfile } from "@/lib/profile-service";
-import type { Post, Profile, Topic, TrendingTag } from "@/lib/types";
+import type { Post, Profile, Topic } from "@/lib/types";
 import {
   getPostsPage,
   getCreatorsPage,
   globalSearch,
   getTopics,
-  getTrendingTags,
 } from "@/lib/api-client";
 import { getWhoToFollow } from "@/lib/recommendations.functions";
 import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS, isVideoUrl } from "@/lib/utils";
@@ -71,8 +69,9 @@ const EXPLORE_PEOPLE_CHUNK = 12;
 // Topics arrive one page at a time now — the full trending-tag set can be large,
 // so the Topics tab renders a bounded first batch and reveals more on demand.
 const TOPICS_STEP = 12;
-// "All trends" rail shows the same bounded number of tags instead of every tag.
-const TRENDS_RAIL_LIMIT = 10;
+// "All trends" rail reuses the SAME bounded count as the feed right rail (the
+// shared TRENDING_RAIL_LIMIT from RightRail) so the teaser list is consistent
+// everywhere; "View more topics" leads to the full paginated topic set.
 
 // A grid video that previews itself without a click: it autoplays (muted, so
 // browsers permit it) while ~60% visible and pauses when scrolled away, mirroring
@@ -127,7 +126,6 @@ function ExplorePage() {
     return cached;
   });
   const [topicList, setTopicList] = useState<Topic[]>([]);
-  const [tagsList, setTagsList] = useState<TrendingTag[]>([]);
   // Topics paging: how many exist in total and whether the next page is loading.
   const [topicsTotal, setTopicsTotal] = useState(0);
   const [loadingMoreTopics, setLoadingMoreTopics] = useState(false);
@@ -233,12 +231,6 @@ function ExplorePage() {
           setTopicList(res.topics);
           setTopicsTotal(res.total ?? res.topics.length);
         }
-      })
-      .catch(() => {});
-
-    getTrendingTags({ limit: TRENDS_RAIL_LIMIT })
-      .then((res) => {
-        if (res?.trendingTags) setTagsList(res.trendingTags);
       })
       .catch(() => {});
   }, []);
@@ -434,58 +426,7 @@ function ExplorePage() {
   return (
     <AppShell
       title="Explore"
-      right={
-        <div className="space-y-5">
-          <Panel>
-            <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
-              <Hash className="h-4 w-4 text-brand" /> All trends
-            </h2>
-            <ul className="space-y-1">
-              {tagsList.slice(0, TRENDS_RAIL_LIMIT).map((t, i) => {
-                const cleanTag = t.tag.replace("#", "");
-                const isSelected = selectedTag === cleanTag;
-                return (
-                  <li key={t.tag}>
-                    <button
-                      onClick={() => {
-                        setSelectedTag(isSelected ? null : cleanTag);
-                        if (!isSelected) setFilter("Top");
-                      }}
-                      className={cn(
-                        "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-all cursor-pointer",
-                        isSelected
-                          ? "bg-brand/15 text-brand font-bold shadow-xs"
-                          : "hover:bg-foreground/5 text-foreground",
-                      )}
-                    >
-                      <span className="w-4 text-sm font-bold text-muted-foreground">{i + 1}</span>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-bold text-sm">{t.tag}</p>
-                        <p className="text-xs text-muted-foreground">{t.count}</p>
-                      </div>
-                      {isSelected && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-brand/20 text-brand">
-                          Active
-                        </span>
-                      )}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            {topicsTotal > TRENDS_RAIL_LIMIT && (
-              <button
-                type="button"
-                onClick={() => setFilter("Topics")}
-                className="mt-3 text-xs font-bold text-brand hover:underline cursor-pointer"
-              >
-                View more topics
-              </button>
-            )}
-          </Panel>
-          <RailFooter />
-        </div>
-      }
+      right={<DefaultRail />}
     >
       <div className="mx-auto max-w-3xl space-y-6">
         <PageHeader

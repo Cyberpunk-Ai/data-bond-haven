@@ -88,10 +88,15 @@ describe("explore media cards preview video automatically", () => {
     expect(postCard).toContain("isVideoUrl");
   });
 
-  it("caps the trends rail to 10 with a View more affordance", () => {
-    expect(page).toContain("const TRENDS_RAIL_LIMIT = 10");
-    expect(page).toContain("tagsList.slice(0, TRENDS_RAIL_LIMIT)");
-    expect(page).toContain("View more topics");
+  it("reuses the complete home right rail instead of a bespoke trends panel", () => {
+    // Explore now renders the same shared DefaultRail as home (Trending +
+    // Live Spaces + Who to follow) rather than its own trends-only panel.
+    expect(page).toContain("right={<DefaultRail />}");
+    expect(page).toContain(
+      'import { FollowButton, DefaultRail } from "@/components/social/RightRail"',
+    );
+    expect(page).not.toContain("tagsList");
+    expect(page).not.toContain("RailFooter");
   });
 
   it("batches the Topics tab with a Load more control", () => {
@@ -114,7 +119,7 @@ describe("boot and preload de-duplication", () => {
       "export async function preloadFeedBundle",
       "export async function getCurrentUser",
     );
-    expect(occurrences(region, "getPosts({ limit: 30 })")).toBe(1);
+    expect(occurrences(region, "getPosts({ limit: 15 })")).toBe(1);
     // Following is fetched on tab-switch, not eagerly.
     expect(region).toContain("following: []");
     // Spaces is no longer fetched at boot: the bundle never rendered it and the
@@ -154,11 +159,20 @@ describe("boot and preload de-duplication", () => {
   });
 });
 
-describe("right rail trends capped to 10", () => {
-  it("limits the sidebar Trending-now list", () => {
+describe("right rail trends reused and capped to 4", () => {
+  it("shares one rail limit and renders only that many trending tags", () => {
     const rail = read("../src/components/social/RightRail.tsx");
-    expect(rail).toContain("getTrendingTags({ limit: 10 })");
-    expect(rail).toContain("tags.slice(0, 10)");
+    // One shared constant drives both the fetch and the render, so the teaser
+    // list can't drift between the feed rail and explore.
+    expect(rail).toContain("export const TRENDING_RAIL_LIMIT = 4");
+    expect(rail).toContain("getTrendingTags({ limit: TRENDING_RAIL_LIMIT })");
+    expect(rail).toContain("tags.slice(0, TRENDING_RAIL_LIMIT)");
+    // Explore reuses the whole shared rail (which internally honours this
+    // constant) instead of declaring its own trending fetch.
+    const explore = read("../src/routes/explore.tsx");
+    expect(explore).toContain("right={<DefaultRail />}");
+    expect(explore).not.toContain("getTrendingTags");
+    expect(explore).not.toContain("TRENDS_RAIL_LIMIT");
   });
 });
 

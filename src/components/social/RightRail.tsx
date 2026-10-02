@@ -20,6 +20,14 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
 
+/**
+ * How many trending tags the in-app rail shows. Kept as one shared export so the
+ * feed right rail and the explore "All trends" rail render the SAME short list —
+ * the rail is a teaser, and "View More / See all trending" goes to the full
+ * explore topic set.
+ */
+export const TRENDING_RAIL_LIMIT = 4;
+
 export function SearchBox({ placeholder = "Search Spaces" }: { placeholder?: string }) {
   const [val, setVal] = useState("");
   const navigate = useNavigate();
@@ -104,7 +112,7 @@ export function TrendingPanel() {
   const [tags, setTags] = useState<TrendingTag[]>([]);
 
   useEffect(() => {
-    getTrendingTags({ limit: 10 })
+    getTrendingTags({ limit: TRENDING_RAIL_LIMIT })
       .then((res) => {
         if (res?.trendingTags && res.trendingTags.length > 0) {
           setTags(res.trendingTags);
@@ -127,7 +135,7 @@ export function TrendingPanel() {
         </Link>
       </div>
       <ul className="space-y-1">
-        {tags.slice(0, 10).map((t) => {
+        {tags.slice(0, TRENDING_RAIL_LIMIT).map((t) => {
           const cleanTag = t.tag.replace(/^#/, "");
           return (
             <li key={t.tag}>

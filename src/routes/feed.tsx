@@ -58,11 +58,12 @@ export const Route = createFileRoute("/feed")({
 
 const tabs = ["For you", "Following", "Latest"] as const;
 
-// Fetch roughly two screens up front so the progressive reveal (15 at a time)
-// always has preloaded content behind it — scrolling stays smooth with no
-// "fetch gap" flash, and older pages load on demand via the cursor.
-const FEED_PRELOAD_COUNT = 30;
-const FEED_REVEAL_STEP = 15;
+// Fetch one lean page up front (15), then pull the next page as the viewer
+// nears the end of what's loaded (the sentinel uses a 300px rootMargin). A small
+// first page keeps the cold-load light and the ranker fast, while the reveal
+// step still staggers cards in so scrolling feels continuous with no fetch gap.
+const FEED_PRELOAD_COUNT = 15;
+const FEED_REVEAL_STEP = 8;
 
 // A page fetch (a serverless rank call or a PostgREST query) can stall on a cold
 // start or a flaky connection. Without a ceiling the await never settles, the
@@ -492,6 +493,13 @@ function FeedPage() {
     // covered — anything else (a tab switch, or the viewer resolving after
     // login) falls through and refetches personalised data.
     if (isFirstRun && initialCache.isFresh && initialCache.hasData && tab === "For you") {
+      // Cached posts already painted (no skeleton), but the memory bundle stores
+      // posts WITHOUT a pagination cursor — so `loadMorePosts()` would bail on
+      // `!cursorRef.current` and the feed would stall after the cached page:
+      // the reported "infinite scroll not working / never shows all caught up".
+      // Refresh silently (keeps the current paint, no flash) to populate the
+      // cursor and `hasMore`, so the sentinel can page past the cached batch.
+      void fetchFeed(true);
       return;
     }
     fetchFeed();

@@ -2918,7 +2918,7 @@ export interface PreloadBundleResponse {
 
 export async function preloadFeedBundle(): Promise<PreloadBundleResponse> {
   const [foryou, stories, trendingTags] = await Promise.all([
-    getPosts({ limit: 30 }).catch(() => [] as Post[]),
+    getPosts({ limit: 15 }).catch(() => [] as Post[]),
     getStories().catch(() => [] as Story[]),
     getTrendingTags({ limit: 80 })
       .then((r) => r.trendingTags)
