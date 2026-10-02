@@ -151,3 +151,22 @@ describe("the request path has no artificial budget blocker", () => {
     expect(client).toMatch(/await getForYouPosts\(\{/);
   });
 });
+
+describe("feed quality & paid reach are preserved on the serve path", () => {
+  const core = read("src", "lib", "feed-rank-core.ts");
+  const reader = read("src", "lib", "recommendations.functions.ts");
+
+  it("never serves a stale/deleted post as an empty (media-less) card", () => {
+    // Hydration drops rows that no longer hydrate to a visible post instead of
+    // falling back to the slim stub (no content/media -> a broken image/video).
+    expect(core).toMatch(/\.filter\(\(row\): row is any => Boolean\(row\)\)/);
+    expect(core).not.toMatch(/full\.get\(s\?\.id\) \?\? s/);
+  });
+
+  it("boosts Pro/Plus and workspaces so paid content gets the most reach", () => {
+    expect(core).toMatch(/plan === "pro" \? 1\.55 : plan === "plus" \? 1\.3 : 1/);
+    // Pull-merged fresh posts inherit the same plan boost (not scored blind).
+    expect(reader).toMatch(/author_plan: authorPlan\.get/);
+    expect(reader).toMatch(/workspace_plan: p\.workspace_id/);
+  });
+});

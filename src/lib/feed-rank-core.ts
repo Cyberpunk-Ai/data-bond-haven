@@ -171,14 +171,20 @@ export async function fetchViewerSignals(supabase: any, myId: string): Promise<a
 /**
  * Fetch FULL rows for just the ranked page. Scoring ran on slim rows; only the
  * <=limit posts actually being shown need content/media/poll to render.
- * Preserves ranked order and falls back to the slim row if a full row is gone.
+ * Preserves ranked order; an entry whose post no longer exists as a visible row
+ * (deleted/hidden since it was ranked) is dropped rather than served as a stub.
  */
 export async function hydratePageRows(supabase: any, slimRows: any[]): Promise<any[]> {
   const ids = slimRows.map((r) => r?.id).filter(Boolean);
   if (ids.length === 0) return slimRows;
   const { data } = await supabase.from("posts").select("*").in("id", ids);
   const full = new Map<string, any>((data ?? []).map((row: any) => [row.id, row]));
-  return slimRows.map((s) => full.get(s?.id) ?? s);
+  // Drop entries that no longer hydrate to a real, visible post: serving the
+  // stale slim stub would paint an empty card with no content or media (a broken
+  // image/video in the feed). The gap self-heals when the worker rebuilds next.
+  return slimRows
+    .map((s) => full.get(s?.id))
+    .filter((row): row is any => Boolean(row));
 }
 
 /** Slice a page from a ranked list and hydrate it to full rows for the client. */
@@ -192,9 +198,11 @@ export async function finalizePage(
 
 // Plan-based discovery boost: paid creators AND paid team workspaces reach
 // further; free still reaches. The effective plan is pre-joined by
-// for_you_candidates, so no per-viewer plan lookups are needed.
+// for_you_candidates (a workspace post inherits its workspace/owner plan), so no
+// per-viewer plan lookups are needed. The multiplier is a deliberate product
+// lever — Pro and Plus (and paid workspaces) are meant to get the most reach.
 export const planFactor = (plan?: string | null) =>
-  plan === "pro" ? 1.35 : plan === "plus" ? 1.18 : 1;
+  plan === "pro" ? 1.55 : plan === "plus" ? 1.3 : 1;
 
 /**
  * The signal-independent portion of the score (decay + engagement velocity +

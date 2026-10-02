@@ -6,6 +6,7 @@ import {
   decodeCursor,
   finalizePage,
   pageFromSnapshot,
+  planFactor,
   readFeedPrefs,
   hasMutedTag,
   normalizeTag,
@@ -148,11 +149,38 @@ async function mergeFreshFollowedPosts(
       .order("created_at", { ascending: false })
       .limit(FRESH_SCAN_MAX);
 
+    const freshList = ((fresh ?? []) as any[]).filter((p) => p?.id && !have.has(p.id));
+    if (freshList.length === 0) return entries;
+
+    // Score the new posts with the SAME plan-based reach boost the ranked
+    // timeline uses — otherwise a pro/plus creator's or a workspace's brand-new
+    // post would merge in un-boosted and sit below its true rank. Plans are read
+    // for just this small fresh set; RLS may hide another org's workspace plan,
+    // in which case scoreFreshRow correctly falls back to the author's own plan.
+    const planAuthorIds = [...new Set(freshList.map((p) => p.user_id).filter(Boolean))] as string[];
+    const planWsIds = [...new Set(freshList.map((p) => p.workspace_id).filter(Boolean))] as string[];
+    const [authorPlans, wsPlans] = await Promise.all([
+      planAuthorIds.length
+        ? supabase.from("profiles").select("id,plan").in("id", planAuthorIds)
+        : Promise.resolve({ data: [] as any[] }),
+      planWsIds.length
+        ? supabase.from("workspaces").select("id,plan").in("id", planWsIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const authorPlan = new Map<string, string>(
+      ((authorPlans.data ?? []) as any[]).map((r) => [r.id, r.plan]),
+    );
+    const wsPlan = new Map<string, string>(((wsPlans.data ?? []) as any[]).map((r) => [r.id, r.plan]));
+
     const epoch = Math.floor(Date.now() / RANK_EPOCH_MS) * RANK_EPOCH_MS;
-    const extra = ((fresh ?? []) as any[])
-      .filter((p) => p?.id && !have.has(p.id))
-      .map((p) => ({ row: p, score: scoreFreshRow(p, epoch) }));
-    if (extra.length === 0) return entries;
+    const extra = freshList.map((p) => {
+      const row = {
+        ...p,
+        author_plan: authorPlan.get(p.user_id) ?? null,
+        workspace_plan: p.workspace_id ? (wsPlan.get(p.workspace_id) ?? null) : null,
+      };
+      return { row, score: scoreFreshRow(row, epoch) };
+    });
 
     const merged = [...entries, ...extra];
     merged.sort((a, b) => b.score - a.score || (a.row.id < b.row.id ? -1 : 1));
@@ -386,8 +414,6 @@ export const getWhoToFollow = createServerFn({ method: "GET" })
       candidates = candidates.filter((p: any) => !mutedTagAuthors.has(p.id));
     }
 
-    const planFactor = (plan?: string | null) =>
-      plan === "pro" ? 1.35 : plan === "plus" ? 1.18 : 1;
     const now = Date.now();
     const scored = candidates.map((p: any) => {
       const relationship =
