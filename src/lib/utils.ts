@@ -94,3 +94,26 @@ export function optimizeImageUrl(url: string | undefined | null, width = 1000): 
   }
   return url;
 }
+
+/**
+ * True when a media URL points at a video rather than an image. A media_url can
+ * hold several comma-joined attachments and the `media_type` column isn't always
+ * set, so every surface that renders a thumbnail (PostCard, explore's media
+ * grid) detects video by URL signature to decide between <video> and <img>.
+ * Single source of truth — previously duplicated as isMediaVideo/isVideoUrl.
+ */
+export function isVideoUrl(url?: string | null): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return (
+    lower.includes(".mp4") ||
+    lower.includes(".webm") ||
+    lower.includes(".mov") ||
+    lower.includes(".m4v") ||
+    lower.includes(".ogv") ||
+    lower.includes("oggtheora") ||
+    lower.startsWith("data:video") ||
+    lower.includes("/video/") ||
+    lower.includes("video_")
+  );
+}

@@ -61,7 +61,7 @@ import {
 import { useRealtime } from "@/lib/realtime";
 import { usePlan } from "@/lib/plan-state";
 import { useAuth } from "@/lib/auth-state";
-import { cn, optimizeImageUrl } from "@/lib/utils";
+import { cn, optimizeImageUrl, isVideoUrl } from "@/lib/utils";
 import { ClampText } from "@/components/social/ClampText";
 
 function renderContentWithLinks(text: string) {
@@ -245,21 +245,6 @@ function BrandProfileLink({
     >
       {children}
     </Link>
-  );
-}
-
-function isMediaVideo(url?: string | null): boolean {
-  if (!url) return false;
-  const lower = url.toLowerCase();
-  return (
-    lower.includes(".mp4") ||
-    lower.includes(".webm") ||
-    lower.includes(".mov") ||
-    lower.includes(".m4v") ||
-    lower.includes(".ogv") ||
-    lower.startsWith("data:video") ||
-    lower.includes("/video/") ||
-    lower.includes("video_")
   );
 }
 
@@ -1299,7 +1284,7 @@ function PostCardBase({
 
         if (allMedia.length === 0 || imageError) return null;
 
-        const hasVideo = allMedia.some(isMediaVideo);
+        const hasVideo = allMedia.some(isVideoUrl);
 
         // Multi-image/media carousel (completely scrollable with snap alignments)
         if (allMedia.length > 1) {
@@ -1330,7 +1315,7 @@ function PostCardBase({
                       setShowImagePreview(true);
                     }}
                   >
-                    {isMediaVideo(url) ? (
+                    {isVideoUrl(url) ? (
                       <ModernVideoPlayer src={url} className="w-full h-full object-cover" />
                     ) : (
                       <img
@@ -1351,7 +1336,7 @@ function PostCardBase({
         }
 
         const singleUrl = allMedia[0];
-        if (isMediaVideo(singleUrl) || (post as any).media_type === "video") {
+        if (isVideoUrl(singleUrl) || (post as any).media_type === "video") {
           return (
             <div className="mt-3.5 overflow-hidden rounded-2xl border border-border/60 bg-black relative w-full shadow-md">
               <ModernVideoPlayer src={singleUrl} className="w-full" />

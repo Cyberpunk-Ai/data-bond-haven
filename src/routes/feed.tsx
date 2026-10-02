@@ -279,6 +279,13 @@ function FeedPage() {
   const loadingMoreRef = useRef(false);
   const cursorRef = useRef<string | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  // The mount effect below used to fire fetchFeed()+fetchStories() even when the
+  // preload bundle had already hydrated the same posts/stories into state, so a
+  // warm profile→home navigation re-fetched the whole first page (and the
+  // skeleton could flash). This ref lets the very first run be skipped when the
+  // cache is fresh and populated; tab switches and a newly-resolved viewerId
+  // still fall through to a real fetch.
+  const didInitialLoad = useRef(false);
 
   useEffect(() => {
     setVisibleCount(FEED_REVEAL_STEP);
@@ -363,8 +370,8 @@ function FeedPage() {
   async function fetchFeed(silent = false, refresh = false) {
     const reqId = ++feedReqId.current;
     if (!silent) setLoading(true);
+    const filterKey = tab === "Following" ? "following" : tab === "Latest" ? "latest" : "foryou";
     try {
-      const filterKey = tab === "Following" ? "following" : tab === "Latest" ? "latest" : "foryou";
       const page = await withTimeout(
         getPostsPage({
           filter: filterKey,
@@ -386,6 +393,29 @@ function FeedPage() {
     } catch (err) {
       if (reqId !== feedReqId.current) return;
       console.warn("Feed fetch failed, keeping current posts:", err);
+      // Cold-load safety net: if the ranked "For you" fetch timed out and there
+      // is nothing on screen yet (no warm cache), don't strand the user on a
+      // blank feed. Fall back to the fast chronological page — it skips the
+      // ranker entirely — so posts paint immediately; the ranked feed arrives on
+      // the next pull or a manual refresh.
+      if (posts.length === 0 && filterKey !== "latest") {
+        try {
+          const fallback = await withTimeout(
+            getPostsPage({ filter: "latest", limit: FEED_PRELOAD_COUNT }),
+            PAGE_REQUEST_TIMEOUT_MS,
+          );
+          if (reqId !== feedReqId.current) return;
+          if (Array.isArray(fallback.posts) && fallback.posts.length > 0) {
+            setPosts(fallback.posts);
+            cursorRef.current = fallback.nextCursor;
+            setHasMore(Boolean(fallback.nextCursor));
+            setLoadMoreError(false);
+            setVisibleCount(FEED_REVEAL_STEP);
+          }
+        } catch {
+          // Still nothing — leave the empty state; a retry/refresh can fill it.
+        }
+      }
     } finally {
       if (reqId === feedReqId.current && !silent) setLoading(false);
     }
@@ -455,6 +485,15 @@ function FeedPage() {
   // Reload when the signed-in user becomes known so likes/saves/follows show correctly after refresh.
   const viewerId = useCurrentUserId();
   useEffect(() => {
+    const isFirstRun = !didInitialLoad.current;
+    didInitialLoad.current = true;
+    // Warm first paint: posts/stories are already hydrated from the fresh
+    // bundle, so skip the duplicate network fetch. Only the default tab is
+    // covered — anything else (a tab switch, or the viewer resolving after
+    // login) falls through and refetches personalised data.
+    if (isFirstRun && initialCache.isFresh && initialCache.hasData && tab === "For you") {
+      return;
+    }
     fetchFeed();
     fetchStories();
   }, [tab, viewerId]);

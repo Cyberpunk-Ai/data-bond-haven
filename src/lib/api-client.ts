@@ -1015,12 +1015,15 @@ export async function getStories(): Promise<Story[]> {
   try {
     // Stories live for 24 hours. Filter server-side on `expires_at` so expired
     // stories never load into the rail, regardless of how long a row lingers
-    // before the nightly cleanup removes it.
+    // before the nightly cleanup removes it. The rail is a horizontal strip of
+    // the most-recent items, so a generous ceiling bounds the boot-path payload
+    // on a large deployment without dropping anything a viewer would reach.
     const { data } = await db
       .from("stories")
       .select("*")
       .gt("expires_at", new Date().toISOString())
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(300);
     const stories = (data ?? []).map(rowToStory);
     if (stories.length > 0) {
       await hydrateAuthors(stories.map((s: Story) => s.user_id));
@@ -1289,7 +1292,15 @@ export async function toggleFollowUser(targetUserId: string) {
     .eq("target_id", targetUserId);
 
   const following = !existing;
-  emitRealtime("follow_updated", { targetUserId, following, followers: count ?? 0 });
+  // followerId rides along so a viewer watching the *target's* profile can tell
+  // this was a real follower joining (and light up their network list), not just
+  // some other follow somewhere on the app.
+  emitRealtime("follow_updated", {
+    targetUserId,
+    followerId: userId,
+    following,
+    followers: count ?? 0,
+  });
   return { following, followers: count ?? 0 };
 }
 
@@ -1312,6 +1323,61 @@ export async function getFollowingIds(): Promise<string[]> {
   if (!userId || userId === "guest") return [];
   const { data } = await db.from("follows").select("target_id").eq("follower_id", userId);
   return ((data ?? []) as any[]).map((r) => String(r.target_id));
+}
+
+// A network list is browsed, not exported — cap the roster we hydrate so one
+// profile with tens of thousands of follows can't ship a megabyte of rows (and
+// blow the request URL) on a single tab open. The headline counts shown next to
+// the tab come from the authoritative profiles.followers/following columns.
+const NETWORK_LIST_CAP = 300;
+
+/**
+ * Followers and following for any profile, resolved to fresh Profile rows.
+ * Both `follows` and `profiles` are public-read, so this works for a signed-in
+ * user viewing their own network and for a guest viewing someone else's.
+ */
+export async function getProfileNetwork(
+  profileId: string,
+): Promise<{ followers: Profile[]; following: Profile[] }> {
+  const empty = { followers: [] as Profile[], following: [] as Profile[] };
+  if (!profileId || profileId === "guest") return empty;
+
+  const [followersRes, followingRes] = await Promise.all([
+    db
+      .from("follows")
+      .select("follower_id")
+      .eq("target_id", profileId)
+      .order("created_at", { ascending: false })
+      .limit(NETWORK_LIST_CAP),
+    db
+      .from("follows")
+      .select("target_id")
+      .eq("follower_id", profileId)
+      .order("created_at", { ascending: false })
+      .limit(NETWORK_LIST_CAP),
+  ]);
+  const followerIds = ((followersRes.data ?? []) as any[])
+    .map((r) => String(r.follower_id))
+    .filter(Boolean);
+  const followingIds = ((followingRes.data ?? []) as any[])
+    .map((r) => String(r.target_id))
+    .filter(Boolean);
+
+  const ids = Array.from(new Set([...followerIds, ...followingIds]));
+  const byId = new Map<string, Profile>();
+  if (ids.length) {
+    const { data } = await db.from("profiles").select("*").in("id", ids);
+    for (const row of (data ?? []) as any[]) {
+      const p = rowToProfile(row);
+      if (p?.id) byId.set(p.id, p);
+    }
+    cacheProfiles([...byId.values()]);
+  }
+  // Preserve the follow-graph order (newest relationship first) instead of the
+  // arbitrary order `in(...)` hands back.
+  const pick = (list: string[]) =>
+    list.map((id) => byId.get(id)).filter((p): p is Profile => Boolean(p));
+  return { followers: pick(followerIds), following: pick(followingIds) };
 }
 
 /**
@@ -1429,9 +1495,23 @@ function spaceStartsLabel(row: any): string | undefined {
   return `${day} at ${time}`;
 }
 
-export async function getSpaces(): Promise<{ spaces: Space[] }> {
+export async function getSpaces(
+  options: { limit?: number; liveOnly?: boolean } = {},
+): Promise<{ spaces: Space[] }> {
+  // Bound the read. This table backs the Spaces page, the live-rooms rail and
+  // (until now) boot, and an unbounded `select("*")` grew the payload with every
+  // room ever created — a scaling cliff. Live-first ordering means a capped fetch
+  // still returns the rooms people care about, and `liveOnly` pushes the rail's
+  // `filter(s => s.live)` into the database so it never ships ended/scheduled rows.
+  const limit = options.limit ?? 200;
   try {
-    const { data } = await db.from("spaces").select("*").order("created_at", { ascending: false });
+    let query = db
+      .from("spaces")
+      .select("*")
+      .order("live", { ascending: false })
+      .order("created_at", { ascending: false });
+    if (options.liveOnly) query = query.eq("live", true);
+    const { data } = await query.limit(limit);
     const spaces = (data ?? []).map(rowToSpace);
     if (spaces.length > 0) return { spaces };
   } catch (err) {
@@ -2252,21 +2332,32 @@ export async function sendFeedFeedback(payload: FeedFeedbackPayload) {
 
 /* -------------------------------------------------------------- discovery */
 
-export async function getTrendingTags(): Promise<{ trendingTags: TrendingTag[] }> {
-  // Recency-ordered: the tag counter used to sample an arbitrary 300 rows, so
-  // "trending" mixed in years-old posts and changed page to page.
+export async function getTrendingTags(options?: {
+  limit?: number;
+  offset?: number;
+}): Promise<{ trendingTags: TrendingTag[] }> {
+  // Sample a bounded window of recent posts (600 rows), aggregate tags, cap the
+  // distinct result to 80 (enough for explore Topics load-more + rails), then
+  // paginate the result for the caller's { limit, offset }. Reducing the scan
+  // from 2000 to 600 cuts backend load per call significantly (multiple callers
+  // on boot + explore). Tags past rank 80 or the 600th post are dropped, trading
+  // absolute completeness for performance; callers slice their own subset.
   const { data } = await db
     .from("posts")
     .select("tags")
     .order("created_at", { ascending: false })
-    .limit(300);
+    .limit(600);
   const counts = new Map<string, number>();
   for (const row of (data ?? []) as any[]) {
     for (const tag of row.tags ?? []) counts.set(tag, (counts.get(tag) ?? 0) + 1);
   }
-  const trendingTags = Array.from(counts.entries())
+  const sorted = Array.from(counts.entries())
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
+    .slice(0, 80);
+  const offset = options?.offset ?? 0;
+  const limit = options?.limit ? Math.min(options.limit, 80) : 80;
+  const trendingTags = sorted
+    .slice(offset, offset + limit)
     .map(([tag, count]) => ({ tag, category: "Trending", count: `${count} posts` }));
   return { trendingTags };
 }
@@ -2822,23 +2913,22 @@ export interface PreloadBundleResponse {
   following: Post[];
   latest: Post[];
   stories: Story[];
-  spaces: Space[];
   trendingTags: TrendingTag[];
 }
 
 export async function preloadFeedBundle(): Promise<PreloadBundleResponse> {
-  const [foryou, following, stories, spaces, trendingTags] = await Promise.all([
-    getPosts({ limit: 30 }).catch(() => [] as Post[]),
+  const [foryou, stories, trendingTags] = await Promise.all([
     getPosts({ limit: 30 }).catch(() => [] as Post[]),
     getStories().catch(() => [] as Story[]),
-    getSpaces()
-      .then((r) => r.spaces)
-      .catch(() => [] as Space[]),
-    getTrendingTags()
+    getTrendingTags({ limit: 80 })
       .then((r) => r.trendingTags)
       .catch(() => [] as TrendingTag[]),
   ]);
-  return { foryou, following, latest: foryou, stories, spaces, trendingTags };
+  // Following and Spaces are deliberately not eagerly fetched: the feed loads
+  // Following on tab-switch, and the live-rooms rail issues its own bounded
+  // getSpaces({ liveOnly: true }). The boot bundle never rendered spaces, so
+  // pulling the whole table on every load was pure dead work.
+  return { foryou, following: [], latest: foryou, stories, trendingTags };
 }
 
 /* ------------------------------------------------- compatibility surface ----
@@ -2881,17 +2971,21 @@ export async function getBookmarks(): Promise<Post[]> {
   return getBookmarkedPosts();
 }
 
-/** Trending tags reshaped as browsable topics. */
-export async function getTopics(): Promise<{ topics: Topic[] }> {
+/** Trending tags reshaped as browsable topics, paginated for explore. */
+export async function getTopics(options?: {
+  limit?: number;
+  offset?: number;
+}): Promise<{ topics: Topic[]; total: number }> {
   const { trendingTags } = await getTrendingTags();
-  const topics: Topic[] = trendingTags.slice(0, 12).map((t, i) => ({
+  const offset = options?.offset ?? 0;
+  const limit = options?.limit ?? trendingTags.length;
+  const page = trendingTags.slice(offset, offset + limit);
+  const topics: Topic[] = page.map((t, i) => ({
     name: `#${t.tag}`,
-    // getTrendingTags returns count as "N posts" — keep just the number so the
-    // UI can add its own suffix instead of rendering "5 posts active posts".
     posts: String(parseInt(String(t.count), 10) || 0),
-    gradient: TOPIC_GRADIENTS[i % TOPIC_GRADIENTS.length] ?? "from-brand to-brand-pink",
+    gradient: TOPIC_GRADIENTS[(offset + i) % TOPIC_GRADIENTS.length] ?? "from-brand to-brand-pink",
   }));
-  return { topics };
+  return { topics, total: trendingTags.length };
 }
 
 const TOPIC_GRADIENTS = [
@@ -3096,36 +3190,60 @@ export async function getCreatorAnalytics(
   }));
   const postIds = posts.map((p) => p.id);
 
-  const [impressionsRes, followersRes, tipsRes] = await Promise.all([
-    postIds.length
-      ? db
-          .from("post_impressions")
-          .select("post_id,user_id,created_at")
-          .in("post_id", postIds)
-          .gte("created_at", sinceIso)
-          .limit(5000)
-      : Promise.resolve({ data: [] as any[] }),
-    // Teams have no follow graph yet — audience stats stay personal.
-    workspaceId
-      ? Promise.resolve({ data: [] as any[] })
-      : db.from("follows").select("follower_id").eq("target_id", userId).limit(5000),
-    workspaceId
-      ? db
-          .from("tips")
-          .select("id,amount,currency,message,created_at,from_user_id")
-          .eq("to_workspace_id", workspaceId)
-          .order("created_at", { ascending: false })
-          .limit(200)
-      : db
-          .from("tips")
-          .select("id,amount,currency,message,created_at,from_user_id")
-          .eq("to_user_id", userId)
-          .order("created_at", { ascending: false })
-          .limit(200),
-  ]);
+  // Analytics reads used to ship up to 5,000 impression and follow rows to the
+  // browser just to total them. Pull an exact head count (cheap, no rows) for the
+  // headline numbers and only fetch a bounded recent sample to shape the
+  // trend/hourly/reach/region breakdowns — same visual result, a fraction of the
+  // bytes and backend pressure.
+  const IMPRESSION_SAMPLE = 500;
+  const FOLLOWER_SAMPLE = 1000;
+
+  const [impressionsRes, impressionsCountRes, followersRes, followersCountRes, tipsRes] =
+    await Promise.all([
+      postIds.length
+        ? db
+            .from("post_impressions")
+            .select("post_id,user_id,created_at")
+            .in("post_id", postIds)
+            .gte("created_at", sinceIso)
+            .limit(IMPRESSION_SAMPLE)
+        : Promise.resolve({ data: [] as any[] }),
+      postIds.length
+        ? db
+            .from("post_impressions")
+            .select("post_id", { count: "exact", head: true })
+            .in("post_id", postIds)
+            .gte("created_at", sinceIso)
+        : Promise.resolve({ count: 0 } as { count: number | null }),
+      // Teams have no follow graph yet — audience stats stay personal.
+      workspaceId
+        ? Promise.resolve({ data: [] as any[] })
+        : db.from("follows").select("follower_id").eq("target_id", userId).limit(FOLLOWER_SAMPLE),
+      workspaceId
+        ? Promise.resolve({ count: 0 } as { count: number | null })
+        : db
+            .from("follows")
+            .select("follower_id", { count: "exact", head: true })
+            .eq("target_id", userId),
+      workspaceId
+        ? db
+            .from("tips")
+            .select("id,amount,currency,message,created_at,from_user_id")
+            .eq("to_workspace_id", workspaceId)
+            .order("created_at", { ascending: false })
+            .limit(200)
+        : db
+            .from("tips")
+            .select("id,amount,currency,message,created_at,from_user_id")
+            .eq("to_user_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(200),
+    ]);
 
   const impressions = (impressionsRes.data ?? []) as any[];
+  const impressionCount = impressionsCountRes.count ?? impressions.length;
   const followerIds = ((followersRes.data ?? []) as any[]).map((r) => String(r.follower_id));
+  const followersCount = followersCountRes.count ?? followerIds.length;
   const tips = ((tipsRes.data ?? []) as any[]).map((t) => ({
     id: String(t.id),
     amount: Number(t.amount ?? 0),
@@ -3139,7 +3257,7 @@ export async function getCreatorAnalytics(
   const totalComments = posts.reduce((s, p) => s + p.comments, 0);
   const totalReposts = posts.reduce((s, p) => s + p.reposts, 0);
   const totalViews = posts.reduce((s, p) => s + p.views, 0);
-  const totalImpressions = Math.max(totalViews, impressions.length);
+  const totalImpressions = Math.max(totalViews, impressionCount);
   const reach = new Set(impressions.map((i) => String(i.user_id ?? i.post_id))).size;
   const interactions = totalLikes + totalComments + totalReposts;
   const engagementRate = totalImpressions > 0 ? (interactions / totalImpressions) * 100 : 0;
@@ -3230,13 +3348,13 @@ export async function getCreatorAnalytics(
   const tipTotal = tips.reduce((s, t) => s + t.amount, 0);
 
   return {
-    hasData: posts.length > 0 || tips.length > 0 || followerIds.length > 0,
+    hasData: posts.length > 0 || tips.length > 0 || followersCount > 0,
     totals: {
       impressions: totalImpressions,
       reach,
       engagementRate: Number(engagementRate.toFixed(1)),
       profileClicks: 0,
-      followers: followerIds.length,
+      followers: followersCount,
       posts: posts.length,
       likes: totalLikes,
       comments: totalComments,

@@ -1,5 +1,5 @@
 import { preloadFeedBundle, PreloadBundleResponse } from "./api-client";
-import type { Post, Story, Space, TrendingTag } from "./types";
+import type { Post, Story, TrendingTag } from "./types";
 import { optimizeImageUrl } from "./utils";
 
 interface MemoryFeedCache {
@@ -9,7 +9,6 @@ interface MemoryFeedCache {
   following: Post[];
   latest: Post[];
   stories: Story[];
-  spaces: Space[];
   trendingTags: TrendingTag[];
   prefetchedImages: Set<string>;
 }
@@ -21,7 +20,6 @@ const cache: MemoryFeedCache = {
   following: [],
   latest: [],
   stories: [],
-  spaces: [],
   trendingTags: [],
   prefetchedImages: new Set<string>(),
 };
@@ -51,7 +49,6 @@ export function getCachedFeedData() {
     following: cache.following,
     latest: cache.latest,
     stories: cache.stories,
-    spaces: cache.spaces,
     trendingTags: cache.trendingTags,
     isFresh: Date.now() - cache.lastFetchedAt < CACHE_TTL_MS,
     hasData: cache.foryou.length > 0 || cache.stories.length > 0,
@@ -81,7 +78,6 @@ export async function triggerFeedPreload(force = false): Promise<PreloadBundleRe
       cache.foryou = bundle.foryou || [];
       cache.following = bundle.following || [];
       cache.stories = bundle.stories || [];
-      cache.spaces = bundle.spaces || [];
       cache.trendingTags = bundle.trendingTags || [];
 
       // Warm image caches for all story avatars and media. media_url can hold

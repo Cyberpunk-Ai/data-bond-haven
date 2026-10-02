@@ -89,7 +89,9 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
         postsOffsetRef.current = POSTS_PAGE;
         setPostsHasMore(Boolean((p as Post[] & { hasMore?: boolean }).hasMore));
       } else if (contentType === "spaces") {
-        const res = await getSpaces();
+        // Staff moderation wants breadth, so ask for a generous (but still
+        // bounded) window rather than the unbounded full-table read.
+        const res = await getSpaces({ limit: 500 });
         setSpaces(res.spaces || []);
       } else if (contentType === "stories") {
         const st = await getStories();

@@ -14,6 +14,7 @@ import {
   MessageCircle,
   Repeat2,
   ArrowUpRight,
+  Play,
 } from "lucide-react";
 import { AppShell, Panel, PageHeader } from "@/components/social/AppShell";
 import { PostCard } from "@/components/social/PostCard";
@@ -32,7 +33,7 @@ import {
   getTrendingTags,
 } from "@/lib/api-client";
 import { getWhoToFollow } from "@/lib/recommendations.functions";
-import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS } from "@/lib/utils";
+import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS, isVideoUrl } from "@/lib/utils";
 
 export const Route = createFileRoute("/explore")({
   validateSearch: (
@@ -67,6 +68,44 @@ const filters = ["Top", "People", "Topics", "Media"] as const;
 const EXPLORE_POSTS_CHUNK = 30;
 const EXPLORE_TOP_STEP = 10;
 const EXPLORE_PEOPLE_CHUNK = 12;
+// Topics arrive one page at a time now — the full trending-tag set can be large,
+// so the Topics tab renders a bounded first batch and reveals more on demand.
+const TOPICS_STEP = 12;
+// "All trends" rail shows the same bounded number of tags instead of every tag.
+const TRENDS_RAIL_LIMIT = 10;
+
+// A grid video that previews itself without a click: it autoplays (muted, so
+// browsers permit it) while ~60% visible and pauses when scrolled away, mirroring
+// ModernVideoPlayer's viewport rule so off-screen tiles don't keep decoding.
+// The wrapping <Link> stays intact — tapping still opens the full post.
+function VideoPreviewTile({ src }: { src: string }) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) void v.play().catch(() => {});
+        else v.pause();
+      },
+      { threshold: 0.6 },
+    );
+    io.observe(v);
+    return () => io.disconnect();
+  }, [src]);
+  return (
+    <video
+      ref={ref}
+      src={src}
+      muted
+      playsInline
+      loop
+      autoPlay
+      preload="metadata"
+      className="h-full w-full object-cover"
+    />
+  );
+}
 
 function ExplorePage() {
   const search = Route.useSearch();
@@ -89,6 +128,9 @@ function ExplorePage() {
   });
   const [topicList, setTopicList] = useState<Topic[]>([]);
   const [tagsList, setTagsList] = useState<TrendingTag[]>([]);
+  // Topics paging: how many exist in total and whether the next page is loading.
+  const [topicsTotal, setTopicsTotal] = useState(0);
+  const [loadingMoreTopics, setLoadingMoreTopics] = useState(false);
   // Progressive-reveal counters + the post cursor for "load more" chunks.
   const [topVisible, setTopVisible] = useState(EXPLORE_TOP_STEP);
   const [peopleVisible, setPeopleVisible] = useState(EXPLORE_PEOPLE_CHUNK);
@@ -185,18 +227,42 @@ function ExplorePage() {
     // used to make this a duplicate 100-row request on every page view.
     loadPeople();
 
-    getTopics()
+    getTopics({ limit: TOPICS_STEP, offset: 0 })
       .then((res) => {
-        if (res?.topics) setTopicList(res.topics);
+        if (res?.topics) {
+          setTopicList(res.topics);
+          setTopicsTotal(res.total ?? res.topics.length);
+        }
       })
       .catch(() => {});
 
-    getTrendingTags()
+    getTrendingTags({ limit: TRENDS_RAIL_LIMIT })
       .then((res) => {
         if (res?.trendingTags) setTagsList(res.trendingTags);
       })
       .catch(() => {});
   }, []);
+
+  // Reveal the next page of topics and append it, deduping by name in case the
+  // bounded trending set shifted between calls.
+  async function loadMoreTopics() {
+    if (loadingMoreTopics) return;
+    setLoadingMoreTopics(true);
+    try {
+      const res = await getTopics({ limit: TOPICS_STEP, offset: topicList.length });
+      if (res?.topics?.length) {
+        setTopicList((prev) => {
+          const seen = new Set(prev.map((t) => t.name));
+          return [...prev, ...res.topics.filter((t) => !seen.has(t.name))];
+        });
+      }
+      setTopicsTotal(res.total ?? topicsTotal);
+    } catch (err) {
+      console.warn("Load more topics failed:", err);
+    } finally {
+      setLoadingMoreTopics(false);
+    }
+  }
 
   // Debounce user input
   useEffect(() => {
@@ -375,7 +441,7 @@ function ExplorePage() {
               <Hash className="h-4 w-4 text-brand" /> All trends
             </h2>
             <ul className="space-y-1">
-              {tagsList.map((t, i) => {
+              {tagsList.slice(0, TRENDS_RAIL_LIMIT).map((t, i) => {
                 const cleanTag = t.tag.replace("#", "");
                 const isSelected = selectedTag === cleanTag;
                 return (
@@ -407,6 +473,15 @@ function ExplorePage() {
                 );
               })}
             </ul>
+            {topicsTotal > TRENDS_RAIL_LIMIT && (
+              <button
+                type="button"
+                onClick={() => setFilter("Topics")}
+                className="mt-3 text-xs font-bold text-brand hover:underline cursor-pointer"
+              >
+                View more topics
+              </button>
+            )}
           </Panel>
           <RailFooter />
         </div>
@@ -506,7 +581,7 @@ function ExplorePage() {
                   onClick={() => setFilter("Topics")}
                   className="text-xs font-bold text-brand hover:underline cursor-pointer"
                 >
-                  View all ({topicList.length})
+                  View all
                 </button>
               )}
             </div>
@@ -538,6 +613,25 @@ function ExplorePage() {
                 </button>
               ))}
             </div>
+
+            {/* Topics tab pages through the trending set; Top keeps the 3-preview. */}
+            {filter === "Topics" && topicList.length < topicsTotal && (
+              <div className="flex justify-center pt-1">
+                <button
+                  type="button"
+                  disabled={loadingMoreTopics}
+                  onClick={() => void loadMoreTopics()}
+                  className="inline-flex items-center gap-2 rounded-full border border-border bg-card hover:bg-foreground/5 px-6 py-2.5 text-xs font-bold text-brand transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-soft disabled:opacity-60 disabled:hover:scale-100"
+                >
+                  {loadingMoreTopics ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Flame className="h-3.5 w-3.5" />
+                  )}
+                  Load more topics
+                </button>
+              </div>
+            )}
           </section>
         )}
 
@@ -673,6 +767,14 @@ function ExplorePage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {mediaPosts.slice(0, mediaVisible).map((p, i) => {
                     const author = getProfile(p.user_id);
+                    // media_url can hold several comma-joined attachments — the
+                    // thumbnail uses the first, and we must know whether that
+                    // first is a video so it previews instead of rendering a
+                    // broken <img src="....mp4">.
+                    const thumbSrc = (p.image_url || p.media_url || "").split(",")[0]?.trim();
+                    const isVideo =
+                      isVideoUrl(thumbSrc) ||
+                      (p as unknown as { media_type?: string }).media_type === "video";
                     return (
                       <article
                         key={p.id}
@@ -686,16 +788,26 @@ function ExplorePage() {
                           aria-label="Open post"
                           className="group/media relative block"
                         >
-                          {p.image_url || p.media_url ? (
+                          {thumbSrc ? (
                             <div className="relative aspect-video w-full overflow-hidden bg-black/10">
-                              {/* media_url can hold several comma-joined attachments — the thumbnail uses the first. */}
-                              <img
-                                src={(p.image_url || p.media_url || "").split(",")[0]?.trim()}
-                                alt={p.content}
-                                loading="lazy"
-                                decoding="async"
-                                className="h-full w-full object-cover transition-transform duration-500 group-hover/media:scale-105"
-                              />
+                              {isVideo ? (
+                                <>
+                                  <VideoPreviewTile src={thumbSrc} />
+                                  <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10">
+                                    <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/55 ring-1 ring-white/30 backdrop-blur-sm transition-transform duration-300 group-hover/media:scale-110">
+                                      <Play className="h-5 w-5 translate-x-[1px] fill-white text-white" />
+                                    </span>
+                                  </span>
+                                </>
+                              ) : (
+                                <img
+                                  src={thumbSrc}
+                                  alt={p.content}
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="h-full w-full object-cover transition-transform duration-500 group-hover/media:scale-105"
+                                />
+                              )}
                             </div>
                           ) : p.image_gradient ? (
                             <div

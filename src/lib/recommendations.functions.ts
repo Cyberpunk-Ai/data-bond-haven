@@ -299,29 +299,38 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     // newest few hundred — an older post can only leave the feed because it
     // ranked below the page window, never because a `limit` silently cut it
     // off. The short chunk answers fast, so stopping there costs nothing.
+    // Fetched as ONE parallel batch instead of a sequential 4-request walk:
+    // the candidate ceiling is identical, but the whole pool lands in ~a single
+    // round trip rather than four back-to-back ones (plus a fifth for trending),
+    // so a cold epoch can no longer stall past the client's fetch timeout. Empty
+    // trailing ranges cost nothing on a small DB.
     const POOL_CHUNK = 500;
     const POOL_MAX = 2000;
-    const recentRows: any[] = [];
-    for (let from = 0; from < POOL_MAX; from += POOL_CHUNK) {
-      const { data, error } = await supabase
+    const trendingSince = new Date(Date.now() - 48 * 3_600_000).toISOString();
+    const poolBatch = await Promise.all([
+      ...Array.from({ length: POOL_MAX / POOL_CHUNK }, (_, i) =>
+        supabase
+          .from("posts")
+          .select("*")
+          .eq("hidden", false)
+          .order("created_at", { ascending: false })
+          .range(i * POOL_CHUNK, i * POOL_CHUNK + POOL_CHUNK - 1),
+      ),
+      // Pool 2: trending — highest engagement in the last 48h, independent of
+      // recency rank, so a viral post a viewer hasn't seen yet still surfaces.
+      supabase
         .from("posts")
         .select("*")
         .eq("hidden", false)
-        .order("created_at", { ascending: false })
-        .range(from, from + POOL_CHUNK - 1);
-      if (error || !data?.length) break;
-      recentRows.push(...data);
-      if (data.length < POOL_CHUNK) break;
+        .gte("created_at", trendingSince)
+        .order("like_count", { ascending: false })
+        .limit(300),
+    ]);
+    const recentRows: any[] = [];
+    for (const res of poolBatch.slice(0, -1)) {
+      if (!res.error && res.data?.length) recentRows.push(...res.data);
     }
-    // Pool 2: trending — highest engagement in the last 48h, independent of recency rank,
-    // so a viral post a viewer hasn't seen yet still surfaces.
-    const trendingRes = await supabase
-      .from("posts")
-      .select("*")
-      .eq("hidden", false)
-      .gte("created_at", new Date(Date.now() - 48 * 3_600_000).toISOString())
-      .order("like_count", { ascending: false })
-      .limit(300);
+    const trendingRes = poolBatch[poolBatch.length - 1];
 
     const byId = new Map<string, any>();
     for (const row of recentRows) byId.set(row.id, row);

@@ -104,7 +104,7 @@ export function TrendingPanel() {
   const [tags, setTags] = useState<TrendingTag[]>([]);
 
   useEffect(() => {
-    getTrendingTags()
+    getTrendingTags({ limit: 10 })
       .then((res) => {
         if (res?.trendingTags && res.trendingTags.length > 0) {
           setTags(res.trendingTags);
@@ -127,7 +127,7 @@ export function TrendingPanel() {
         </Link>
       </div>
       <ul className="space-y-1">
-        {tags.slice(0, 4).map((t) => {
+        {tags.slice(0, 10).map((t) => {
           const cleanTag = t.tag.replace(/^#/, "");
           return (
             <li key={t.tag}>
@@ -268,10 +268,10 @@ export function LiveSpacesPanel() {
   const [live, setLive] = useState<Space[]>([]);
 
   useEffect(() => {
-    getSpaces()
+    getSpaces({ liveOnly: true })
       .then((res) => {
         if (res?.spaces && res.spaces.length > 0) {
-          setLive(res.spaces.filter((s) => s.live));
+          setLive(res.spaces);
         }
       })
       .catch(() => {});

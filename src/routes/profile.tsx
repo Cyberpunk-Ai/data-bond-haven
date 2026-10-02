@@ -15,6 +15,7 @@ import {
   Plus,
   Check,
   ArrowLeft,
+  Users,
 } from "lucide-react";
 import { AppShell, Panel } from "@/components/social/AppShell";
 import { Avatar } from "@/components/social/Avatar";
@@ -23,6 +24,7 @@ import { PostCard } from "@/components/social/PostCard";
 import { FeedSkeleton } from "@/components/social/PostSkeleton";
 import { TimeAgo } from "@/components/social/TimeAgo";
 import { DefaultRail } from "@/components/social/RightRail";
+import { FollowButton } from "@/components/social/RightRail";
 import { EditProfileModal } from "@/components/social/EditProfileModal";
 import { TipModal } from "@/components/social/TipModal";
 import { compact } from "@/lib/formatters";
@@ -33,6 +35,7 @@ import {
   getProfileTabPage,
   getCurrentUser,
   getUserProfile,
+  getProfileNetwork,
   toggleFollowUser,
   isFollowing as isFollowingUser,
   type ProfileTabPage,
@@ -73,8 +76,8 @@ export const Route = createFileRoute("/profile")({
   component: ProfilePage,
 });
 
-const ownTabs = ["Posts", "Replies", "Reposts", "Media", "Likes", "Analytics"] as const;
-const otherTabs = ["Posts", "Replies", "Reposts", "Media"] as const;
+const ownTabs = ["Posts", "Replies", "Reposts", "Media", "Likes", "Network", "Analytics"] as const;
+const otherTabs = ["Posts", "Replies", "Reposts", "Media", "Network"] as const;
 
 /** Tabs that list posts, and the query each one means. */
 const POST_TABS: Record<string, ProfileTabPage> = {
@@ -134,6 +137,16 @@ function ProfilePage() {
   const [loadingMore, setLoadingMore] = useState(false);
   /** Bumped by realtime events to re-run the current tab's query. */
   const [tabNonce, setTabNonce] = useState(0);
+  // The profile's live follower/following numbers and the network roster itself
+  // are re-read on their own nonce so a new follower can appear without
+  // disturbing whichever post tab is loaded or its scroll position.
+  const [countsNonce, setCountsNonce] = useState(0);
+  const [network, setNetwork] = useState<{ followers: Profile[]; following: Profile[] }>({
+    followers: [],
+    following: [],
+  });
+  const [networkLoading, setNetworkLoading] = useState(false);
+  const [networkView, setNetworkView] = useState<"followers" | "following">("followers");
 
   useEffect(() => {
     setUserProfile(resolvedProfile);
@@ -145,6 +158,10 @@ function ProfilePage() {
       setUserProfile(authUser);
     }
   }, [authUser, isMe]);
+
+  // Resolved signed-in id. Used both to re-run the resolve effect the moment a
+  // fresh login lands (see below) and to gate the follow-state fetch further down.
+  const viewerId = useCurrentUserId();
 
   // Resolve who this page is about. The tab query is a separate effect: the two
   // used to be one chain, so a tab switch re-resolved the profile and the first
@@ -184,7 +201,7 @@ function ProfilePage() {
     return () => {
       active = false;
     };
-  }, [isMe, targetId]);
+  }, [isMe, targetId, viewerId]);
 
   useEffect(() => {
     const query = POST_TABS[tab];
@@ -265,7 +282,6 @@ function ProfilePage() {
     };
   }, [tab, authorId, tabNonce]);
 
-  const viewerId = useCurrentUserId();
   useEffect(() => {
     if (isMe || viewerId === "guest" || !userProfile?.id || userProfile.id === "guest") return;
     let alive = true;
@@ -276,6 +292,48 @@ function ProfilePage() {
       alive = false;
     };
   }, [isMe, viewerId, userProfile?.id]);
+
+  // Re-read the authoritative follower/following numbers without touching the
+  // active tab or its loaded posts. The DB trigger recomputes both columns from
+  // `follows` on every follow change, so a fresh profile read is always correct.
+  // Runs on first resolve and again whenever `countsNonce` bumps (a follow).
+  useEffect(() => {
+    const id = authorId ?? userProfile?.id;
+    if (!id || id === "guest") return;
+    let alive = true;
+    const refresh = isMe
+      ? getCurrentUser().then((r) => r.user)
+      : getUserProfile(id).then((r) => r.profile);
+    refresh
+      .then((p) => {
+        if (!alive || !p) return;
+        setUserProfile((prev) => ({ ...prev, followers: p.followers, following: p.following }));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [countsNonce, authorId, isMe, userProfile?.id]);
+
+  // The Network tab lists actual people, so hydrate it lazily only when opened,
+  // and re-hydrate whenever a follow event changes the roster.
+  useEffect(() => {
+    const id = authorId ?? userProfile?.id;
+    if (tab !== "Network" || !id || id === "guest") return;
+    let alive = true;
+    setNetworkLoading(true);
+    getProfileNetwork(id)
+      .then((res) => {
+        if (alive) setNetwork(res);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setNetworkLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tab, countsNonce, authorId, userProfile?.id]);
 
   useRealtime(
     (event) => {
@@ -290,9 +348,24 @@ function ProfilePage() {
       } else if (event.type === "post_deleted" && event.postId) {
         setTabPosts((prev) => prev.filter((p) => p.id !== event.postId));
         setReplies((prev) => prev.filter((r) => r.post?.id !== event.postId));
+      } else if (event.type === "follow_updated") {
+        // A follow touched the profile we're viewing. Stamp the authoritative
+        // follower number the moment it arrives, then re-read the roster so a new
+        // follower shows up in the Network tab without a reload.
+        if (event.targetUserId === userProfile.id && typeof event.followers === "number") {
+          const nextFollowers = event.followers as number;
+          setUserProfile((prev) => ({ ...prev, followers: nextFollowers }));
+        }
+        if (event.targetUserId === userProfile.id || event.followerId === userProfile.id) {
+          setCountsNonce((n) => n + 1);
+        }
+      } else if (event.type === "notification" && event.notification?.type === "follow") {
+        // A new follower landed in the signed-in user's audience; refresh their
+        // own network so the joiner is immediately visible.
+        if (isMe) setCountsNonce((n) => n + 1);
       }
     },
-    ["user_profile_updated", "new_post", "post_deleted"],
+    ["user_profile_updated", "new_post", "post_deleted", "follow_updated", "notification"],
   );
 
   async function handleToggleFollow() {
@@ -307,6 +380,9 @@ function ProfilePage() {
     setFollowLoading(true);
     try {
       await toggleFollowUser(userProfile.id);
+      // Reflect the change in the Network roster too (the followed profile now
+      // has me as a follower; my own following list gained an entry).
+      setCountsNonce((n) => n + 1);
       toast.success(
         next ? `Following @${userProfile.username}` : `Unfollowed @${userProfile.username}`,
       );
@@ -509,14 +585,28 @@ function ProfilePage() {
               </div>
 
               <div className="mt-4 flex gap-6 text-sm">
-                <span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNetworkView("following");
+                    setTab("Network");
+                  }}
+                  className="cursor-pointer hover:opacity-80 transition-opacity"
+                >
                   <strong className="font-extrabold">{compact(userProfile.following || 0)}</strong>{" "}
                   <span className="text-muted-foreground">Following</span>
-                </span>
-                <span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNetworkView("followers");
+                    setTab("Network");
+                  }}
+                  className="cursor-pointer hover:opacity-80 transition-opacity"
+                >
                   <strong className="font-extrabold">{compact(userProfile.followers || 0)}</strong>{" "}
                   <span className="text-muted-foreground">Followers</span>
-                </span>
+                </button>
                 <span>
                   <strong className="font-extrabold">{compact(postsTotal)}</strong>{" "}
                   <span className="text-muted-foreground">Posts</span>
@@ -528,15 +618,25 @@ function ProfilePage() {
 
         {/* followed by */}
         {userProfile.followers > 0 && (
-          <Panel className="flex items-center gap-3">
-            <p className="text-sm text-muted-foreground">
-              Followed by{" "}
-              <strong className="font-semibold text-foreground">
-                {compact(userProfile.followers)}
-              </strong>{" "}
-              creators on Spaces1
-            </p>
-          </Panel>
+          <button
+            type="button"
+            onClick={() => {
+              setNetworkView("followers");
+              setTab("Network");
+            }}
+            className="w-full cursor-pointer text-left"
+          >
+            <Panel className="flex items-center gap-3 transition-colors hover:border-brand/40">
+              <Users className="h-4 w-4 shrink-0 text-brand" />
+              <p className="text-sm text-muted-foreground">
+                Followed by{" "}
+                <strong className="font-semibold text-foreground">
+                  {compact(userProfile.followers)}
+                </strong>{" "}
+                creators on Spaces1
+              </p>
+            </Panel>
+          </button>
         )}
 
         {/* tabs */}
@@ -558,7 +658,95 @@ function ProfilePage() {
         </div>
 
         <div className="space-y-5">
-          {loading ? (
+          {tab === "Network" ? (
+            <div className="space-y-4">
+              <div className="glass-panel flex items-center gap-1 rounded-full p-1">
+                {(["followers", "following"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setNetworkView(v)}
+                    className={cn(
+                      "flex-1 rounded-full px-3 py-2 text-xs sm:text-sm font-bold capitalize transition-all duration-300 cursor-pointer min-h-[38px]",
+                      networkView === v
+                        ? "bg-gradient-to-r from-brand to-brand-pink text-white shadow-soft"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {v} ·{" "}
+                    {compact(
+                      v === "followers" ? userProfile.followers || 0 : userProfile.following || 0,
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {networkLoading && network[networkView].length === 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[1, 2, 3, 4].map((n) => (
+                    <div key={n} className="glass-panel animate-pulse rounded-2xl p-3.5 h-[68px]" />
+                  ))}
+                </div>
+              ) : network[networkView].length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {network[networkView].map((p) => (
+                    <div
+                      key={p.id}
+                      className="glass-panel flex items-center gap-3 rounded-2xl p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-lift"
+                    >
+                      <Link
+                        to="/profile"
+                        search={{ id: p.id, user: p.username }}
+                        className="shrink-0 transition-transform hover:scale-105 active:scale-95"
+                      >
+                        <Avatar
+                          name={p.display_name}
+                          src={p.avatar_url}
+                          className="h-11 w-11 text-sm"
+                        />
+                      </Link>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <Link
+                            to="/profile"
+                            search={{ id: p.id, user: p.username }}
+                            className="truncate text-sm font-bold text-foreground hover:text-brand transition-colors"
+                          >
+                            {p.display_name}
+                          </Link>
+                          <UserBadge plan={p.plan} verified={p.verified} size="xs" />
+                        </div>
+                        <Link
+                          to="/profile"
+                          search={{ id: p.id, user: p.username }}
+                          className="block truncate text-xs text-muted-foreground hover:text-brand transition-colors"
+                        >
+                          @{p.username}
+                        </Link>
+                      </div>
+                      {p.id !== viewerId && <FollowButton targetUserId={p.id} />}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Panel className="py-12 text-center">
+                  <Users className="h-8 w-8 text-muted-foreground mx-auto mb-2 opacity-60" />
+                  <p className="font-bold">
+                    No {networkView === "followers" ? "followers" : "following"} yet
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">
+                    {networkView === "followers"
+                      ? isMe
+                        ? "People who follow you appear here the moment they do."
+                        : `@${userProfile.username} has no followers yet.`
+                      : isMe
+                        ? "Accounts you follow will show up here."
+                        : `@${userProfile.username} isn't following anyone yet.`}
+                  </p>
+                </Panel>
+              )}
+            </div>
+          ) : loading ? (
             <FeedSkeleton />
           ) : tab === "Analytics" && isMe ? (
             <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl bg-muted/40" />}>

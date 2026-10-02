@@ -220,10 +220,16 @@ describe("For-you candidate pool covers every post", () => {
     "utf8",
   );
 
-  it("pages the pool instead of a shallow newest-400 window", () => {
+  it("fetches the full pool as one parallel batch (no shallow newest-400, no sequential walk)", () => {
     expect(src).not.toMatch(/\.limit\(400\)/);
     expect(src).toMatch(/POOL_CHUNK/);
-    expect(src).toMatch(/\.range\(from, from \+ POOL_CHUNK - 1\)/);
+    expect(src).toMatch(/POOL_MAX/);
+    // The pool is walked with explicit range windows, not a shallow limit.
+    expect(src).toMatch(/\.range\(i \* POOL_CHUNK, i \* POOL_CHUNK \+ POOL_CHUNK - 1\)/);
+    // ...issued concurrently in a single Promise.all rather than awaited in a
+    // for-loop, so a cold epoch can't stall past the client fetch timeout.
+    expect(src).toMatch(/const poolBatch = await Promise\.all\(/);
+    expect(src).not.toMatch(/for \(let from = 0; from < POOL_MAX;/);
   });
 
   it("no longer excludes the viewer's own posts from recommendation slots", () => {
