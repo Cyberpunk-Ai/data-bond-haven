@@ -215,10 +215,7 @@ describe("media GC understands comma-joined media columns", () => {
 // ---------------------------------------------------------------------------
 
 describe("For-you candidate pool covers every post", () => {
-  const src = readFileSync(
-    join(process.cwd(), "src", "lib", "recommendations.functions.ts"),
-    "utf8",
-  );
+  const src = readFileSync(join(process.cwd(), "src", "lib", "feed-rank-core.ts"), "utf8");
 
   it("retrieves candidates + signals via Postgres RPCs (slim pool, no full-row walk)", () => {
     // The 2,000-row `select("*")` pool walk is gone: stage 1 returns SLIM rows
@@ -276,33 +273,33 @@ describe("For-you candidate pool covers every post", () => {
     expect(feed).not.toMatch(/all caught up \(\$\{posts\.length\}/);
   });
 
-  it("re-ranks the pool once per epoch, then pages from the cached snapshot", () => {
-    // The compute-heavy pool walk + rescoring must run ONCE per viewer per
-    // 10-minute epoch, not on every "load more". A warm page is served straight
-    // from the ranked snapshot; only a cold miss (or a manual refresh) walks.
-    expect(src).toMatch(/const epochBucket = Math\.floor\(Date\.now\(\) \/ RANK_EPOCH_MS\);/);
-    // Cache read happens BEFORE the retrieval call site, gated on `!data.refresh`.
-    const readAt = src.indexOf("snapshotFor(myId, epochBucket)");
-    const queriesAt = src.indexOf("getSharedPool(supabase, epochBucket)");
-    expect(readAt).toBeGreaterThan(-1);
-    expect(queriesAt).toBeGreaterThan(-1);
-    expect(readAt).toBeLessThan(queriesAt);
-    expect(src).toMatch(/if \(!data\.refresh\) \{/);
-    // Both return paths (recency-led and personalised) store then page from the
-    // snapshot, so the shared cursor logic is identical cold vs warm. Each page
-    // is run through `finalizePage` to hydrate its full rows before returning.
-    expect(src).toMatch(
-      /rememberSnapshot\(myId, epochBucket, \{ entries: ranked, personalised: true \}\);/,
+  it("materializes the ranked timeline and serves the feed as an indexed read", () => {
+    // The in-memory ranked snapshot is gone: the background worker stores each
+    // viewer's ranked list in `timeline_items`, and the serve path reads it back
+    // (one indexed query) instead of re-walking the pool inside the request. The
+    // server fn no longer touches the ranking RPCs directly — only the shared
+    // core does, on a cold miss / refresh.
+    const reader = readFileSync(
+      join(process.cwd(), "src", "lib", "recommendations.functions.ts"),
+      "utf8",
     );
-    expect(src).toMatch(
-      /rememberSnapshot\(myId, epochBucket, \{ entries, personalised: false \}\);/,
+    expect(reader).toMatch(/from\("timeline_items"\)/);
+    expect(reader).toMatch(/from\("timeline_items"\)\.insert\(/);
+    // Cold miss / manual refresh runs the shared pipeline once, then stores it.
+    expect(reader).toMatch(/await rankForYou\(supabase, myId, \{/);
+    // ...but the request path itself is a READ: the retrieval RPCs live in core.
+    expect(reader).not.toMatch(/rpc\("for_you_candidates"/);
+    expect(reader).not.toMatch(/rpc\("for_you_signals"/);
+    // Pagination is still the shared (score, id) helper, so a materialized list
+    // and a freshly-computed one page byte-identically; each page hydrates via
+    // finalizePage before returning.
+    expect(reader).toMatch(
+      /pageFromSnapshot\(entries, personalised, data\.cursor, data\.limit\)/,
     );
-    expect(src).toMatch(
-      /return finalizePage\(supabase, pageFromSnapshot\(ranked, true, data\.cursor, data\.limit\)\);/,
-    );
-    // No leftover inline pagination in the handler: it all routes through the
-    // shared helper (the old `ranked.slice(startIdx, ...)` is gone).
-    expect(src).not.toMatch(/ranked\.slice\(startIdx/);
+    expect(reader).toMatch(/return finalizePage\(supabase, page\);/);
+    // The old snapshot cache machinery is fully retired.
+    expect(reader).not.toMatch(/rememberSnapshot\(/);
+    expect(reader).not.toMatch(/snapshotFor\(/);
   });
 });
 
@@ -316,7 +313,7 @@ describe("the ranker's retrieval is pushed into Postgres and stays invoker-scope
     "utf8",
   );
   const recs = readFileSync(
-    join(process.cwd(), "src", "lib", "recommendations.functions.ts"),
+    join(process.cwd(), "src", "lib", "feed-rank-core.ts"),
     "utf8",
   );
 

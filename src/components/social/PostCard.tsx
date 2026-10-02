@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo } from "react";
+import { useState, useEffect, useRef, memo, lazy, Suspense } from "react";
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
@@ -34,12 +34,14 @@ import { toast } from "sonner";
 import { friendlyError } from "@/lib/error-messages";
 import { editPost } from "@/lib/post-edit.functions";
 import { Avatar } from "@/components/social/Avatar";
+// TipModal + ReportModal are lazy on purpose: they are pure on-action modals,
+// mounted only when the viewer taps Tip / Report. Keeping them out of PostCard's
+// static graph means their code is NOT downloaded by every feed/explore/profile/
+// workspace page that renders a post — it fetches on the first tap instead.
 import { UserBadge } from "@/components/social/UserBadge";
 import { WorkspaceBadge } from "@/components/social/WorkspaceBadge";
 import { TeamAvatar } from "@/components/social/TeamAvatar";
 import { TimeAgo } from "@/components/social/TimeAgo";
-import { TipModal } from "@/components/social/TipModal";
-import { ReportModal } from "@/components/social/ReportModal";
 import { ModernVideoPlayer } from "@/components/social/ModernVideoPlayer";
 import { compact } from "@/lib/formatters";
 import { useWorkspace, workspaceSlug } from "@/lib/workspace-state";
@@ -63,6 +65,13 @@ import { usePlan } from "@/lib/plan-state";
 import { useAuth } from "@/lib/auth-state";
 import { cn, optimizeImageUrl, isVideoUrl } from "@/lib/utils";
 import { ClampText } from "@/components/social/ClampText";
+
+const TipModal = lazy(() =>
+  import("@/components/social/TipModal").then((m) => ({ default: m.TipModal })),
+);
+const ReportModal = lazy(() =>
+  import("@/components/social/ReportModal").then((m) => ({ default: m.ReportModal })),
+);
 
 function renderContentWithLinks(text: string) {
   if (!text) return null;
@@ -1607,39 +1616,47 @@ function PostCardBase({
         </div>
       )}
 
-      {/* Tip Creator Modal */}
-      <TipModal
-        isOpen={isTipModalOpen}
-        onClose={() => setIsTipModalOpen(false)}
-        recipient={{
-          username: author.username,
-          display_name: author.display_name,
-          avatar_url: author.avatar_url,
-          plan: author.plan,
-        }}
-        team={
-          ws
-            ? {
-                workspaceId: ws.id,
-                name: ws.name,
-                avatarUrl: ws.avatarUrl,
-                logoEmoji: ws.logoEmoji,
-              }
-            : null
-        }
-        postId={post.id}
-      />
+      {/* Tip Creator Modal — mounted (and its chunk fetched) only on first open. */}
+      {isTipModalOpen && (
+        <Suspense fallback={null}>
+          <TipModal
+            isOpen
+            onClose={() => setIsTipModalOpen(false)}
+            recipient={{
+              username: author.username,
+              display_name: author.display_name,
+              avatar_url: author.avatar_url,
+              plan: author.plan,
+            }}
+            team={
+              ws
+                ? {
+                    workspaceId: ws.id,
+                    name: ws.name,
+                    avatarUrl: ws.avatarUrl,
+                    logoEmoji: ws.logoEmoji,
+                  }
+                : null
+            }
+            postId={post.id}
+          />
+        </Suspense>
+      )}
 
-      {/* Report Post Modal */}
-      <ReportModal
-        isOpen={isReportModalOpen}
-        onClose={() => setIsReportModalOpen(false)}
-        targetType="post"
-        targetId={post.id}
-        targetPreview={post.content}
-        authorId={author.id}
-        authorName={author.display_name}
-      />
+      {/* Report Post Modal — mounted (and its chunk fetched) only on first open. */}
+      {isReportModalOpen && (
+        <Suspense fallback={null}>
+          <ReportModal
+            isOpen
+            onClose={() => setIsReportModalOpen(false)}
+            targetType="post"
+            targetId={post.id}
+            targetPreview={post.content}
+            authorId={author.id}
+            authorName={author.display_name}
+          />
+        </Suspense>
+      )}
     </article>
   );
 }

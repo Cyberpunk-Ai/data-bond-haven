@@ -1,252 +1,150 @@
 import { createServerFn } from "@tanstack/react-start";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import {
+  RANK_EPOCH_MS,
+  finalizePage,
+  pageFromSnapshot,
+  rankForYou,
+  readFeedPrefs,
+  hasMutedTag,
+  normalizeTag,
+  scoreFreshRow,
+} from "@/lib/feed-rank-core";
 
 /**
- * X-like "For you" ranker.
+ * X-like "For you" feed — SERVE path.
  *
- * Candidate generation: 1st-degree (followed) + 2nd-degree (friends of
- * friends) authors, topic/interest affinity from past interactions and
- * `feed_preferences`, plus a recency/trending pool so the feed never runs dry
- * for new accounts.
+ * Ranking is no longer done here. A background worker (lib/feed-worker.server)
+ * materializes each viewer's ranked timeline into `timeline_items` ahead of the
+ * request, so opening the feed is ONE indexed read (<=300 slim rows) plus a page
+ * hydrate — not a 2,000-row pool transfer + rescore that could blow the caller's
+ * 9s budget and stall the whole node process. The scoring formulas themselves
+ * live, unchanged, in lib/feed-rank-core.
  *
- * Scoring blends: engagement velocity (likes+reposts+comments per hour since
- * post creation), freshness decay, relationship strength (follow graph +
- * historical interactions with the author), and an author-diversity cap.
- * Posts the viewer has already been shown are demoted, and once shown 3+
- * times without engaging they sink behind everything unseen — the feed only
- * replays them once the platform genuinely has no fresh candidate left, so a
- * session doesn't loop while there is something new to show and never runs
- * dry when there isn't.
+ * Freshness without re-introducing the cost:
+ *   - a new post fans out to a re-rank job (SQL trigger) and the worker rebuilds
+ *     affected timelines within ~a tick;
+ *   - the first page of a warm read also pull-merges brand-new posts from the
+ *     authors you directly follow (a handful of rows, no RPC) so following
+ *     someone shows their post immediately;
+ *   - a brand-new / unranked viewer (or a manual refresh) runs the inline ranker
+ *     once, stores it as their timeline, and serves from it thereafter.
  *
- * Pagination is cursor based (`(score, id)` composite, base64 encoded) and
- * the score for a given post is stable within a "ranking epoch" (bucketed to
- * the current 10-minute window) so posts never visibly reorder while a user
- * is mid-scroll -- only new posts/pages shift the tail of the list.
+ * Pagination keeps the `(score, id)` cursor from the snapshot helper, so a
+ * materialized timeline and a freshly-computed one page identically.
  */
+
+// The materialized timeline is capped when stored and read so the serve path is
+// bounded; a scroll session rarely reaches row 300 before the next epoch.
+const TIMELINE_STORE_MAX = 300;
+const TIMELINE_READ_MAX = 300;
+// Pull-merge stays cheap: a bounded follow scan + a bounded fresh-post scan.
+const FOLLOW_SCAN_MAX = 200;
+const FRESH_SCAN_MAX = 50;
 
 /**
- * Feed tuning the client writes (`sendFeedFeedback`) stores camelCase keys —
- * preferredTags / mutedTags / mutedAuthors — while this ranker historically
- * only read `interests` / `boostedTags`, so "Interested in #x" and "Not
- * interested in #x" were persisted and then ignored. Read every alias so one
- * tuned preference shape can't silently no-op.
+ * Store a freshly-ranked list as this viewer's timeline for the epoch (top
+ * `TIMELINE_STORE_MAX`). Runs on the VIEWER's own token, so RLS
+ * (`owns_profile(viewer_id)`) already scopes the write to their rows. Best
+ * effort: a failed store only means the next read re-ranks, never a wrong feed.
  */
-function readFeedPrefs(raw: unknown): {
-  preferredTags: Set<string>;
-  mutedTags: Set<string>;
-  mutedAuthors: Set<string>;
-} {
-  const p = (raw ?? {}) as Record<string, unknown>;
-  const list = (...keys: string[]) =>
-    keys.flatMap((k) => (Array.isArray(p[k]) ? (p[k] as unknown[]).map(String) : []));
-  const norm = (t: string) => t.toLowerCase().replace(/^#/, "").trim();
-  return {
-    preferredTags: new Set(
-      [...list("preferredTags", "interests", "boostedTags", "preferred_tags")].map(norm),
-    ),
-    mutedTags: new Set([...list("mutedTags", "hidden_tags", "muted_tags")].map(norm)),
-    mutedAuthors: new Set(list("mutedAuthors", "muted_authors")),
-  };
-}
-
-/** Does any tag on a post sit in the viewer's muted list? (case/`#` insensitive) */
-function hasMutedTag(tags: unknown, muted: Set<string>): boolean {
-  if (muted.size === 0 || !Array.isArray(tags)) return false;
-  return tags.some((t) => muted.has(normalizeTag(String(t))));
-}
-
-/** Topics are compared case- and `#`-insensitively everywhere they are matched. */
-function normalizeTag(tag: unknown): string {
-  return String(tag ?? "")
-    .toLowerCase()
-    .replace(/^#/, "")
-    .trim();
-}
-
-function encodeCursor(rank: number, id: string) {
-  return Buffer.from(JSON.stringify({ rank, id })).toString("base64url");
-}
-function decodeCursor(cursor?: string | null): { rank: number; id: string } | null {
-  if (!cursor) return null;
-  try {
-    const obj = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-    if (typeof obj?.rank === "number" && typeof obj?.id === "string") return obj;
-  } catch {
-    /* ignore malformed cursor */
-  }
-  return null;
-}
-
-/**
- * Slice one page out of an already-ranked list. Shared by the cold path (fresh
- * pool walk) and the warm path (snapshot hit) so pagination is byte-identical
- * whether the list was just computed or replayed from cache. Personalised
- * cursors carry `(score, id)`; the recency-led fallback carries `(0, id)` and
- * pages purely by id. This is what lets a scroll session paginate against the
- * SAME ranked list without re-walking the pool on every page.
- */
-function pageFromSnapshot(
-  entries: Array<{ row: any; score: number }>,
-  personalised: boolean,
-  cursor: string | undefined,
-  limit: number,
-) {
-  const decoded = decodeCursor(cursor);
-  let startIdx = 0;
-  if (decoded) {
-    if (personalised) {
-      const idx = entries.findIndex(
-        (e) => e.row.id === decoded.id && Math.abs(e.score - decoded.rank) < 1e-6,
-      );
-      startIdx = idx >= 0 ? idx + 1 : entries.findIndex((e) => e.score <= decoded.rank);
-      if (startIdx < 0) startIdx = entries.length;
-    } else {
-      startIdx = entries.findIndex((e) => e.row.id === decoded.id) + 1;
-      if (startIdx <= 0) startIdx = 0;
-    }
-  }
-  const page = entries.slice(startIdx, startIdx + limit);
-  const last = page[page.length - 1];
-  return {
-    posts: page.map((e) => e.row),
-    personalised,
-    nextCursor: last ? encodeCursor(personalised ? last.score : 0, last.row.id) : null,
-  };
-}
-
-/**
- * Per-viewer ranked snapshots, keyed by viewer + the 10-minute ranking epoch
- * they were computed for. Without this, EVERY page of "For you" re-fetched
- * the entire visible pool and re-scored it — a scroll through a 1,500-post
- * library was 1,500 rows of compute per screen, most of it identical to the
- * last page. One scroll session now costs one pool walk.
- */
-interface RankedSnapshot {
-  entries: Array<{ row: any; score: number }>;
-  personalised: boolean;
-  expiresAt: number;
-}
-const rankedSnapshots = new Map<string, RankedSnapshot>();
-const SNAPSHOT_MAX = 200;
-const RANK_EPOCH_MS = 10 * 60_000;
-
-function snapshotFor(myId: string, epochBucket: number): RankedSnapshot | null {
-  const hit = rankedSnapshots.get(`${myId}:${epochBucket}`);
-  if (!hit) return null;
-  if (hit.expiresAt < Date.now()) {
-    rankedSnapshots.delete(`${myId}:${epochBucket}`);
-    return null;
-  }
-  return hit;
-}
-
-function rememberSnapshot(
+async function persistTimeline(
+  supabase: any,
   myId: string,
   epochBucket: number,
-  snapshot: Omit<RankedSnapshot, "expiresAt">,
+  entries: Array<{ row: any; score: number }>,
 ) {
-  const now = Date.now();
-  // Live until a minute past the end of the epoch: a scroll that crosses the
-  // boundary finishes its stable list instead of paying for a re-rank.
-  rankedSnapshots.set(`${myId}:${epochBucket}`, {
-    ...snapshot,
-    expiresAt: (epochBucket + 1) * RANK_EPOCH_MS + 60_000,
-  });
-  // Opportunistic trim: epoch keys die naturally, but a burst of distinct
-  // viewers could still pile up.
-  for (const [key, snap] of rankedSnapshots) {
-    if (snap.expiresAt < now) rankedSnapshots.delete(key);
+  try {
+    await supabase
+      .from("timeline_items")
+      .delete()
+      .eq("viewer_id", myId)
+      .eq("kind", "foryou");
+    const top = entries.slice(0, TIMELINE_STORE_MAX);
+    if (top.length === 0) return;
+    const rows = top.map((e) => ({
+      viewer_id: myId,
+      kind: "foryou",
+      post_id: e.row.id,
+      author_id: e.row.user_id,
+      score: e.score,
+      epoch: epochBucket,
+      created_at: new Date(e.row.created_at).toISOString(),
+    }));
+    await supabase.from("timeline_items").insert(rows);
+  } catch (err) {
+    console.warn("timeline store failed (will re-rank next read):", err);
   }
-  while (rankedSnapshots.size > SNAPSHOT_MAX) {
-    const oldest = rankedSnapshots.keys().next().value as string | undefined;
-    if (oldest === undefined) break;
-    rankedSnapshots.delete(oldest);
+}
+
+/** Nudge the queue so the worker refreshes this viewer again next epoch. */
+async function enqueueRankJob(supabase: any, myId: string) {
+  try {
+    const dueAt = new Date((Math.floor(Date.now() / RANK_EPOCH_MS) + 1) * RANK_EPOCH_MS).toISOString();
+    await supabase
+      .from("feed_rank_jobs")
+      .upsert(
+        { viewer_id: myId, reason: "read", due_at: dueAt, updated_at: new Date().toISOString() },
+        { onConflict: "viewer_id" },
+      );
+  } catch {
+    /* best-effort: a dropped enqueue just means the epoch sweep re-ranks later */
   }
 }
 
 /**
- * Deterministic per-key jitter in [0,1). Used for discovery: mixing the
- * viewer id into the seed means two users with similar-but-different histories
- * get genuinely different tails of content, while the same (viewer, post,
- * epoch) triple always hashes identically — so a page never reshuffles itself
- * mid-scroll and the ranker stays reproducible (and debuggable) per epoch.
+ * Fold in posts published since the timeline was materialized by authors the
+ * viewer directly follows. Scores them with the signal-independent portion of
+ * the ranker (decay + velocity + reach), which is what surfaces genuinely-new
+ * followed content at the right rank without paying for a full re-rank. Never
+ * fatal: on any miss the caller just serves the stored timeline.
  */
-function jitter01(key: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < key.length; i++) {
-    h ^= key.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return h / 4294967296;
-}
-
-/**
- * Candidate-pool ceiling. Kept at 2000 to preserve the feed-completeness
- * invariant: a post only leaves "For you" because it ranked below the page
- * window, never because a smaller `limit` cut it off. The pool is now fetched
- * SLIM (scoring columns only) via the `for_you_candidates` RPC and cached once
- * per epoch for every viewer, so the ceiling no longer costs a full 2000-row
- * content-bearing transfer per viewer.
- */
-const POOL_MAX = 2000;
-
-interface SharedPoolCache {
-  epochBucket: number;
-  rows: any[];
-}
-let poolCache: SharedPoolCache | null = null;
-
-/**
- * The viewer-INDEPENDENT candidate pool, cached process-locally for the current
- * ranking epoch. `for_you_candidates` returns recent UNION trending posts as
- * slim rows with the author/workspace plan pre-joined; because that set is
- * identical for every viewer it is fetched ONCE per epoch (on the long-lived
- * node server) instead of once per viewer per epoch. Callers must treat the
- * returned array as read-only (the ranker scores a filtered copy).
- */
-async function getSharedPool(supabase: any, epochBucket: number): Promise<any[]> {
-  if (poolCache && poolCache.epochBucket === epochBucket) return poolCache.rows;
-  const { data, error } = await supabase.rpc("for_you_candidates", { p_limit: POOL_MAX });
-  if (error) throw error;
-  const rows = Array.isArray(data) ? data : [];
-  // Only cache a non-empty result, so a transient empty (e.g. the migration not
-  // applied yet, or a brand-new platform) retries rather than sticking for the epoch.
-  if (rows.length > 0) poolCache = { epochBucket, rows };
-  return rows;
-}
-
-/**
- * One round trip for the viewer's behaviour, follow graph, impressions and feed
- * tuning (see `for_you_signals`). Runs under the viewer's own token, so it sees
- * exactly what the six behaviour queries + two follow queries + prefs read saw.
- */
-async function fetchViewerSignals(supabase: any, myId: string): Promise<any> {
-  const { data, error } = await supabase.rpc("for_you_signals", { p_viewer: myId });
-  if (error) throw error;
-  return data ?? {};
-}
-
-/**
- * Fetch FULL rows for just the ranked page. Scoring ran on slim rows; only the
- * <=limit posts actually being shown need content/media/poll to render.
- * Preserves ranked order and falls back to the slim row if a full row is gone.
- */
-async function hydratePageRows(supabase: any, slimRows: any[]): Promise<any[]> {
-  const ids = slimRows.map((r) => r?.id).filter(Boolean);
-  if (ids.length === 0) return slimRows;
-  const { data } = await supabase.from("posts").select("*").in("id", ids);
-  const full = new Map<string, any>((data ?? []).map((row: any) => [row.id, row]));
-  return slimRows.map((s) => full.get(s?.id) ?? s);
-}
-
-/** Slice a page from a ranked list and hydrate it to full rows for the client. */
-async function finalizePage(
+async function mergeFreshFollowedPosts(
   supabase: any,
-  page: { posts: any[]; personalised: boolean; nextCursor: string | null },
-) {
-  page.posts = await hydratePageRows(supabase, page.posts);
-  return page;
+  myId: string,
+  entries: Array<{ row: any; score: number }>,
+): Promise<Array<{ row: any; score: number }>> {
+  try {
+    let watermark = 0;
+    for (const e of entries) {
+      const t = new Date(e.row.created_at).getTime();
+      if (t > watermark) watermark = t;
+    }
+    if (!watermark) watermark = Math.floor(Date.now() / RANK_EPOCH_MS) * RANK_EPOCH_MS;
+
+    const { data: follows } = await supabase
+      .from("follows")
+      .select("target_id")
+      .eq("follower_id", myId)
+      .limit(FOLLOW_SCAN_MAX);
+    const authorIds = ((follows ?? []) as any[]).map((f) => f.target_id).filter(Boolean);
+    if (authorIds.length === 0) return entries;
+
+    const have = new Set(entries.map((e) => e.row.id));
+    const { data: fresh } = await supabase
+      .from("posts")
+      .select(
+        "id,user_id,created_at,like_count,comment_count,repost_count,view_count,workspace_id",
+      )
+      .in("user_id", authorIds)
+      .eq("hidden", false)
+      .gt("created_at", new Date(watermark).toISOString())
+      .order("created_at", { ascending: false })
+      .limit(FRESH_SCAN_MAX);
+
+    const epoch = Math.floor(Date.now() / RANK_EPOCH_MS) * RANK_EPOCH_MS;
+    const extra = ((fresh ?? []) as any[])
+      .filter((p) => p?.id && !have.has(p.id))
+      .map((p) => ({ row: p, score: scoreFreshRow(p, epoch) }));
+    if (extra.length === 0) return entries;
+
+    const merged = [...entries, ...extra];
+    merged.sort((a, b) => b.score - a.score || (a.row.id < b.row.id ? -1 : 1));
+    return merged;
+  } catch {
+    return entries;
+  }
 }
 
 export const getForYouPosts = createServerFn({ method: "GET" })
@@ -273,233 +171,55 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     if (!me) return { posts: [] as any[], personalised: false, nextCursor: null };
     const myId = me.id as string;
 
-    // One ranked list per viewer per 10-minute epoch, reused across every page
-    // of a scroll session: the candidate retrieval, the signal fan-in and the
-    // rescoring below then run ONCE, not on each "load more". A manual refresh
-    // skips the read so Refresh can never hand back an identical page, and
-    // overwrites the snapshot as the new baseline.
     const epochBucket = Math.floor(Date.now() / RANK_EPOCH_MS);
+
+    // ---- warm path: read the materialized timeline (no ranking here) --------
+    // A viewer holds exactly one epoch's rows (both persist paths delete-then-
+    // insert), so we serve the latest stored timeline regardless of epoch and
+    // let the worker/next-refresh advance it — no inline re-rank at a rollover.
+    let entries: Array<{ row: any; score: number }> | null = null;
+    let personalised = true;
     if (!data.refresh) {
-      const cached = snapshotFor(myId, epochBucket);
-      if (cached)
-        return finalizePage(
-          supabase,
-          pageFromSnapshot(cached.entries, cached.personalised, data.cursor, data.limit),
-        );
-    }
-
-    // ---- retrieve: two round trips replace ~13 ------------------------------
-    // `for_you_candidates` returns the viewer-INDEPENDENT pool (recent UNION
-    // 48h-trending) as SLIM rows with the plan pre-joined, cached once per epoch
-    // for everyone; `for_you_signals` fans the viewer's behaviour/graph/
-    // impression/tuning into one jsonb. Both are SECURITY INVOKER and run under
-    // this viewer's token, so they see exactly what the old per-query reads saw.
-    // The only full-row transfer left is the single page hydrate below.
-    const [pool, signals] = await Promise.all([
-      getSharedPool(supabase, epochBucket),
-      fetchViewerSignals(supabase, myId),
-    ]);
-
-    // ---- behaviour affinity (same values the six behaviour queries gave) ----- 
-    const engagedWeight = new Map<string, number>();
-    const addEngaged = (ids: unknown, w: number) => {
-      for (const pid of (Array.isArray(ids) ? ids : []) as string[]) {
-        if (pid) engagedWeight.set(pid, (engagedWeight.get(pid) ?? 0) + w);
-      }
-    };
-    addEngaged(signals.likes, 3);
-    addEngaged(signals.reposts, 4);
-    addEngaged(signals.bookmarks, 4);
-    addEngaged(signals.comments, 3);
-    const engagedIds = [...engagedWeight.keys()].slice(0, 400);
-
-    // Impression counts: 1 = seen once (mild demotion), 3+ = drop from feed.
-    const impressionCount = new Map<string, number>();
-    for (const pid of (Array.isArray(signals.impressions) ? signals.impressions : []) as string[]) {
-      if (pid) impressionCount.set(pid, (impressionCount.get(pid) ?? 0) + 1);
-    }
-
-    const authorAffinity = new Map<string, number>();
-    const tagAffinity = new Map<string, number>();
-
-    // Preference-driven interests from explicit feed tuning (mute/boost tags & authors).
-    const { preferredTags, mutedTags, mutedAuthors } = readFeedPrefs(signals.prefs);
-    for (const tag of preferredTags) tagAffinity.set(tag, (tagAffinity.get(tag) ?? 0) + 5);
-    for (const p of (Array.isArray(signals.engagedPosts) ? signals.engagedPosts : []) as any[]) {
-      const w = engagedWeight.get(p.id) ?? 1;
-      if (p.user_id) authorAffinity.set(p.user_id, (authorAffinity.get(p.user_id) ?? 0) + w);
-      for (const tag of (p.tags ?? []) as string[]) {
-        // Keyed the same way preferredTags is (normalised) so an affinity boost
-        // survives a creator typing "#AI" where the viewer tuned "ai".
-        const norm = normalizeTag(tag);
-        if (!norm) continue;
-        tagAffinity.set(norm, (tagAffinity.get(norm) ?? 0) + w);
+      const { data: rows } = await supabase
+        .from("timeline_items")
+        .select("post_id, score, author_id, created_at")
+        .eq("viewer_id", myId)
+        .eq("kind", "foryou")
+        .order("score", { ascending: false })
+        .order("post_id", { ascending: true })
+        .limit(TIMELINE_READ_MAX);
+      if (rows && rows.length > 0) {
+        entries = (rows as any[]).map((r) => ({
+          row: { id: r.post_id, user_id: r.author_id, created_at: r.created_at },
+          score: r.score,
+        }));
       }
     }
 
-    // ---- relationship (follow graph, resolved inside for_you_signals) -------- 
-    const firstDegree = new Set<string>(
-      ((Array.isArray(signals.following) ? signals.following : []) as string[]).filter(Boolean),
-    );
-    const secondDegree = new Set<string>(
-      ((Array.isArray(signals.friendFollows) ? signals.friendFollows : []) as string[]).filter(
-        (id) => id && id !== myId && !firstDegree.has(id),
-      ),
-    );
-
-    // ---- candidate set (mutes still applied per-viewer; the pool is shared) -- 
-    // Every visible post is feed material — including your own: the ranker never
-    // hides a category by fiat, and the 2-per-10-window diversity cap below
-    // already stops one account (including the viewer) from flooding a screenful.
-    // Tags/authors the viewer muted through the post menu are dropped here.
-    const rows = pool.filter(
-      (r: any) => !mutedAuthors.has(r.user_id) && !hasMutedTag(r.tags, mutedTags),
-    );
-
-    // Plan-based discovery boost: paid creators AND paid team workspaces reach
-    // further; free still reaches. The effective plan is pre-joined by
-    // for_you_candidates — a workspace post inherits the workspace (or its
-    // owner's) plan, falling back to the author's personal plan when there is no
-    // readable workspace — so no per-viewer plan lookups are needed.
-    const planFactor = (plan?: string | null) =>
-      plan === "pro" ? 1.35 : plan === "plus" ? 1.18 : 1;
-
-    const personalised =
-      engagedIds.length > 0 || firstDegree.size > 0 || preferredTags.size > 0 || mutedTags.size > 0;
-    if (!personalised) {
-      // Brand-new viewer: still recency-led, but nudged ±6h by a per-user
-      // hash so two fresh accounts don't stare at an identical feed, and
-      // everyone keeps seeing mostly-new content. Deterministic within the
-      // 10-minute epoch, so pagination is stable.
-      const newBucket = Math.floor(Date.now() / (10 * 60_000));
-      const adjusted = (r: any) =>
-        new Date(r.created_at).getTime() +
-        (jitter01(`${myId}:${r.id}:${newBucket}`) - 0.5) * 12 * 3_600_000;
-      const sorted = rows.sort((a: any, b: any) => adjusted(b) - adjusted(a));
-      const entries = sorted.map((row: any) => ({ row, score: 0 }));
-      rememberSnapshot(myId, epochBucket, { entries, personalised: false });
-      return finalizePage(supabase, pageFromSnapshot(entries, false, data.cursor, data.limit));
+    // ---- cold miss / refresh: rank inline once, then store + serve from it --
+    // The caller bounds this call with its own budget; if it overruns, the catch
+    // there falls back to recency exactly as before. Storing means the NEXT read
+    // is a plain index scan, which is the whole point of the redesign.
+    if (!entries) {
+      const ranked = await rankForYou(supabase, myId, {
+        refresh: data.refresh,
+        limit: data.limit,
+      });
+      personalised = ranked.personalised;
+      entries = ranked.entries;
+      if (personalised) await persistTimeline(supabase, myId, epochBucket, entries);
     }
 
-    // Ranking epoch: bucket "now" to a 10-minute window so scores (and thus
-    // order) are stable while a viewer scrolls/paginates through a session.
-    // An explicit refresh opts out and ranks with the live clock.
-    const epoch = data.refresh ? Date.now() : Math.floor(Date.now() / (10 * 60_000)) * 10 * 60_000;
-
-    const scored: Array<{ row: any; score: number }> = rows.map((row: any) => {
-      const ageHours = Math.max(0.1, (epoch - new Date(row.created_at).getTime()) / 3_600_000);
-      const decay = Math.exp(-ageHours / 36); // ~1.5 day half-life-ish
-
-      // Engagement velocity: interactions per hour since posting, weighted by type.
-      const rawEngagement =
-        (row.like_count ?? 0) * 1 + (row.comment_count ?? 0) * 2.2 + (row.repost_count ?? 0) * 3;
-      const velocity = rawEngagement / ageHours;
-      const views = Math.max(1, row.view_count ?? 1);
-      const quality = Math.log1p(velocity * 10) * (0.5 + Math.min(1, rawEngagement / views));
-
-      const authorScore = Math.log1p(authorAffinity.get(row.user_id) ?? 0) * 2.2;
-      // Post tags are matched through the same normaliser the affinity map is
-      // keyed with, so `#AI` and `ai` are one topic.
-      const tagScore =
-        ((row.tags ?? []) as string[]).reduce(
-          (sum, tag) => sum + Math.log1p(tagAffinity.get(normalizeTag(tag)) ?? 0),
-          0,
-        ) * 1.6;
-
-      // Relationship strength: graph proximity plus how much this viewer has
-      // historically engaged with this specific author.
-      const relationship =
-        (firstDegree.has(row.user_id) ? 3 : secondDegree.has(row.user_id) ? 1.4 : 0) +
-        Math.min(2, Math.log1p(authorAffinity.get(row.user_id) ?? 0) * 0.6);
-
-      const seenTimes = impressionCount.get(row.id) ?? 0;
-      const seenPenalty = seenTimes > 0 && !engagedWeight.has(row.id) ? -1.5 * seenTimes : 0;
-
-      // Discovery nudge: content completely outside this viewer's known
-      // world (unfollowed, never-engaged author AND no affinity tags) gets a
-      // small per-(viewer, post, epoch) bonus — up to +1.4, bounded so it
-      // can never out-rank genuinely relevant posts. Because the seed
-      // carries the viewer id, different users explore different corners of
-      // the same pool instead of everyone converging on one global ranking;
-      // because it is multiplied through the decay term, only fresh unknowns
-      // get the lift, which is what "discover new things" should mean.
-      const tagsArr = (row.tags ?? []) as string[];
-      const outsideKnownWorld =
-        !firstDegree.has(row.user_id) &&
-        !secondDegree.has(row.user_id) &&
-        !authorAffinity.has(row.user_id) &&
-        !tagsArr.some((tag) => tagAffinity.has(normalizeTag(tag)));
-      const discovery = outsideKnownWorld ? jitter01(`${myId}:${row.id}:${epoch}`) * 1.4 : 0;
-
-      const base = authorScore + tagScore + relationship + quality + discovery;
-      // Reach boost from the plan pre-joined by for_you_candidates: a workspace
-      // post inherits its workspace (or the owner's) plan, falling back to the
-      // author's personal plan; a personal post uses the author's plan.
-      const effPlan = row.workspace_id
-        ? (row.workspace_plan ?? row.author_plan)
-        : row.author_plan;
-      const reachBoost = planFactor(effPlan);
-      const score = (base * (0.35 + decay) + decay * 2) * reachBoost + seenPenalty;
-
-      return { row, score };
-    });
-
-    // Stable tie-break by id keeps ordering deterministic within an epoch.
-    scored.sort((a, b) => b.score - a.score || (a.row.id < b.row.id ? -1 : 1));
-
-    // Seen-3+-times-without-engaging posts sink to the back of the queue
-    // instead of leaving it: while unseen content can still fill a page the
-    // replayed ones stay hidden (a session doesn't loop), but once the fresh
-    // supply runs out they become candidates again — every available post
-    // stays reachable through the feed.
-    const unseen = scored.filter(
-      (s) => (impressionCount.get(s.row.id) ?? 0) < 3 || engagedWeight.has(s.row.id),
-    );
-    const replayed = scored.filter(
-      (s) => (impressionCount.get(s.row.id) ?? 0) >= 3 && !engagedWeight.has(s.row.id),
-    );
-    const queue = unseen.length >= data.limit ? unseen : [...unseen, ...replayed];
-
-    // Diversity cap: at most 2 posts per author inside any 10-post sliding
-    // window (a very prolific author still reaches deeper pages — unlike a
-    // hard global cap — but no one floods a screenful). A post that fails the
-    // window on this pass is DEFERRED to the next one, never dropped: a
-    // single-pass `continue` used to permanently hide an author's third-plus
-    // posts whenever the window kept refilling with other people's content,
-    // so the feed quietly swallowed part of the pool. Each pass re-evaluates
-    // against the (now longer) ranked tail, and the leftovers are appended in
-    // score order once no placement can honour the window.
-    const ranked: Array<{ row: any; score: number }> = [];
-    let pending = queue;
-    while (pending.length) {
-      const deferred: typeof pending = [];
-      const placed: typeof pending = [];
-      // The candidate tail is `ranked` followed by this pass's `placed`, so a
-      // window slot maps onto one or the other depending on its position.
-      const at = (i: number) => (i < ranked.length ? ranked[i] : placed[i - ranked.length]);
-      for (const item of pending) {
-        const total = ranked.length + placed.length;
-        let inWindow = 0;
-        for (let i = Math.max(0, total - 9); i < total; i++) {
-          if (at(i).row.user_id === item.row.user_id) inWindow++;
-        }
-        (inWindow >= 2 ? deferred : placed).push(item);
-      }
-      if (!placed.length) {
-        // Stall-break: the window is genuinely saturated for every leftover
-        // (more posts from one author than 10-slots can hold at 2 each).
-        // Place only the BEST deferred item, then re-evaluate the rest
-        // against the advanced tail — full coverage without ever flooding.
-        placed.push(pending[0]);
-        pending = pending.slice(1);
-      } else {
-        pending = deferred;
-      }
-      ranked.push(...placed);
+    // Surface genuinely-new followed posts on the head page without a re-rank.
+    if (personalised && !data.cursor) {
+      entries = await mergeFreshFollowedPosts(supabase, myId, entries);
     }
 
-    rememberSnapshot(myId, epochBucket, { entries: ranked, personalised: true });
-    return finalizePage(supabase, pageFromSnapshot(ranked, true, data.cursor, data.limit));
+    // Keep the queue warm so the worker refreshes this viewer next epoch.
+    void enqueueRankJob(supabase, myId);
+
+    const page = pageFromSnapshot(entries, personalised, data.cursor, data.limit);
+    return finalizePage(supabase, page);
   });
 
 /**

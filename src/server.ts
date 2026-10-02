@@ -11,6 +11,7 @@ loadRuntimeEnv();
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 import { withSecurityHeaders } from "./lib/security-headers.server";
+import { startFeedWorker } from "./lib/feed-worker.server";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -53,9 +54,45 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+// Serve the "For you" feed as a precomputed timeline read; ranking happens on
+// this timer, never inside a request. Guarded to start once per process and
+// unref()'d so it can't keep the process alive on its own.
+startFeedWorker();
+
+// A returning, signed-in visitor who types the bare domain wants their feed,
+// not the marketing page — but SSR can't read the client's session storage. The
+// Supabase auth cookie is the one server-visible hint, so use it to skip the
+// landing page (and its hydrate-then-navigate round trip) for the / entrypoint.
+// This is a HINT only: an expired cookie just lands on /feed, which renders
+// correctly for guests via auth-state. Guests have no cookie → marketing stays.
+function hasAuthCookie(request: Request): boolean {
+  const cookie = request.headers.get("cookie");
+  if (!cookie) return false;
+  for (const part of cookie.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const name = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (name.startsWith("sb-") && name.includes("auth-token") && value && value !== "null") {
+      return true;
+    }
+  }
+  return false;
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      // Fast, safe redirect for the signed-in landing hop (see above).
+      if (request.method === "GET") {
+        const url = new URL(request.url);
+        if (url.pathname === "/" && hasAuthCookie(request)) {
+          return withSecurityHeaders(
+            new Response(null, { status: 302, headers: { location: "/feed" } }),
+          );
+        }
+      }
+
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return withSecurityHeaders(await normalizeCatastrophicSsrResponse(response));

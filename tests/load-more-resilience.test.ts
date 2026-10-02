@@ -183,10 +183,12 @@ describe("the for-you ranker is bounded inside getPostsPage", () => {
   });
 
   it("retrieves via two concurrent Postgres RPCs (no ~13-query cold path)", () => {
-    const recs = read("../src/lib/recommendations.functions.ts");
-    // The old fan-out of behaviour + graph + pool + plan queries is gone: the
-    // ranker fires the shared pool and the viewer signals concurrently, so a cold
-    // epoch is two round trips rather than a dozen across many waves.
+    // The pure ranking pipeline now lives in feed-rank-core (shared by the
+    // background materializer and the server-fn cold miss). The old fan-out of
+    // behaviour + graph + pool + plan queries is gone: it fires the shared pool
+    // and the viewer signals concurrently, so a cold epoch is two round trips
+    // rather than a dozen across many waves.
+    const recs = read("../src/lib/feed-rank-core.ts");
     expect(recs).toMatch(/const \[pool, signals\] = await Promise\.all\(\[/);
     expect(recs).toMatch(/getSharedPool\(supabase, epochBucket\)/);
     expect(recs).toMatch(/fetchViewerSignals\(supabase, myId\)/);
