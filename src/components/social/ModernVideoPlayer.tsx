@@ -207,9 +207,17 @@ export function ModernVideoPlayer({
           src={src}
           poster={poster}
           playsInline
+          preload="metadata"
           muted={isMuted}
           loop
-          onError={() => setHasError(true)}
+          onError={() => {
+            // Surface the fallback AND stop every overlay: an errored load never
+            // fires onCanPlay/onPlaying, so without clearing isLoading a spinner
+            // would cover the "unavailable" message forever and the controls
+            // would be dead taps — the "broken video" users see.
+            setHasError(true);
+            setIsLoading(false);
+          }}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
           onWaiting={() => setIsLoading(true)}
@@ -242,7 +250,7 @@ export function ModernVideoPlayer({
       )}
 
       {/* Loading Spinner */}
-      {isLoading && (
+      {isLoading && !hasError && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30 backdrop-blur-xs">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-black/60 text-white shadow-lg border border-white/20">
             <Loader2 className="h-6 w-6 animate-spin text-brand" />
@@ -251,7 +259,7 @@ export function ModernVideoPlayer({
       )}
 
       {/* Central Play/Pause Bubble Feedback Overlay */}
-      {playFeedback && (
+      {playFeedback && !hasError && (
         <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/60 text-white shadow-lg animate-ping scale-75 opacity-90 transition-all">
             {playFeedback === "play" ? (
@@ -264,7 +272,7 @@ export function ModernVideoPlayer({
       )}
 
       {/* Center Play/Pause Floating Overlay */}
-      {!isPlaying && !isLoading && (
+      {!isPlaying && !isLoading && !hasError && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 transition-opacity">
           <button
             type="button"
@@ -284,6 +292,7 @@ export function ModernVideoPlayer({
           showControls || !isPlaying || isHovered
             ? "opacity-100 translate-y-0"
             : "opacity-0 translate-y-3 pointer-events-none",
+          hasError && "hidden",
         )}
       >
         {/* Timeline Seek Bar */}
