@@ -165,3 +165,29 @@ describe("the other paged lists honour the same contract", () => {
     }
   });
 });
+
+describe("the for-you ranker is bounded inside getPostsPage", () => {
+  const client = read("../src/lib/api-client.ts");
+
+  it("caps the ranker below the shared page timeout and degrades to recency", () => {
+    // A slow ranker cold path used to blow the 15s client guard and reject the
+    // whole feed ("Feed fetch failed / Load more failed: timed out after
+    // 15000ms"). It is now bounded so over-budget rejects into the recency
+    // catch instead — the feed always paints.
+    const match = client.match(/const RANKER_BUDGET_MS = ([\d_]+);/);
+    expect(match, "RANKER_BUDGET_MS must be defined").not.toBeNull();
+    expect(Number(match![1].replace(/_/g, ""))).toBeGreaterThan(0);
+    expect(Number(match![1].replace(/_/g, ""))).toBeLessThan(PAGE_REQUEST_TIMEOUT_MS);
+    // ...and the ranker call actually runs through that budget.
+    expect(client).toMatch(/withBudget\(\s*getForYouPosts\(/);
+  });
+
+  it("overlaps the ranker's independent cold-path reads (no ~9-wave serial walk)", () => {
+    const recs = read("../src/lib/recommendations.functions.ts");
+    // Behaviour, follow graph and the candidate pool are started together and
+    // awaited where consumed, collapsing the cold path.
+    expect(recs).toMatch(/const behaviourPromise = Promise\.all\(/);
+    expect(recs).toMatch(/const followingPromise = supabase/);
+    expect(recs).toMatch(/const poolBatchPromise = Promise\.all\(/);
+  });
+});

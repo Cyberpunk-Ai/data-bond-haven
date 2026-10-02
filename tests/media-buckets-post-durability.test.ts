@@ -226,9 +226,11 @@ describe("For-you candidate pool covers every post", () => {
     expect(src).toMatch(/POOL_MAX/);
     // The pool is walked with explicit range windows, not a shallow limit.
     expect(src).toMatch(/\.range\(i \* POOL_CHUNK, i \* POOL_CHUNK \+ POOL_CHUNK - 1\)/);
-    // ...issued concurrently in a single Promise.all rather than awaited in a
-    // for-loop, so a cold epoch can't stall past the client fetch timeout.
-    expect(src).toMatch(/const poolBatch = await Promise\.all\(/);
+    // ...issued concurrently in a single Promise.all started up front (and
+    // awaited where consumed), rather than a sequential for-loop walk, so a cold
+    // epoch can't stall past the client fetch timeout.
+    expect(src).toMatch(/const poolBatchPromise = Promise\.all\(/);
+    expect(src).toMatch(/const poolBatch = await poolBatchPromise;/);
     expect(src).not.toMatch(/for \(let from = 0; from < POOL_MAX;/);
   });
 

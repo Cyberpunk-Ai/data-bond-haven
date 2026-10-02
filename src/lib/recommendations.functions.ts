@@ -217,8 +217,15 @@ export const getForYouPosts = createServerFn({ method: "GET" })
         return pageFromSnapshot(cached.entries, cached.personalised, data.cursor, data.limit);
     }
 
-    // ---- behaviour signals -------------------------------------------------
-    const [likes, reposts, bookmarks, comments, impressions, feedPrefsRow] = await Promise.all([
+    // ---- independent reads, started concurrently ----------------------------
+    // The behaviour signals, the first-degree follow graph and the (heavy)
+    // candidate pool depend only on the viewer id (or nothing at all), so their
+    // round trips are STARTED together instead of one phase awaiting the next.
+    // Each Supabase query resolves to {data,error} rather than rejecting, so these
+    // promises are held and awaited where their results are consumed — this
+    // collapses the cold path from ~9 sequential waves to ~4 so it lands well
+    // inside the client fetch budget instead of timing out.
+    const behaviourPromise = Promise.all([
       supabase.from("likes").select("post_id").eq("user_id", myId).limit(300),
       supabase.from("reposts").select("post_id").eq("user_id", myId).limit(300),
       supabase.from("bookmarks").select("post_id").eq("user_id", myId).limit(300),
@@ -226,6 +233,39 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       supabase.from("post_impressions").select("post_id").eq("user_id", myId).limit(1000),
       supabase.from("feed_preferences").select("prefs").eq("user_id", myId).maybeSingle(),
     ]);
+    const followingPromise = supabase
+      .from("follows")
+      .select("target_id")
+      .eq("follower_id", myId);
+
+    // Candidate pool. Fetched as ONE parallel batch (chunked recent posts + a
+    // trending pass): the ceiling still covers EVERY visible post, but the whole
+    // pool lands in ~a single round trip rather than a sequential walk, and it is
+    // started here so it resolves while the behaviour/graph work proceeds.
+    const POOL_CHUNK = 500;
+    const POOL_MAX = 2000;
+    const trendingSince = new Date(Date.now() - 48 * 3_600_000).toISOString();
+    const poolBatchPromise = Promise.all([
+      ...Array.from({ length: POOL_MAX / POOL_CHUNK }, (_, i) =>
+        supabase
+          .from("posts")
+          .select("*")
+          .eq("hidden", false)
+          .order("created_at", { ascending: false })
+          .range(i * POOL_CHUNK, i * POOL_CHUNK + POOL_CHUNK - 1),
+      ),
+      // Pool 2: trending — highest engagement in the last 48h, independent of
+      // recency rank, so a viral post a viewer hasn't seen yet still surfaces.
+      supabase
+        .from("posts")
+        .select("*")
+        .eq("hidden", false)
+        .gte("created_at", trendingSince)
+        .order("like_count", { ascending: false })
+        .limit(300),
+    ]);
+
+    const [likes, reposts, bookmarks, comments, impressions, feedPrefsRow] = await behaviourPromise;
 
     const weighted: Array<[any[], number]> = [
       [likes.data ?? [], 3],
@@ -256,76 +296,45 @@ export const getForYouPosts = createServerFn({ method: "GET" })
     const { preferredTags, mutedTags, mutedAuthors } = readFeedPrefs(feedPrefsRow.data?.prefs);
     for (const tag of preferredTags) tagAffinity.set(tag, (tagAffinity.get(tag) ?? 0) + 5);
 
-    if (engagedIds.length) {
-      const { data: engagedPosts } = await supabase
-        .from("posts")
-        .select("id, user_id, tags")
-        .in("id", engagedIds);
-      for (const p of engagedPosts ?? []) {
-        const w = engagedWeight.get(p.id) ?? 1;
-        authorAffinity.set(p.user_id, (authorAffinity.get(p.user_id) ?? 0) + w);
-        for (const tag of (p.tags ?? []) as string[]) {
-          // Keyed the same way preferredTags is (normalised) so an affinity boost
-          // survives a creator typing "#AI" where the viewer tuned "ai".
-          const norm = normalizeTag(tag);
-          if (!norm) continue;
-          tagAffinity.set(norm, (tagAffinity.get(norm) ?? 0) + w);
-        }
+    // Second wave: the engaged-post lookup (needs engagedIds) and the
+    // second-degree graph (needs firstDegree) depend only on wave one and not on
+    // each other, so resolve them together. firstDegree is ready immediately
+    // because its query was kicked off at the top of the handler.
+    const followingRes = await followingPromise;
+    const firstDegree = new Set<string>((followingRes.data ?? []).map((f: any) => f.target_id));
+    const [engagedRes, theirFollowsRes] = await Promise.all([
+      engagedIds.length
+        ? supabase.from("posts").select("id, user_id, tags").in("id", engagedIds)
+        : Promise.resolve({ data: null as any }),
+      firstDegree.size
+        ? supabase
+            .from("follows")
+            .select("target_id")
+            .in("follower_id", [...firstDegree].slice(0, 200))
+        : Promise.resolve({ data: null as any }),
+    ]);
+
+    for (const p of engagedRes.data ?? []) {
+      const w = engagedWeight.get(p.id) ?? 1;
+      authorAffinity.set(p.user_id, (authorAffinity.get(p.user_id) ?? 0) + w);
+      for (const tag of (p.tags ?? []) as string[]) {
+        // Keyed the same way preferredTags is (normalised) so an affinity boost
+        // survives a creator typing "#AI" where the viewer tuned "ai".
+        const norm = normalizeTag(tag);
+        if (!norm) continue;
+        tagAffinity.set(norm, (tagAffinity.get(norm) ?? 0) + w);
       }
     }
-
-    // ---- graph signals (relationship strength) ------------------------------
-    const { data: following } = await supabase
-      .from("follows")
-      .select("target_id")
-      .eq("follower_id", myId);
-    const firstDegree = new Set<string>((following ?? []).map((f: any) => f.target_id));
-    let secondDegree = new Set<string>();
-    if (firstDegree.size) {
-      const { data: theirFollows } = await supabase
-        .from("follows")
-        .select("target_id")
-        .in("follower_id", [...firstDegree].slice(0, 200));
-      secondDegree = new Set<string>(
-        (theirFollows ?? [])
-          .map((f: any) => f.target_id)
-          .filter((id: string) => id !== myId && !firstDegree.has(id)),
-      );
-    }
+    const secondDegree = new Set<string>(
+      (theirFollowsRes.data ?? [])
+        .map((f: any) => f.target_id)
+        .filter((id: string) => id !== myId && !firstDegree.has(id)),
+    );
 
     // ---- candidate generation ------------------------------------------------
-    // Pool 1: recent posts (covers followed + 2nd degree + everything else).
-    // Fetched in chunks so the pool holds EVERY visible post, not just the
-    // newest few hundred — an older post can only leave the feed because it
-    // ranked below the page window, never because a `limit` silently cut it
-    // off. The short chunk answers fast, so stopping there costs nothing.
-    // Fetched as ONE parallel batch instead of a sequential 4-request walk:
-    // the candidate ceiling is identical, but the whole pool lands in ~a single
-    // round trip rather than four back-to-back ones (plus a fifth for trending),
-    // so a cold epoch can no longer stall past the client's fetch timeout. Empty
-    // trailing ranges cost nothing on a small DB.
-    const POOL_CHUNK = 500;
-    const POOL_MAX = 2000;
-    const trendingSince = new Date(Date.now() - 48 * 3_600_000).toISOString();
-    const poolBatch = await Promise.all([
-      ...Array.from({ length: POOL_MAX / POOL_CHUNK }, (_, i) =>
-        supabase
-          .from("posts")
-          .select("*")
-          .eq("hidden", false)
-          .order("created_at", { ascending: false })
-          .range(i * POOL_CHUNK, i * POOL_CHUNK + POOL_CHUNK - 1),
-      ),
-      // Pool 2: trending — highest engagement in the last 48h, independent of
-      // recency rank, so a viral post a viewer hasn't seen yet still surfaces.
-      supabase
-        .from("posts")
-        .select("*")
-        .eq("hidden", false)
-        .gte("created_at", trendingSince)
-        .order("like_count", { ascending: false })
-        .limit(300),
-    ]);
+    // Await the pool already in flight above — the pool walk no longer serialises
+    // behind the behaviour and graph phases.
+    const poolBatch = await poolBatchPromise;
     const recentRows: any[] = [];
     for (const res of poolBatch.slice(0, -1)) {
       if (!res.error && res.data?.length) recentRows.push(...res.data);

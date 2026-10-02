@@ -131,6 +131,35 @@ export interface PostsPage {
 }
 
 /**
+ * Ceiling for the personalised "For you" ranker call. Its cold path runs a
+ * handful of graph/behaviour reads plus a multi-chunk candidate walk; on a
+ * remote or cold database that can exceed the client's page guard, and because
+ * the timeout wraps the WHOLE getPostsPage call a slow ranker would reject the
+ * feed rather than degrade. Bounding it here lets getPostsPage fall through to
+ * the fast recency query so posts always paint quickly; personalised ranking
+ * still wins whenever it responds in time (warm snapshot / healthy connection).
+ * Kept below PAGE_REQUEST_TIMEOUT_MS (15s) so this budget fires first.
+ */
+const RANKER_BUDGET_MS = 9_000;
+
+/** Reject `p` if it hasn't settled within `ms`; clears the timer on settle. */
+function withBudget<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`ranker over budget (${ms}ms)`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
+/**
  * Cursor-paginated post fetch used by the feed's infinite scroll. "For you" is
  * ranked server-side and pages via the ranker's composite cursor; every other
  * filter pages chronologically via a `created_at` (`before`) cursor. Keeping
@@ -143,13 +172,18 @@ export async function getPostsPage(options: PostsPageOptions = {}): Promise<Post
   if (options.filter === "foryou" && !options.userId && !options.tag && isDbId(me())) {
     try {
       const { getForYouPosts } = await import("@/lib/recommendations.functions");
-      const res: any = await getForYouPosts({
-        data: {
-          limit: Math.min(options.limit ?? appConfig.feed.pageSize, appConfig.feed.maxPageSize),
-          cursor: options.cursor,
-          refresh: options.refresh,
-        },
-      });
+      // Bound the ranker so a slow cold path can't blow the client's page guard;
+      // over budget it rejects into the catch below, which serves recency instead.
+      const res: any = await withBudget(
+        getForYouPosts({
+          data: {
+            limit: Math.min(options.limit ?? appConfig.feed.pageSize, appConfig.feed.maxPageSize),
+            cursor: options.cursor,
+            refresh: options.refresh,
+          },
+        }),
+        RANKER_BUDGET_MS,
+      );
       const ranked = (res?.posts ?? []).map((row: any) => rowToPost(row));
       if (ranked.length > 0) {
         await hydrateAuthors(ranked.map((p: Post) => p.user_id));
