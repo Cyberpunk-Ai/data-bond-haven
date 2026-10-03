@@ -11,7 +11,7 @@ import { Avatar } from "@/components/social/Avatar";
 import { FeedSkeleton } from "@/components/social/PostSkeleton";
 import { getCachedFeedData, triggerFeedPreload } from "@/lib/feed-cache";
 import type { Post, Profile, Story } from "@/lib/types";
-import { currentUser, getProfile } from "@/lib/profile-service";
+import { currentUser, getProfile, isProfilePending, useProfiles } from "@/lib/profile-service";
 import { getPostsPage, getStories } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
 import { useAuth } from "@/lib/auth-state";
@@ -82,19 +82,29 @@ function StoriesBar({ stories, onOpenStory, onOpenCreator }: StoriesBarProps) {
   const mounted = useMounted();
   const activeUser = user || currentUser;
   const myStories = stories.filter((s) => s.user_id === activeUser.id);
-  const storyUserIds = Array.from(
-    new Set(stories.filter((s) => s.user_id && s.user_id !== activeUser.id).map((s) => s.user_id)),
+  const storyUserIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          stories.filter((s) => s.user_id && s.user_id !== activeUser.id).map((s) => s.user_id),
+        ),
+      ),
+    [stories, activeUser.id],
   );
+  // The rail's labels are read from the profile cache. A story from somebody the
+  // app has not met yet has no name in it yet, so subscribe to the reads that
+  // fill the gap instead of showing a hole that never closes.
+  const knownProfiles = useProfiles(storyUserIds);
   const otherUsers = useMemo(() => {
     const seen = new Set<string>();
     return storyUserIds
-      .map((uid) => getProfile(uid))
+      .map((uid) => knownProfiles[uid] ?? getProfile(uid))
       .filter((u) => {
         if (!u?.id || seen.has(u.id)) return false;
         seen.add(u.id);
         return true;
       });
-  }, [storyUserIds]);
+  }, [storyUserIds, knownProfiles]);
 
   // Map users to their most recent story if available
   const userStoryMap = new Map<string, { story: Story; index: number }>();
@@ -238,7 +248,11 @@ function StoriesBar({ stories, onOpenStory, onOpenCreator }: StoriesBarProps) {
                   hasStory ? "font-bold text-foreground" : "font-medium text-muted-foreground",
                 )}
               >
-                {user.display_name.split(" ")[0]}
+                {isProfilePending(user) ? (
+                  <span className="mx-auto block h-3 w-10 animate-pulse rounded bg-foreground/15" />
+                ) : (
+                  user.display_name.split(" ")[0]
+                )}
               </span>
             </button>
           );

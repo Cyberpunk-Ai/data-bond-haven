@@ -39,6 +39,7 @@ import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { useTheme, ACCENT_PALETTES, type ThemeAccent, type ThemeMode } from "@/lib/theme-state";
 import { usePreferences } from "@/lib/preferences-state";
 import { notificationPermission, requestNotificationPermission } from "@/lib/browser-notifications";
+import { setPresenceHidden } from "@/lib/presence";
 import { PLAN_DETAILS, type PlanTier } from "@/lib/plans";
 import { PaymentHistory } from "@/components/social/PaymentHistory";
 import { cn } from "@/lib/utils";
@@ -120,17 +121,24 @@ function Toggle({
   defaultOn = false,
   checked,
   onChange,
+  disabled = false,
+  soon = false,
 }: {
   label: string;
   description: string;
   defaultOn?: boolean;
   checked?: boolean;
   onChange?: (v: boolean) => void;
+  /** Switch is inert: the behaviour behind it is not live yet. */
+  disabled?: boolean;
+  /** Renders a "soon" chip so an inert switch reads as honest, not broken. */
+  soon?: boolean;
 }) {
   const [internalOn, setInternalOn] = useState(defaultOn);
   const on = checked !== undefined ? checked : internalOn;
 
   const handleToggle = () => {
+    if (disabled) return;
     if (onChange) {
       onChange(!on);
     } else {
@@ -141,7 +149,14 @@ function Toggle({
   return (
     <div className="flex items-start justify-between gap-4 rounded-2xl p-3 transition-colors duration-300 hover:bg-foreground/5">
       <div className="min-w-0">
-        <p className="text-sm font-bold">{label}</p>
+        <p className="flex items-center gap-2 text-sm font-bold">
+          <span>{label}</span>
+          {soon && (
+            <span className="rounded-full bg-foreground/10 px-1.5 py-0.5 text-[0.6rem] font-extrabold uppercase tracking-wide text-muted-foreground">
+              Soon
+            </span>
+          )}
+        </p>
         <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
       </div>
       <button
@@ -150,9 +165,11 @@ function Toggle({
         role="switch"
         aria-checked={on}
         aria-label={label}
+        disabled={disabled}
         className={cn(
           "relative h-6 w-11 shrink-0 rounded-full transition-colors duration-300",
-          on ? "bg-gradient-to-r from-brand to-brand-pink" : "bg-foreground/15",
+          disabled && "cursor-not-allowed opacity-40",
+          on && !disabled ? "bg-gradient-to-r from-brand to-brand-pink" : "bg-foreground/15",
         )}
       >
         <span
@@ -206,7 +223,6 @@ function SettingsPage() {
   const [notifyFollowers, setNotifyFollowers] = usePersistentToggle("notify_followers", true);
   const [notifyMentions, setNotifyMentions] = usePersistentToggle("notify_mentions", true);
   const [notifySpaces, setNotifySpaces] = usePersistentToggle("notify_spaces", false);
-  const [notifyDigest, setNotifyDigest] = usePersistentToggle("notify_digest", false);
 
   // System (OS) alert preferences — consumed by useDesktopNotifications and
   // IncomingCallProvider when the app itself isn't visible/focused.
@@ -240,11 +256,26 @@ function SettingsPage() {
     });
   };
 
-  // Persistent privacy preferences
-  const [privAccount, setPrivAccount] = usePersistentToggle("priv_account", false);
+  // Persistent privacy preferences. Only switches the product can honour today
+  // are live; the rest are honest "soon" placeholders — a toggle that saves a
+  // value nothing reads is worse than no toggle at all.
   const [hideActivity, setHideActivity] = usePersistentToggle("hide_activity", false);
-  const [filterSensitive, setFilterSensitive] = usePersistentToggle("filter_sensitive", true);
-  const [allowRequests, setAllowRequests] = usePersistentToggle("allow_requests", true);
+  // Both of these are enforced in the database, not just stored: a closed
+  // request window is refused by a trigger on `messages`, and the sensitive
+  // filter is honoured by the blur the feed applies to flagged media. They live
+  // on the account for the same reason, so a phone and a laptop agree.
+  const [allowMessageRequests, setAllowMessageRequests] = usePersistentToggle(
+    "allow_message_requests",
+    true,
+  );
+  const [filterSensitive, setFilterSensitive] = usePersistentToggle("filter_sensitive", false);
+
+  // Hiding activity is enforced here, publisher-side: the presence channel
+  // stops announcing this device, so peers never see us online or last-seen.
+  const toggleHideActivity = (next: boolean) => {
+    setHideActivity(next);
+    setPresenceHidden(next);
+  };
 
   const activeUser = user || currentUser;
   const [form, setForm] = useState({
@@ -535,8 +566,9 @@ function SettingsPage() {
                 <Toggle
                   label="Email digest"
                   description="A weekly summary of what you missed."
-                  checked={notifyDigest}
-                  onChange={setNotifyDigest}
+                  checked={false}
+                  disabled
+                  soon
                 />
               </div>
             )}
@@ -546,26 +578,27 @@ function SettingsPage() {
                 <Toggle
                   label="Private account"
                   description="Only approved followers can see your posts."
-                  checked={privAccount}
-                  onChange={setPrivAccount}
+                  checked={false}
+                  disabled
+                  soon
                 />
                 <Toggle
                   label="Hide activity status"
                   description="Don't show when you were last online."
                   checked={hideActivity}
-                  onChange={setHideActivity}
+                  onChange={toggleHideActivity}
                 />
                 <Toggle
                   label="Filter sensitive content"
-                  description="Blur media flagged by the community."
+                  description="Blur media the community has flagged. Tap to reveal."
                   checked={filterSensitive}
                   onChange={setFilterSensitive}
                 />
                 <Toggle
                   label="Allow message requests"
-                  description="Let people you don't follow reach you."
-                  checked={allowRequests}
-                  onChange={setAllowRequests}
+                  description="Let people you don't follow start a thread with you."
+                  checked={allowMessageRequests}
+                  onChange={setAllowMessageRequests}
                 />
               </div>
             )}
@@ -676,14 +709,11 @@ function SettingsPage() {
               <div className="space-y-4">
                 <div className="space-y-1">
                   <Toggle
-                    label="Two-factor authentication"
-                    description="Require a code at every new sign-in."
-                    defaultOn
-                  />
-                  <Toggle
                     label="Login alerts"
                     description="Email me about new devices."
-                    defaultOn
+                    checked={false}
+                    disabled
+                    soon
                   />
                 </div>
 

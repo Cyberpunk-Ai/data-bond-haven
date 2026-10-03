@@ -57,6 +57,15 @@ export const appConfig = {
     // Opus ceiling for one voice. 64 kbit/s mono is transparent for speech; the
     // mesh pays for it per uplink, so it stays configurable (useSpaceAudio).
     audioMaxKbps: num("VITE_SPACES_AUDIO_KBPS", 64),
+    // The mesh's real limit is not how many people talk, it is how many people
+    // each talker has to feed: one RTCPeerConnection, one encoder and one
+    // audioMaxKbps uplink per listener, per speaker. 40 ≈ 2.6 Mbit/s sustained
+    // from one browser, which is as far as a laptop upload reliably goes. Past
+    // it `meshAudience` stops pairing new listeners and the room says so, rather
+    // than quietly overloading the stage until everyone's audio breaks. Rooms
+    // bigger than this need the SFU below (one uplink per speaker, fan-out on
+    // the server instead of on the talker's upload).
+    maxMeshListeners: num("VITE_SPACES_MESH_LISTENERS", 40),
     sfuProvider: str("VITE_SPACES_SFU_PROVIDER", ""),
     sfuUrl: str("VITE_SPACES_SFU_URL", ""),
     recordingMaxMb: num("VITE_SPACES_RECORDING_MAX_MB", 100),

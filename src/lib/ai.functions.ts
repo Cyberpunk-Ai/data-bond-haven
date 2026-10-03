@@ -38,12 +38,20 @@ async function getAdmin(): Promise<AdminClient> {
 async function consumeQuota(authUserId: string) {
   const admin = await getAdmin();
 
-  const { data: profile } = await admin
+  const { data: profile, error: profileError } = await admin
     .from("profiles")
     .select("id")
     .eq("auth_user_id", authUserId)
     .maybeSingle();
 
+  if (profileError) {
+    // A rejected service key surfaces as a query *error*, not as an empty row.
+    // Saying "Profile not found" here sent everyone hunting the wrong bug —
+    // this reads exactly like what it is: the server cannot reach its own DB.
+    throw new Error(
+      "The AI service can't reach the account database. Check that SUPABASE_SERVICE_ROLE_KEY in .env matches this Supabase project.",
+    );
+  }
   if (!profile) throw new Error("Profile not found");
 
   // The allowance is read from `plan_limits` through the same resolver every
@@ -55,11 +63,16 @@ async function consumeQuota(authUserId: string) {
   const limit = aiDailyLimitOrThrow(limits.ai_drafts_per_day);
   const planName = PLAN_DETAILS[limits.plan]?.name ?? limits.plan;
 
-  const { data: sub } = await admin
+  const { data: sub, error: subError } = await admin
     .from("subscriptions")
     .select("ai_drafts_used, ai_usage_date")
     .eq("user_id", profile.id)
     .maybeSingle();
+  if (subError) {
+    throw new Error(
+      "The AI service can't read your usage counter. Check that SUPABASE_SERVICE_ROLE_KEY in .env matches this Supabase project.",
+    );
+  }
 
   const sameDay = sub?.ai_usage_date === today();
   const used = sameDay ? Number(sub?.ai_drafts_used ?? 0) : 0;
@@ -117,6 +130,12 @@ async function chat(system: string, user: string): Promise<string> {
     },
     body: JSON.stringify({
       model,
+      // Every prompt below demands JSON-only output. Without this, reasoning
+      // models wrap the object in prose or code fences (and Gemini-2.5-flash
+      // happily writes a short novel instead of a 90-char caption); the fence
+      // scraper in parseJson then falls back to sliced gibberish. The gateways
+      // we support all honour the OpenAI-compatible json_object mode.
+      response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -203,19 +222,21 @@ export const aiStoryCaption = createServerFn({ method: "POST" })
     const raw = await chat(
       "You write captions for 24-hour photo/video stories. " +
         'Reply ONLY with JSON: {"text": string, "mood": string, "suggestedStickers": string[]}. ' +
-        "text is at most 90 characters. mood is one lowercase word. suggestedStickers is 3 emoji.",
+        "text is ONE sentence, at most 90 characters, poetic but concrete. " +
+        'mood is a single emoji followed by up to two capitalized words, e.g. "✨ Inspired". ' +
+        "suggestedStickers is exactly 3 emoji.",
       `Story about: ${data.prompt}`,
     );
 
     const parsed = parseJson<{ text: string; mood: string; suggestedStickers: string[] }>(raw, {
       text: raw.slice(0, 90),
-      mood: "inspired",
+      mood: "✨ Inspired",
       suggestedStickers: ["✨", "🔥", "💫"],
     });
 
     return {
-      text: parsed.text?.slice(0, 120) ?? "",
-      mood: parsed.mood ?? "inspired",
+      text: parsed.text?.slice(0, 90) ?? "",
+      mood: parsed.mood ?? "✨ Inspired",
       suggestedStickers: (parsed.suggestedStickers ?? []).slice(0, 3),
       usage: { used: quota.used, limit: quota.limit },
     };

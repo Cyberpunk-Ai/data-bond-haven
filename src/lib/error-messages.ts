@@ -18,6 +18,18 @@ const FORBIDDEN =
 const CONFLICT = "That already exists. Try a different value and retry.";
 const RATE_LIMIT = "You're doing that a bit too fast — wait a moment and try again.";
 
+/**
+ * Tokens our own database triggers raise (`raise exception 'SOME_TOKEN'`).
+ * They are stable on purpose — a trigger must not care who is calling — but a
+ * person has never seen one before, so every path that can hit it would
+ * otherwise display the raw string. Add the sentence here once, and the toast,
+ * the DM composer and the story reply all agree.
+ */
+const TRIGGER_TOKENS: Record<string, string> = {
+  MESSAGE_REQUESTS_CLOSED:
+    "They only accept messages from people they follow, so this thread stays closed.",
+};
+
 /** Signatures of an unintentional, technical message (env names, PG errors, codes). */
 const TECHNICAL =
   /environment variable|[A-Z][A-Z0-9_]{2,}_(URL|KEY|SECRET|TOKEN|PEPPER)|api[_ -]?key|not configured|missing (required )?(secret|env|variable)|permission denied|row[- ]level security|violates .*constraint|duplicate key|_unique|unique constraint|is not unique|does not exist|foreign key|not-null|relation .*exists|\b(?:pg|pgrst)[ _-]|postgrest|syntax error|invalid json|unexpected token|cannot read|cannot destructure|is not a function|undefined is not|null is not|renegotiat|stack overflow|internal server error|\bhttp status \d{3}\b/i;
@@ -30,6 +42,11 @@ export function friendlyError(err: unknown, fallback: string = GENERIC): string 
     msg = String((err as { message?: unknown }).message ?? "");
   msg = msg.trim();
   if (!msg) return fallback;
+
+  // A trigger token is an exact, known string — translate it before anything
+  // else gets to decide it looks technical.
+  const token = TRIGGER_TOKENS[msg.toUpperCase()];
+  if (token) return token;
 
   // Zod throws with a JSON array of issues as its message — never show that
   // raw payload; surface the first human-written issue message instead.

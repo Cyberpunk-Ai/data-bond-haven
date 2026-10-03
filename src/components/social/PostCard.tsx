@@ -28,6 +28,7 @@ import {
   ExternalLink,
   CornerDownLeft,
   Pencil,
+  Eye,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -63,6 +64,12 @@ import {
 import { useRealtime } from "@/lib/realtime";
 import { usePlan } from "@/lib/plan-state";
 import { useAuth } from "@/lib/auth-state";
+import { usePreferences } from "@/lib/preferences-state";
+import {
+  shouldBlurSensitive,
+  sensitiveMediaNotice,
+  sensitiveRevealLabel,
+} from "@/lib/content-filter";
 import { cn, optimizeImageUrl, isVideoUrl } from "@/lib/utils";
 import { ClampText } from "@/components/social/ClampText";
 
@@ -271,6 +278,18 @@ function PostCardBase({
   const activeUser = user || currentUser;
   const { profile: hookProfile } = useProfile(post.user_id);
   const author = hookProfile ?? getProfile(post.user_id);
+  // "Filter sensitive content" is a reader control, not a takedown: the post is
+  // here for everybody, and this person's preference decides whether the media
+  // arrives blurred under a veil that is one tap from being gone. The rules —
+  // including never blurring your own upload — live in `lib/content-filter`.
+  const { toggle: readToggle } = usePreferences();
+  const [sensitiveRevealed, setSensitiveRevealed] = useState(false);
+  const blurMedia = shouldBlurSensitive({
+    post,
+    filterEnabled: readToggle("filter_sensitive", false),
+    viewerId: activeUser?.id,
+    revealed: sensitiveRevealed,
+  });
   // A post published on behalf of a team workspace shows the brand, not the
   // member who hit send (they're credited as "via @handle").
   const ws = post.workspace ?? null;
@@ -289,6 +308,9 @@ function PostCardBase({
 
   // Sync state if post prop changes
   useEffect(() => {
+    // A revealed card is a decision about *this* post. Swapping the card's
+    // contents would otherwise leave the next one's media already un-blurred.
+    setSensitiveRevealed(false);
     setState({
       liked: !!post.likedByMe,
       likes: post.likeCount || 0,
@@ -1269,113 +1291,155 @@ function PostCardBase({
       </header>
 
       {/* Media attachment (Image, Video, or Multi-Image Gallery) */}
-      {(() => {
-        // Gather and flatten all possible sources into a unique, cleaned array
-        const candidateUrls: string[] = [];
-        const sources = [mediaSrc, (post as any).media_urls, (post as any).images];
+      {/* Wrapped so a sensitive post can be veiled without touching any of the
+          media layouts below: the veil is one overlay, the gallery/video/image
+          branches stay exactly as they are. */}
+      <div className="relative">
+        <div
+          aria-hidden={blurMedia || undefined}
+          className={cn(
+            "transition-all duration-300",
+            blurMedia && "pointer-events-none select-none blur-2xl",
+          )}
+        >
+          {(() => {
+            // Gather and flatten all possible sources into a unique, cleaned array
+            const candidateUrls: string[] = [];
+            const sources = [mediaSrc, (post as any).media_urls, (post as any).images];
 
-        for (const src of sources) {
-          if (!src) continue;
-          if (Array.isArray(src)) {
-            candidateUrls.push(...src.filter((s) => typeof s === "string"));
-          } else if (typeof src === "string") {
-            if (src.includes(",")) {
-              candidateUrls.push(...src.split(",").map((s) => s.trim()));
-            } else {
-              candidateUrls.push(src.trim());
+            for (const src of sources) {
+              if (!src) continue;
+              if (Array.isArray(src)) {
+                candidateUrls.push(...src.filter((s) => typeof s === "string"));
+              } else if (typeof src === "string") {
+                if (src.includes(",")) {
+                  candidateUrls.push(...src.split(",").map((s) => s.trim()));
+                } else {
+                  candidateUrls.push(src.trim());
+                }
+              }
             }
-          }
-        }
 
-        const allMedia = Array.from(
-          new Set(candidateUrls.filter((u) => typeof u === "string" && u.trim() !== "")),
-        );
+            const allMedia = Array.from(
+              new Set(candidateUrls.filter((u) => typeof u === "string" && u.trim() !== "")),
+            );
 
-        if (allMedia.length === 0 || imageError) return null;
+            if (allMedia.length === 0 || imageError) return null;
 
-        const hasVideo = allMedia.some(isVideoUrl);
+            const hasVideo = allMedia.some(isVideoUrl);
 
-        // Multi-image/media carousel (completely scrollable with snap alignments)
-        if (allMedia.length > 1) {
-          return (
-            <div className="mt-3.5 space-y-1.5 pl-14 pr-1">
-              <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground px-0.5">
-                <span className="flex items-center gap-1">
-                  <Sparkles className="h-3 w-3 text-brand" /> {allMedia.length} Media attachments
-                </span>
-                <span className="text-[10px] uppercase tracking-wider font-mono bg-muted/60 dark:bg-muted/10 px-2.5 py-0.5 rounded-full text-muted-foreground/95 flex items-center gap-1">
-                  Swipe ❔
-                </span>
-              </div>
-              <div className="flex gap-2.5 overflow-x-auto pb-2 pt-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden touch-pan-x snap-x snap-mandatory">
-                {allMedia.map((url, idx) => (
-                  <div
-                    key={`${url}_${idx}`}
-                    className={cn(
-                      "relative overflow-hidden rounded-2xl border border-border/70 bg-neutral-950/20 aspect-[4/3] group/card cursor-pointer shadow-xs shrink-0 snap-start",
-                      hasVideo
-                        ? "w-full"
-                        : allMedia.length === 2
-                          ? "w-[calc(50%-5px)]"
-                          : "w-[85%] sm:w-[48%]",
-                    )}
-                    onClick={() => {
-                      setPreviewMediaUrl(url);
-                      setShowImagePreview(true);
-                    }}
-                  >
-                    {isVideoUrl(url) ? (
-                      <ModernVideoPlayer src={url} className="w-full h-full object-cover" />
-                    ) : (
-                      <img
-                        src={optimizeImageUrl(url, 800)}
-                        alt={`Attachment ${idx + 1}`}
-                        loading="lazy"
-                        className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
-                      />
-                    )}
-                    <div className="absolute top-2.5 right-2.5 rounded-full bg-black/60 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold text-white/95 shadow-sm z-10 font-mono">
-                      {idx + 1}/{allMedia.length}
-                    </div>
+            // Multi-image/media carousel (completely scrollable with snap alignments)
+            if (allMedia.length > 1) {
+              return (
+                <div className="mt-3.5 space-y-1.5 pl-14 pr-1">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground px-0.5">
+                    <span className="flex items-center gap-1">
+                      <Sparkles className="h-3 w-3 text-brand" /> {allMedia.length} Media
+                      attachments
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wider font-mono bg-muted/60 dark:bg-muted/10 px-2.5 py-0.5 rounded-full text-muted-foreground/95 flex items-center gap-1">
+                      Swipe ❔
+                    </span>
                   </div>
-                ))}
+                  <div className="flex gap-2.5 overflow-x-auto pb-2 pt-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden touch-pan-x snap-x snap-mandatory">
+                    {allMedia.map((url, idx) => (
+                      <div
+                        key={`${url}_${idx}`}
+                        className={cn(
+                          "relative overflow-hidden rounded-2xl border border-border/70 bg-neutral-950/20 aspect-[4/3] group/card cursor-pointer shadow-xs shrink-0 snap-start",
+                          hasVideo
+                            ? "w-full"
+                            : allMedia.length === 2
+                              ? "w-[calc(50%-5px)]"
+                              : "w-[85%] sm:w-[48%]",
+                        )}
+                        onClick={() => {
+                          setPreviewMediaUrl(url);
+                          setShowImagePreview(true);
+                        }}
+                      >
+                        {isVideoUrl(url) ? (
+                          <ModernVideoPlayer src={url} className="w-full h-full object-cover" />
+                        ) : (
+                          <img
+                            src={optimizeImageUrl(url, 800)}
+                            alt={`Attachment ${idx + 1}`}
+                            loading="lazy"
+                            className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
+                          />
+                        )}
+                        <div className="absolute top-2.5 right-2.5 rounded-full bg-black/60 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold text-white/95 shadow-sm z-10 font-mono">
+                          {idx + 1}/{allMedia.length}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+
+            const singleUrl = allMedia[0];
+            if (isVideoUrl(singleUrl) || (post as any).media_type === "video") {
+              return (
+                <div className="mt-3.5 overflow-hidden rounded-2xl border border-border/60 bg-black relative w-full shadow-md">
+                  <ModernVideoPlayer src={singleUrl} className="w-full" />
+                </div>
+              );
+            }
+
+            return (
+              <div
+                onClick={() => {
+                  setPreviewMediaUrl(singleUrl);
+                  setShowImagePreview(true);
+                }}
+                className="mt-3.5 overflow-hidden rounded-2xl border border-border/60 bg-neutral-950/20 dark:bg-black/30 cursor-zoom-in transition-all duration-300 hover:border-brand/50 group relative flex items-center justify-center w-full p-0 sm:p-0.5 aspect-[4/3]"
+              >
+                <img
+                  src={optimizeImageUrl(singleUrl, 1000)}
+                  alt="Post media"
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  onError={() => setImageError(true)}
+                  className="w-full h-full block object-cover rounded-2xl sm:rounded-xl transition-transform duration-500 ease-out group-hover:scale-[1.008]"
+                />
+                <div className="pointer-events-none absolute bottom-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-full bg-black/70 backdrop-blur-md px-2.5 py-1 text-[10px] font-bold text-white/95 flex items-center gap-1 shadow-sm">
+                  <Maximize2 className="h-3 w-3 text-brand" /> Zoom
+                </div>
               </div>
-            </div>
-          );
-        }
+            );
+          })()}
+        </div>
 
-        const singleUrl = allMedia[0];
-        if (isVideoUrl(singleUrl) || (post as any).media_type === "video") {
-          return (
-            <div className="mt-3.5 overflow-hidden rounded-2xl border border-border/60 bg-black relative w-full shadow-md">
-              <ModernVideoPlayer src={singleUrl} className="w-full" />
-            </div>
-          );
-        }
-
-        return (
-          <div
-            onClick={() => {
-              setPreviewMediaUrl(singleUrl);
-              setShowImagePreview(true);
-            }}
-            className="mt-3.5 overflow-hidden rounded-2xl border border-border/60 bg-neutral-950/20 dark:bg-black/30 cursor-zoom-in transition-all duration-300 hover:border-brand/50 group relative flex items-center justify-center w-full p-0 sm:p-0.5 aspect-[4/3]"
-          >
-            <img
-              src={optimizeImageUrl(singleUrl, 1000)}
-              alt="Post media"
-              loading="lazy"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              onError={() => setImageError(true)}
-              className="w-full h-full block object-cover rounded-2xl sm:rounded-xl transition-transform duration-500 ease-out group-hover:scale-[1.008]"
-            />
-            <div className="pointer-events-none absolute bottom-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-full bg-black/70 backdrop-blur-md px-2.5 py-1 text-[10px] font-bold text-white/95 flex items-center gap-1 shadow-sm">
-              <Maximize2 className="h-3 w-3 text-brand" /> Zoom
-            </div>
+        {blurMedia && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl p-4">
+            <button
+              type="button"
+              onClick={() => setSensitiveRevealed(true)}
+              className="flex max-w-[85%] cursor-pointer flex-col items-center gap-1.5 rounded-2xl border border-border bg-card/95 px-4 py-3 text-center shadow-soft transition-colors hover:bg-foreground/5"
+            >
+              <Eye className="h-4 w-4 text-brand" />
+              <span className="text-xs font-bold text-foreground">
+                {sensitiveMediaNotice(post.sensitive_source)}
+              </span>
+              <span className="text-[11px] font-semibold text-muted-foreground">
+                {sensitiveRevealLabel(false)}
+              </span>
+            </button>
           </div>
-        );
-      })()}
+        )}
+
+        {!blurMedia && post.is_sensitive && readToggle("filter_sensitive", false) && (
+          <button
+            type="button"
+            onClick={() => setSensitiveRevealed(false)}
+            className="absolute bottom-1 right-1 z-10 rounded-full border border-border bg-card/90 px-2.5 py-1 text-[10px] font-bold text-muted-foreground shadow-xs transition-colors hover:text-foreground cursor-pointer"
+          >
+            {sensitiveRevealLabel(true)}
+          </button>
+        )}
+      </div>
 
       {/* Image Full-screen Lightbox Modal */}
       {showImagePreview &&

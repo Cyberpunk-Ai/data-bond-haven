@@ -4,7 +4,14 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 
 import { supabase } from "@/integrations/supabase/client";
 import { appConfig } from "@/lib/config";
-import { canBroadcast, initiatesPair, isOverCapacity, shouldPair } from "@/lib/spaces-stage";
+import {
+  canBroadcast,
+  initiatesPair,
+  isOverCapacity,
+  meshAudience,
+  meshSaturated,
+  pairAllowedByAudience,
+} from "@/lib/spaces-stage";
 import { buildIceServers } from "@/lib/webrtc/ice";
 
 /**
@@ -54,7 +61,10 @@ const LEVEL_POLL_MS = 200;
 
 type Signal =
   | { kind: "offer" | "answer"; from: string; to: string; sdp: RTCSessionDescriptionInit }
-  | { kind: "ice"; from: string; to: string; candidate: RTCIceCandidateInit };
+  | { kind: "ice"; from: string; to: string; candidate: RTCIceCandidateInit }
+  // "don't bother calling me": sent when the audience budget says this pair
+  // should not exist, so the offering side stops waiting for an answer.
+  | { kind: "reject"; from: string; to: string };
 
 export type SpaceAudioStatus = "idle" | "connecting" | "live" | "mic-blocked" | "error";
 
@@ -71,6 +81,15 @@ export function useSpaceAudio(opts: {
   const [peers, setPeers] = useState<string[]>([]);
   const [speakingIds, setSpeakingIds] = useState<Set<string>>(new Set());
   const [overCapacity, setOverCapacity] = useState(false);
+  // Fan-out, reported honestly. `overFanOut` is the room's own verdict (more
+  // listeners than this mesh can feed, the same number on every device); the
+  // stage trips it while still sounding fine, because a speaker only has to
+  // carry the first `maxMeshListeners` of them. `unheard` is personal: this
+  // device is a listener on the wrong side of that budget, so it is in the room
+  // and cannot be given audio — which must be said out loud rather than left as
+  // a dead speaker icon.
+  const [overFanOut, setOverFanOut] = useState(false);
+  const [unheard, setUnheard] = useState(false);
   const [recordingBytes, setRecordingBytes] = useState(0);
   const [isRecordingLocally, setIsRecordingLocally] = useState(false);
   // Browsers refuse to start remote audio until the page has seen a gesture.
@@ -93,6 +112,9 @@ export function useSpaceAudio(opts: {
   stageRef.current = canBroadcast(speaker ? "speaker" : "listener");
   const channelRef = useRef<RealtimeChannel | null>(null);
   const roster = useRef(new Map<string, { speaker: boolean }>());
+  // The audience verdict from the last presence sync. Null until presence has
+  // arrived: a rule that has never been evaluated must not refuse a call.
+  const servedRef = useRef<Set<string> | null>(null);
   const syncRef = useRef<(() => void) | null>(null);
   const negotiateRef = useRef<((peerId: string) => void) | null>(null);
   // The track every connection publishes from the first offer onwards: silence
@@ -590,11 +612,29 @@ export function useSpaceAudio(opts: {
       setPeers(others);
       const stage = [...roster.current.values()].filter((r) => r.speaker).length;
       setOverCapacity(isOverCapacity(stage, appConfig.realtime.maxMeshSpeakers));
-      // Pair when either side is on the stage; the lower id offers, so two sides
-      // never send an offer to each other at the same moment.
+      // Fan-out. Who the stage can afford to feed is worked out from presence
+      // alone, and the input is the *whole* roster — including this device — so
+      // that every browser in the room slices the same list and agrees on the
+      // answer. Excluding yourself would give each tab a different queue, which
+      // is how one side offers and the other refuses.
+      const cap = appConfig.realtime.maxMeshListeners;
+      const listeners = [...roster.current.keys()].filter((id) => !roster.current.get(id)?.speaker);
+      const served = meshAudience({ listenerIds: listeners, cap });
+      servedRef.current = served;
+      setOverFanOut(meshSaturated({ listenerIds: listeners, cap }));
+      setUnheard(!stageRef.current && stage > 0 && !served.has(userId));
+      // Pair when either side is on the stage *and* the audience budget covers
+      // that link; the lower id offers, so two sides never send an offer to each
+      // other at the same moment.
       for (const id of others) {
         const they = !!roster.current.get(id)?.speaker;
-        const needs = shouldPair(stageRef.current, they);
+        const needs = pairAllowedByAudience({
+          me: userId,
+          peer: id,
+          meOnStage: stageRef.current,
+          peerOnStage: they,
+          served,
+        });
         if (needs && !pcs.current.has(id) && initiatesPair(userId, id)) void connectTo(id);
         if (!needs && pcs.current.has(id)) closePeer(id);
         // Somebody just stepped up: their audio may already be arriving on a
@@ -612,6 +652,34 @@ export function useSpaceAudio(opts: {
       .on("broadcast", { event: "signal" }, async ({ payload }) => {
         const msg = payload as Signal;
         if (msg.to !== userId) return;
+        if (msg.kind === "reject") {
+          // The other side's audience budget does not include us. Close the
+          // half-built link instead of sitting in "connecting" forever; a later
+          // presence change is what re-evaluates it, so this cannot loop.
+          closePeer(msg.from);
+          return;
+        }
+        // An offer from someone the mesh must not be paired with (a room caught
+        // mid-flip, a tab running stale presence): refuse it rather than accept
+        // an extra uplink the sender's own rules would drop a second later.
+        // Only judged once presence has landed for both of us — until then the
+        // sender's role is a guess, and `sync()` reconciles it moments later.
+        const served = servedRef.current;
+        if (
+          msg.kind === "offer" &&
+          served &&
+          roster.current.has(msg.from) &&
+          !pairAllowedByAudience({
+            me: userId,
+            peer: msg.from,
+            meOnStage: stageRef.current,
+            peerOnStage: !!roster.current.get(msg.from)?.speaker,
+            served,
+          })
+        ) {
+          await send({ kind: "reject", from: userId, to: msg.from }).catch(() => undefined);
+          return;
+        }
         const pc = getPc(msg.from);
         try {
           if (msg.kind === "offer") {
@@ -647,6 +715,7 @@ export function useSpaceAudio(opts: {
       channelRef.current = null;
       syncRef.current = null;
       negotiateRef.current = null;
+      servedRef.current = null;
       [...roomPeers.current.keys()].forEach(closePeer);
       restartTimers.current.forEach((timer) => clearTimeout(timer));
       restartTimers.current.clear();
@@ -715,6 +784,8 @@ export function useSpaceAudio(opts: {
     peers,
     speakingIds,
     overCapacity,
+    overFanOut,
+    unheard,
     needsGesture,
     unlock,
     startRecording,

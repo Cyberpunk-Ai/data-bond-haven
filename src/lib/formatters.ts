@@ -61,6 +61,21 @@ export function memberSince(isoString?: string | null): string {
   return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(date);
 }
 
+/**
+ * The DM body for a story reply. Only quote the story when there is text to
+ * quote, and only add the ellipsis when we actually truncated — a media-only
+ * story reads "Replied to your story: …", not "Replied to your story
+ * \"story\": …", and "Hi" never becomes "Hi...".
+ */
+export function storyReplyBody(
+  story: { text?: string | null; caption?: string | null },
+  reply: string,
+): string {
+  const raw = (story.text || story.caption || "").trim();
+  const quote = raw ? ` "${raw.length > 40 ? `${raw.slice(0, 40).trimEnd()}…` : raw}"` : "";
+  return `Replied to your story${quote}: ${reply}`;
+}
+
 export function timeAgo(isoString: string, _now?: unknown): string {
   if (!isoString) return "";
   const date = new Date(isoString);

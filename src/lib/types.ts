@@ -192,6 +192,11 @@ export interface Post {
   edited_at?: string | null;
   /** Staff hid this from every feed without deleting it (`posts.hidden`). */
   hidden?: boolean;
+  /** Media three separate reporters called inappropriate, or a staff decision.
+   *  Reader-controlled: Settings > Privacy decides whether it arrives blurred. */
+  is_sensitive?: boolean;
+  /** Who decided the above — `community` | `staff` — used for the wording only. */
+  sensitive_source?: string | null;
   /** Set when the post was published on behalf of a team workspace. */
   workspace_id?: string | null;
   /** Hydrated brand identity for workspace posts (shown instead of the member). */

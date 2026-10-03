@@ -220,6 +220,68 @@ export function canRouteAudio(el: unknown): boolean {
   );
 }
 
+/**
+ * Is this row of the device picker the device the call is using right now?
+ *
+ * Browsers blank `deviceId` (and the label) until the page holds media
+ * permission, so an empty id is the "system default" row rather than a real
+ * device. Comparing ids the wrong way round is how a picker ends up ticking a
+ * microphone nobody is speaking into, which is worse than ticking nothing.
+ */
+export function isLiveDevice(candidate: string | undefined, activeId: string | undefined): boolean {
+  const mine = activeId ?? "";
+  const theirs = candidate ?? "";
+  if (mine) return theirs === mine;
+  // Nothing known is in use: only the default row may claim the highlight.
+  return theirs === "";
+}
+
+/**
+ * The layout follows the media, never the button that started the call.
+ *
+ * A voice call that either person switched their camera on *is* a video call now
+ * — the far side has to be able to see them without first being told to turn
+ * their own camera on, and the frame has to stay mounted for the switch to be a
+ * cross-fade instead of a rebuild. Conversely a call dialled as video that has
+ * no picture anywhere in it must not reserve space for one.
+ */
+export function callCarriesVideo(state: {
+  dialled: "audio" | "video";
+  cameraOn: boolean;
+  sharing: boolean;
+  peerCamera: boolean;
+  peerShare: boolean;
+}): boolean {
+  return (
+    state.dialled === "video" ||
+    state.cameraOn ||
+    state.sharing ||
+    state.peerCamera ||
+    state.peerShare
+  );
+}
+
+/**
+ * Should the big remote pane hold its frame on screen?
+ *
+ * When it does, the avatar is composited *over* a video element that is already
+ * decoding, so their camera arriving is one opacity change instead of a
+ * teardown, remount and a black beat in between.
+ */
+export function remotePaneFramed(pane: RemotePaneContent, hasVideo: boolean): boolean {
+  return pane !== "avatar" || hasVideo;
+}
+
+/**
+ * Your picture-in-picture exists only while you are actually sending one. A
+ * black rectangle labelled "Camera off" on a voice call is the chrome that makes
+ * a perfectly healthy call look broken: nothing is wrong with the camera, because
+ * nobody turned one on.
+ */
+export function selfTileVisible(state: { cameraOn: boolean; sharing: boolean }): boolean {
+  return Boolean(state.cameraOn || state.sharing);
+}
+
 export interface CallChatMessage {
   id: string;
   text: string;
@@ -323,20 +385,60 @@ export interface VideoEncodeHint {
   degradationPreference: RTCDegradationPreference;
 }
 
-/** 720p30 is ~1.2 Mbps of real detail; a 1080p desktop needs more for text. */
+/**
+ * What the encoder should protect, per outgoing stream.
+ *
+ * 720p30 of a face is roughly 1.5 Mbps of real detail; the ceiling used to be
+ * 1.2, which the encoder met by softening the picture — the "blurry" half of the
+ * complaints. 1.6 buys sharpness back without eating the microphone, because the
+ * audio sender is given its own slice below.
+ */
 export const VIDEO_ENCODE_HINTS: Record<OutgoingVideoKind, VideoEncodeHint> = {
   camera: {
     contentHint: "motion",
-    maxBitrate: 1_200_000,
+    maxBitrate: 1_600_000,
     degradationPreference: "balanced",
   },
   screen: {
     contentHint: "detail",
-    maxBitrate: 2_200_000,
+    maxBitrate: 2_400_000,
     degradationPreference: "maintain-resolution",
   },
 };
 
 export function videoEncodeHint(kind: OutgoingVideoKind): VideoEncodeHint {
   return VIDEO_ENCODE_HINTS[kind] ?? VIDEO_ENCODE_HINTS.camera;
+}
+
+/**
+ * Speech needs far less than 1.6 Mbps and must never compete with the camera for
+ * it. Opus is transparent above 64 kbps for one voice, so the microphone gets a
+ * small guaranteed slice and the video congestion controller cannot spend it.
+ */
+export const AUDIO_MAX_BITRATE = 64_000;
+
+/**
+ * Ask the camera for fewer pixels when the link is failing.
+ *
+ * `applyConstraints` is a local operation — no renegotiation, no blip on the
+ * other side — and it is the difference between a call that goes soft and
+ * readable and one that stutters and drops. The shape is a plain object so a
+ * test can assert the policy without a MediaTrack to hand to the browser.
+ */
+export interface AdaptiveVideoProfile {
+  width: number;
+  height: number;
+  frameRate: number;
+}
+
+export const VIDEO_PROFILES: Record<"full" | "reduced" | "minimal", AdaptiveVideoProfile> = {
+  full: { width: 1280, height: 720, frameRate: 30 },
+  reduced: { width: 960, height: 540, frameRate: 24 },
+  minimal: { width: 640, height: 360, frameRate: 15 },
+};
+
+export function adaptiveVideoProfile(quality: CallQuality): "full" | "reduced" | "minimal" {
+  if (quality === "poor") return "minimal";
+  if (quality === "fair") return "reduced";
+  return "full";
 }

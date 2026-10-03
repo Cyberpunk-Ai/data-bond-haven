@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Headphones,
   Volume2,
+  VolumeX,
   Loader2,
   Shield,
   Heart,
@@ -34,10 +35,19 @@ import {
 import { Avatar } from "@/components/social/Avatar";
 import { TipModal } from "@/components/social/TipModal";
 import type { Space, Profile } from "@/lib/types";
-import { currentUser, getProfile, fetchProfile, useProfile } from "@/lib/profile-service";
+import {
+  currentUser,
+  getProfile,
+  findProfile,
+  fetchProfile,
+  isProfilePending,
+  useProfile,
+} from "@/lib/profile-service";
 import { useSpaceAudio } from "@/hooks/useSpaceAudio";
 import {
   joinSpace,
+  spaceHeartbeat,
+  SPACE_HEARTBEAT_MS,
   getSpaceRoom,
   setSpaceParticipantRole,
   leaveSpace,
@@ -109,6 +119,42 @@ interface ChatMessage {
   timestamp: string;
 }
 
+/** One person in the room, as the room's UI needs it: the participant row plus
+ *  the name and face the profile cache supplies. */
+interface RoomRosterRow {
+  id: string;
+  role: "host" | "speaker" | "listener";
+  isSpeaking?: boolean;
+  isMuted?: boolean;
+  handRaised?: boolean;
+  display_name: string;
+  username: string;
+  avatar_url?: string;
+}
+
+/** A room's host is always the host, whatever their participant row says. */
+type RoomParticipant = {
+  id: string;
+  role: "host" | "speaker" | "listener";
+  isSpeaking: boolean;
+  isMuted: boolean;
+  handRaised: boolean;
+};
+
+function toRosterRow(p: RoomParticipant, hostId: string): RoomRosterRow {
+  const profile = getProfile(p.id);
+  return {
+    id: p.id,
+    role: p.id === hostId ? "host" : p.role,
+    isSpeaking: p.isSpeaking,
+    isMuted: p.isMuted,
+    handRaised: p.handRaised,
+    display_name: profile.display_name,
+    username: profile.username,
+    avatar_url: profile.avatar_url || undefined,
+  };
+}
+
 export function SpaceRoomModal({ space, isOpen, onClose }: SpaceRoomModalProps) {
   if (!isOpen || !space) return null;
   return <SpaceRoomModalContent space={space} onClose={onClose} />;
@@ -171,18 +217,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     plan?: string | null;
   } | null>(null);
 
-  const [participants, setParticipants] = useState<
-    {
-      id: string;
-      role: "host" | "speaker" | "listener";
-      isSpeaking?: boolean;
-      isMuted?: boolean;
-      handRaised?: boolean;
-      display_name: string;
-      username: string;
-      avatar_url?: string;
-    }[]
-  >([]);
+  const [participants, setParticipants] = useState<RoomRosterRow[]>([]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -211,13 +246,6 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     const appliedEvents = eventIdsRef.current;
 
     void (async () => {
-      type RoomParticipant = {
-        id: string;
-        role: "host" | "speaker" | "listener";
-        isSpeaking: boolean;
-        isMuted: boolean;
-        handRaised: boolean;
-      };
       type RoomMessage = { id: string; userId: string; body: string; created_at: string };
       let loaded: { participants: RoomParticipant[]; messages: RoomMessage[] } = {
         participants: [],
@@ -252,19 +280,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           seen.add(p.id);
           return true;
         })
-        .map((p: RoomParticipant) => {
-          const profile = getProfile(p.id);
-          return {
-            id: p.id,
-            role: p.id === space.host_id ? ("host" as const) : p.role,
-            isSpeaking: p.isSpeaking,
-            isMuted: p.isMuted,
-            handRaised: p.handRaised,
-            display_name: profile.display_name,
-            username: profile.username,
-            avatar_url: profile.avatar_url || undefined,
-          };
-        });
+        .map((p: RoomParticipant) => toRosterRow(p, space.host_id));
 
       if (!seen.has(currentUser.id)) {
         list.push({
@@ -314,6 +330,110 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     };
   }, [space.id]);
 
+  // Roster rows arrive from the DB as an id plus a role; the name beside them
+  // lives in the profile cache, which is empty on a cold open. Without this the
+  // stage printed the raw UUID of everyone you had not already met, because
+  // nothing ever asked for those rows. One read per missing member, then the
+  // rows that gained a name are rewritten — and when nothing changed the array
+  // identity is left alone, so this cannot spin itself into a loop.
+  useEffect(() => {
+    const waiting = participants.filter((p) => isProfilePending(getProfile(p.id)));
+    if (waiting.length === 0) return undefined;
+    let alive = true;
+    void Promise.all(waiting.map((p) => fetchProfile(p.id).catch(() => null))).then(() => {
+      if (!alive) return;
+      setParticipants((prev) => {
+        let changed = false;
+        const next = prev.map((row) => {
+          const fresh = findProfile(row.id);
+          if (!fresh) return row;
+          const avatar = fresh.avatar_url || undefined;
+          if (row.display_name === fresh.display_name && row.username === fresh.username) {
+            if (row.avatar_url === avatar) return row;
+          }
+          changed = true;
+          return {
+            ...row,
+            display_name: fresh.display_name,
+            username: fresh.username,
+            avatar_url: avatar,
+          };
+        });
+        return changed ? next : prev;
+      });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [participants]);
+
+  // Presence. The row this room opened is what grants the room its capacity,
+  // its listener count and its place on the signalling channel — and none of
+  // that is released by the cleanup above when the tab is closed rather than
+  // left, because a closed tab runs no cleanup. So while the room is open this
+  // device says "still here" every 25s, and the server uses the same call to
+  // sweep the members who stopped saying it (see `space_heartbeat`).
+  const listenerCountRef = useRef(0);
+  useEffect(() => {
+    listenerCountRef.current = participants.filter((p) => p.role === "listener").length;
+  }, [participants]);
+
+  useEffect(() => {
+    if (isReplay) return undefined;
+    let alive = true;
+    const beat = () => {
+      void spaceHeartbeat(space.id)
+        .then((count) => {
+          // The server's number only disagrees with ours when somebody arrived
+          // or expired — which is precisely when the roster needs re-reading. A
+          // steady room therefore costs nothing extra beyond the beat itself.
+          if (alive && count !== null && count !== listenerCountRef.current) {
+            void refreshRoster();
+          }
+        })
+        .catch(() => undefined);
+    };
+    const iv = setInterval(beat, SPACE_HEARTBEAT_MS);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+    };
+    // `refreshRoster` reads the current room through its own call; the effect is
+    // keyed to the room, not to the roster, so a name arriving cannot restart a
+    // timer that is already running.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [space.id, isReplay]);
+
+  /** Re-read who is in the room, keeping my own row's local microphone state. */
+  async function refreshRoster() {
+    try {
+      const loaded = await getSpaceRoom(space.id);
+      const rows: RoomRosterRow[] = [];
+      for (const p of loaded.participants as RoomParticipant[]) {
+        if (!p?.id || rows.some((row) => row.id === p.id)) continue;
+        rows.push(toRosterRow(p, space.host_id));
+      }
+      if (rows.length === 0) return;
+      setParticipants((prev) => {
+        const mine = prev.find((row) => row.id === currentUser.id);
+        const next = rows.map((row) =>
+          mine && row.id === mine.id
+            ? {
+                ...row,
+                isMuted: mine.isMuted,
+                isSpeaking: mine.isSpeaking,
+                handRaised: mine.handRaised,
+              }
+            : row,
+        );
+        if (mine && !next.some((row) => row.id === mine.id)) next.push(mine);
+        return next;
+      });
+    } catch {
+      /* keep the roster we have; the next beat tries again */
+    }
+  }
+
   /** Put floaters on this screen. Everything the room should see arrives as an event. */
   const showFloats = (floats: FloatingReaction[]) => {
     if (floats.length === 0) return;
@@ -346,7 +466,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
     const id = typeof p?.sender_id === "string" ? p.sender_id : "";
     if (!id) return "";
     const name = getProfile(id).display_name?.trim() ?? "";
-    // A cache miss returns the id itself as the name, which is not a name.
+    // A cache miss carries no name at all — a UUID is not a name either.
     return name && name !== id ? name : "";
   }
 
@@ -1406,6 +1526,23 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
                 </span>
               ) : null}
               {!canRecordSpace && <span className="shrink-0">Replays need an upgrade</span>}
+            </div>
+          )}
+
+          {/* The mesh's audience budget, said out loud. A speaker's browser pays
+              one live encoder and one uplink *per listener*, so a room can grow
+              past what any browser can broadcast — and the listeners past that
+              point are connected to the room's text, not its audio. Silence with
+              no explanation reads as a broken room and gets blamed on the host;
+              the rule itself lives in lib/spaces-stage.ts. */}
+          {!isReplay && (audio.unheard || audio.overFanOut) && (
+            <div className="mx-3 sm:mx-4 mt-2 flex items-start gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+              <VolumeX className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                {audio.unheard
+                  ? `Live audio in this room reaches its first ${appConfig.realtime.maxMeshListeners} listeners, and you're past that — the conversation below is still live for you.`
+                  : `This Space is past what a peer-to-peer room can broadcast (${appConfig.realtime.maxMeshListeners} listeners): the newest arrivals can read the chat but can't be fed audio. A room this size needs a server mixer.`}
+              </span>
             </div>
           )}
 

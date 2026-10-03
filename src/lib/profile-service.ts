@@ -31,6 +31,15 @@ const profileCache = new Map<string, Profile>();
 
 const inflight = new Map<string, Promise<Profile | null>>();
 const listeners = new Set<() => void>();
+/**
+ * When each key was last asked for. A cache miss used to be permanent: the
+ * caller got a stand-in built out of the id itself, so a screen printed a raw
+ * UUID where a name belongs. Now a miss also schedules a read, and this map is
+ * what keeps a still-missing row (deleted account, offline) from re-requesting
+ * it on every render.
+ */
+const readAttempts = new Map<string, number>();
+const READ_RETRY_MS = 60_000;
 
 function notify() {
   listeners.forEach((fn) => {
@@ -85,16 +94,48 @@ export const profileRegistry: Record<string, Profile> = new Proxy(
   },
 ) as Record<string, Profile>;
 
+/**
+ * The identity half of a profile we have not read yet. Deliberately empty:
+ * `display_name` and `username` are what a screen shows, and inventing them out
+ * of the id is the bug this module had — "Guest" for the signed-in user and a
+ * UUID for anybody else, both flashing before the fetch landed. A waiting row
+ * carries the real `id` (so keys, links and follow checks keep working) and no
+ * name at all, which `isProfilePending` turns into a skeleton.
+ */
+function pendingProfile(idOrUsername: string): Profile {
+  return { ...GUEST_PROFILE, id: idOrUsername, username: "", display_name: "" };
+}
+
+/** True while a profile is only an id: show a loading state, not a name. */
+export function isProfilePending(profile: Profile | null | undefined): boolean {
+  if (!profile) return true;
+  if (profile.id === "guest") return false;
+  return !profile.display_name.trim() && !profile.username.trim();
+}
+
+/**
+ * The cached row for this id or username, or null. Never fabricates: callers
+ * that can render a loading state should use this instead of `getProfile`.
+ * A miss starts one read per key per minute; `fetchProfile` dedupes races and
+ * `notify()` repaints subscribers when the row lands.
+ */
+export function findProfile(idOrUsername?: string | null): Profile | null {
+  if (!idOrUsername || idOrUsername === "guest") return null;
+  const hit = profileCache.get(idOrUsername);
+  if (hit) return hit;
+  // Only in the browser: this runs during render, and a server render must not
+  // open a request for a component that will never repaint.
+  if (typeof document === "undefined") return null;
+  const last = readAttempts.get(idOrUsername) ?? 0;
+  if (Date.now() - last < READ_RETRY_MS) return null;
+  readAttempts.set(idOrUsername, Date.now());
+  void fetchProfile(idOrUsername).catch(() => null);
+  return null;
+}
+
 export function getProfile(idOrUsername?: string | null): Profile {
   if (!idOrUsername || idOrUsername === "guest") return GUEST_PROFILE;
-  const found = profileCache.get(idOrUsername);
-  if (found) return found;
-  return {
-    ...GUEST_PROFILE,
-    id: idOrUsername,
-    username: idOrUsername,
-    display_name: idOrUsername,
-  };
+  return findProfile(idOrUsername) ?? pendingProfile(idOrUsername);
 }
 
 export function rowToProfile(row: Record<string, unknown>): Profile {

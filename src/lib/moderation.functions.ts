@@ -191,12 +191,15 @@ export const moderateUser = createServerFn({ method: "POST" })
     return updated;
   });
 
-/** Hide or permanently remove a post. */
+/** Hide or permanently remove a post; mark or clear its sensitive-media flag. */
 export const moderatePost = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
     z
-      .object({ postId: z.string().uuid(), action: z.enum(["hide", "unhide", "delete"]) })
+      .object({
+        postId: z.string().uuid(),
+        action: z.enum(["hide", "unhide", "delete", "mark_sensitive", "unmark_sensitive"]),
+      })
       .parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -214,6 +217,36 @@ export const moderatePost = createServerFn({ method: "POST" })
         "danger",
       );
       return { ok: true, hidden: true, deleted: true };
+    }
+
+    if (data.action === "mark_sensitive" || data.action === "unmark_sensitive") {
+      const sensitive = data.action === "mark_sensitive";
+      // Written here rather than through the `moderate_post_sensitivity()` RPC:
+      // that function decides staff-ness from the caller's own JWT, and a
+      // service-role request has none — `assertStaff` above is this path's
+      // authorization, and it has already been satisfied.
+      //
+      // A staff decision also pins `sensitive_source`, which is what stops the
+      // community-report trigger from overriding a moderator either way.
+      const { error } = await staff.admin
+        .from("posts")
+        .update({
+          is_sensitive: sensitive,
+          sensitive_source: sensitive ? "staff" : null,
+        })
+        .eq("id", data.postId);
+      if (error) throw new Error(error.message);
+      await writeAudit(
+        staff,
+        sensitive ? "post.mark_sensitive" : "post.unmark_sensitive",
+        "post",
+        data.postId,
+        sensitive
+          ? "Media marked sensitive — readers with the filter on see it blurred"
+          : "Sensitive flag cleared by staff",
+        "warning",
+      );
+      return { ok: true, sensitive };
     }
 
     const hidden = data.action === "hide";

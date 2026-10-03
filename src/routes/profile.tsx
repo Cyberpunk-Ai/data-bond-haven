@@ -24,18 +24,21 @@ import { PostCard } from "@/components/social/PostCard";
 import { FeedSkeleton } from "@/components/social/PostSkeleton";
 import { TimeAgo } from "@/components/social/TimeAgo";
 import { DefaultRail } from "@/components/social/RightRail";
-import { FollowButton } from "@/components/social/RightRail";
 import { EditProfileModal } from "@/components/social/EditProfileModal";
 import { TipModal } from "@/components/social/TipModal";
 import { compact, memberSince } from "@/lib/formatters";
-import { currentUser as defaultUser, getProfile, fetchProfile } from "@/lib/profile-service";
+import {
+  currentUser as defaultUser,
+  getProfile,
+  fetchProfile,
+  isProfilePending,
+} from "@/lib/profile-service";
 import { getProfileTabPosts } from "@/lib/profile.functions";
 import type { Post, Profile } from "@/lib/types";
 import {
   getProfileTabPage,
   getCurrentUser,
   getUserProfile,
-  getProfileNetwork,
   toggleFollowUser,
   isFollowing as isFollowingUser,
   type ProfileTabPage,
@@ -51,6 +54,14 @@ import { toast } from "sonner";
 
 const AnalyticsDashboard = lazy(() =>
   import("@/components/social/AnalyticsDashboard").then((m) => ({ default: m.AnalyticsDashboard })),
+);
+
+// The roster is only worth its JS when a stat is clicked: code-split it out of
+// the profile's first-paint chunk and mount it lazily as a modal.
+const ProfileNetworkModal = lazy(() =>
+  import("@/components/social/ProfileNetworkModal").then((m) => ({
+    default: m.ProfileNetworkModal,
+  })),
 );
 
 export const Route = createFileRoute("/profile")({
@@ -76,8 +87,18 @@ export const Route = createFileRoute("/profile")({
   component: ProfilePage,
 });
 
-const ownTabs = ["Posts", "Replies", "Reposts", "Media", "Likes", "Network", "Analytics"] as const;
-const otherTabs = ["Posts", "Replies", "Reposts", "Media", "Network"] as const;
+const ownTabs = ["Posts", "Replies", "Reposts", "Media", "Likes", "Analytics"] as const;
+const otherTabs = ["Posts", "Replies", "Reposts", "Media"] as const;
+
+/**
+ * A waiting row that holds the shape of the text it stands in for. Reloading a
+ * profile used to paint a placeholder identity first ("Guest" for your own,
+ * the raw UUID for anybody else) and swap the real one in a moment later; the
+ * shimmer says *loading* instead of showing a name that was never true.
+ */
+function Shimmer({ className }: { className?: string }) {
+  return <span className={cn("block animate-pulse rounded bg-foreground/15", className)} />;
+}
 
 /** Tabs that list posts, and the query each one means. */
 const POST_TABS: Record<string, ProfileTabPage> = {
@@ -101,7 +122,7 @@ function ProfilePage() {
   const targetId = search.id || search.user;
 
   const { currentPlan, isPlus, isPro } = usePlan();
-  const { user: authUser } = useAuth();
+  const { user: authUser, loading: authLoading } = useAuth();
   const { branding, activeTheme } = useBranding();
   const { pendingBalance, loading: balanceLoading } = useCreatorBalance();
 
@@ -130,6 +151,12 @@ function ProfilePage() {
   // Load-first so the posts area shows the skeleton on the initial paint
   // instead of flashing "Nothing in posts yet" before the fetch resolves.
   const [loading, setLoading] = useState(true);
+  // A target that produced no row on either read (deleted/deactivated account,
+  // or the request never landed). The header has nothing honest to show then, so
+  // the page says so instead of holding a placeholder open forever.
+  const [profileUnresolved, setProfileUnresolved] = useState(false);
+  /** Bumped by the retry button to run the resolve again. */
+  const [resolveNonce, setResolveNonce] = useState(0);
   const [replies, setReplies] = useState<ProfileReply[]>([]);
   const [repliesLoading, setRepliesLoading] = useState(false);
   // Each tab streams one page at a time through its own cursor, so "Load more"
@@ -137,20 +164,24 @@ function ProfilePage() {
   const [loadingMore, setLoadingMore] = useState(false);
   /** Bumped by realtime events to re-run the current tab's query. */
   const [tabNonce, setTabNonce] = useState(0);
-  // The profile's live follower/following numbers and the network roster itself
-  // are re-read on their own nonce so a new follower can appear without
-  // disturbing whichever post tab is loaded or its scroll position.
+  // The profile's live follower/following numbers are re-read on their own
+  // nonce; the same nonce wakes an open network list so a new follower appears
+  // without disturbing whichever post tab is loaded or its scroll position.
   const [countsNonce, setCountsNonce] = useState(0);
-  const [network, setNetwork] = useState<{ followers: Profile[]; following: Profile[] }>({
-    followers: [],
-    following: [],
-  });
-  const [networkLoading, setNetworkLoading] = useState(false);
-  const [networkView, setNetworkView] = useState<"followers" | "following">("followers");
+  /** Which roster the network modal is showing; null keeps it closed. */
+  const [networkOpen, setNetworkOpen] = useState<"followers" | "following" | null>(null);
+
+  // Two different waits share this header: the session still resolving (which
+  // decides whether this is *my* profile at all) and the profile row still
+  // loading for somebody else's. Until the one that applies has answered, the
+  // only honest thing to show is the shimmer — not "Guest", not the UUID.
+  const headerPending =
+    !profileUnresolved && (authLoading || (!isMe && isProfilePending(userProfile)));
 
   useEffect(() => {
     setUserProfile(resolvedProfile);
     setTab("Posts");
+    setNetworkOpen(null);
   }, [resolvedProfile.id, targetId]);
 
   useEffect(() => {
@@ -172,6 +203,7 @@ function ProfilePage() {
     setTabPosts([]);
     setTabCursor(null);
     setAuthorId(null);
+    setProfileUnresolved(false);
     const profilePromise: Promise<string | null> = isMe
       ? getCurrentUser().then((res) => {
           if (res?.user) {
@@ -181,14 +213,18 @@ function ProfilePage() {
           return null;
         })
       : targetId
-        ? getUserProfile(targetId).then((res) => {
-            if (res?.profile) {
-              setUserProfile(res.profile);
-              void isFollowingUser(res.profile.id)
+        ? // `fetchProfile` is the same read `getUserProfile` did, but it shares
+          // the profile cache's in-flight map — so the header seeding on this
+          // render and the resolve below cost one request, not two.
+          fetchProfile(targetId).then((profile) => {
+            if (profile) {
+              setUserProfile(profile);
+              void isFollowingUser(profile.id)
                 .then(setIsFollowing)
                 .catch(() => {});
-              return res.profile.id;
+              return profile.id;
             }
+            if (active) setProfileUnresolved(true);
             return null;
           })
         : Promise.resolve(null);
@@ -201,7 +237,7 @@ function ProfilePage() {
     return () => {
       active = false;
     };
-  }, [isMe, targetId, viewerId]);
+  }, [isMe, targetId, viewerId, resolveNonce]);
 
   useEffect(() => {
     const query = POST_TABS[tab];
@@ -315,26 +351,6 @@ function ProfilePage() {
     };
   }, [countsNonce, authorId, isMe, userProfile?.id]);
 
-  // The Network tab lists actual people, so hydrate it lazily only when opened,
-  // and re-hydrate whenever a follow event changes the roster.
-  useEffect(() => {
-    const id = authorId ?? userProfile?.id;
-    if (tab !== "Network" || !id || id === "guest") return;
-    let alive = true;
-    setNetworkLoading(true);
-    getProfileNetwork(id)
-      .then((res) => {
-        if (alive) setNetwork(res);
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (alive) setNetworkLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [tab, countsNonce, authorId, userProfile?.id]);
-
   useRealtime(
     (event) => {
       if (event.type === "user_profile_updated" && event.id === userProfile.id) {
@@ -350,8 +366,8 @@ function ProfilePage() {
         setReplies((prev) => prev.filter((r) => r.post?.id !== event.postId));
       } else if (event.type === "follow_updated") {
         // A follow touched the profile we're viewing. Stamp the authoritative
-        // follower number the moment it arrives, then re-read the roster so a new
-        // follower shows up in the Network tab without a reload.
+        // follower number the moment it arrives, then re-read the roster so a
+        // new follower shows up (in an open network list) without a reload.
         if (event.targetUserId === userProfile.id && typeof event.followers === "number") {
           const nextFollowers = event.followers as number;
           setUserProfile((prev) => ({ ...prev, followers: nextFollowers }));
@@ -418,13 +434,46 @@ function ProfilePage() {
 
   const tabs = isMe ? ownTabs : otherTabs;
 
+  // Nothing resolved and nothing left to wait for: an honest answer beats a
+  // header frozen on a placeholder. Same shape `/u/$username` uses for a
+  // username that no longer exists.
+  if (profileUnresolved) {
+    return (
+      <AppShell title="Profile" right={<DefaultRail />}>
+        <div className="mx-auto max-w-2xl">
+          <Panel className="flex flex-col items-center gap-3 py-14 text-center">
+            <p className="text-lg font-bold">We couldn't load that profile</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              The account may have been deactivated, or the request never reached us.
+            </p>
+            <div className="mt-1 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setResolveNonce((n) => n + 1)}
+                className="inline-flex rounded-full bg-gradient-to-r from-brand to-brand-pink px-5 py-2.5 text-sm font-bold text-white cursor-pointer active:scale-95 transition-transform"
+              >
+                Try again
+              </button>
+              <Link
+                to="/feed"
+                className="inline-flex rounded-full border border-border px-5 py-2.5 text-sm font-bold text-foreground hover:bg-foreground/5 transition-colors"
+              >
+                Back to feed
+              </Link>
+            </div>
+          </Panel>
+        </div>
+      </AppShell>
+    );
+  }
+
   // The tab's rows come straight from the query that defines it. What used to
   // live here was four client-side filters over one list of this author's
   // posts, which could never find the posts *they* reposted or liked.
   const list = tabPosts;
 
   return (
-    <AppShell title={userProfile.display_name} right={<DefaultRail />}>
+    <AppShell title={headerPending ? "Profile" : userProfile.display_name} right={<DefaultRail />}>
       <div className="mx-auto max-w-2xl space-y-5">
         {/* Back button if viewing another profile */}
         {!isMe && (
@@ -456,14 +505,20 @@ function ProfilePage() {
           </div>
           <div className="px-4 sm:px-5 pb-5">
             <div className="-mt-12 sm:-mt-14 flex flex-wrap sm:flex-nowrap items-end justify-between gap-3">
-              <Avatar
-                name={userProfile.display_name}
-                src={userProfile.avatar_url}
-                className="h-20 w-20 sm:h-24 sm:w-24 text-xl sm:text-2xl ring-4 ring-card shadow-lg shrink-0"
-              />
+              {headerPending ? (
+                <span className="h-20 w-20 sm:h-24 sm:w-24 shrink-0 animate-pulse rounded-full bg-foreground/15 ring-4 ring-card" />
+              ) : (
+                <Avatar
+                  name={userProfile.display_name}
+                  src={userProfile.avatar_url}
+                  className="h-20 w-20 sm:h-24 sm:w-24 text-xl sm:text-2xl ring-4 ring-card shadow-lg shrink-0"
+                />
+              )}
               <div className="flex items-center gap-2 flex-wrap justify-end ml-auto">
                 {/* Tip Button */}
-                {isMe ? (
+                {headerPending ? (
+                  <Shimmer className="h-8 w-28 rounded-full" />
+                ) : isMe ? (
                   <button
                     onClick={() => setIsTipModalOpen(true)}
                     aria-label="Monetization and Tips"
@@ -497,7 +552,9 @@ function ProfilePage() {
                   <Share2 className="h-4 w-4" />
                 </button>
 
-                {isMe ? (
+                {headerPending ? (
+                  <Shimmer className="h-9 w-32 rounded-full" />
+                ) : isMe ? (
                   <>
                     <button
                       onClick={() => setIsEditModalOpen(true)}
@@ -543,21 +600,38 @@ function ProfilePage() {
 
             <div className="mt-4">
               <h1 className="flex items-center gap-2 text-2xl font-extrabold tracking-tight flex-wrap">
-                <span>{userProfile.display_name}</span>
-                <UserBadge
-                  isMe={isMe}
-                  plan={userProfile.plan}
-                  verified={userProfile.verified}
-                  size="md"
-                />
+                {headerPending ? (
+                  <Shimmer className="h-6 w-44" />
+                ) : (
+                  <span>{userProfile.display_name}</span>
+                )}
+                {!headerPending && (
+                  <UserBadge
+                    isMe={isMe}
+                    plan={userProfile.plan}
+                    verified={userProfile.verified}
+                    size="md"
+                  />
+                )}
               </h1>
-              <p className="text-sm text-muted-foreground">@{userProfile.username}</p>
+              <p className="text-sm text-muted-foreground">
+                {headerPending ? <Shimmer className="h-3.5 w-24" /> : `@${userProfile.username}`}
+              </p>
 
               {isMe && isPlus && branding.tagline && (
                 <p className="mt-1 text-xs font-semibold text-brand">✨ {branding.tagline}</p>
               )}
 
-              <p className="mt-3 text-[0.95rem] leading-relaxed">{userProfile.bio}</p>
+              <p className="mt-3 text-[0.95rem] leading-relaxed">
+                {headerPending ? (
+                  <span className="block space-y-1.5">
+                    <Shimmer className="h-3.5 w-full" />
+                    <Shimmer className="h-3.5 w-2/3" />
+                  </span>
+                ) : (
+                  userProfile.bio
+                )}
+              </p>
 
               <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
                 {userProfile.location && (
@@ -592,24 +666,30 @@ function ProfilePage() {
               <div className="mt-4 flex gap-6 text-sm">
                 <button
                   type="button"
-                  onClick={() => {
-                    setNetworkView("following");
-                    setTab("Network");
-                  }}
+                  onClick={() => setNetworkOpen("following")}
                   className="cursor-pointer hover:opacity-80 transition-opacity"
                 >
-                  <strong className="font-extrabold">{compact(userProfile.following || 0)}</strong>{" "}
+                  <strong className="font-extrabold">
+                    {headerPending ? (
+                      <Shimmer className="h-4 w-8 inline-block" />
+                    ) : (
+                      compact(userProfile.following || 0)
+                    )}
+                  </strong>{" "}
                   <span className="text-muted-foreground">Following</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setNetworkView("followers");
-                    setTab("Network");
-                  }}
+                  onClick={() => setNetworkOpen("followers")}
                   className="cursor-pointer hover:opacity-80 transition-opacity"
                 >
-                  <strong className="font-extrabold">{compact(userProfile.followers || 0)}</strong>{" "}
+                  <strong className="font-extrabold">
+                    {headerPending ? (
+                      <Shimmer className="h-4 w-8 inline-block" />
+                    ) : (
+                      compact(userProfile.followers || 0)
+                    )}
+                  </strong>{" "}
                   <span className="text-muted-foreground">Followers</span>
                 </button>
                 <span>
@@ -625,10 +705,7 @@ function ProfilePage() {
         {userProfile.followers > 0 && (
           <button
             type="button"
-            onClick={() => {
-              setNetworkView("followers");
-              setTab("Network");
-            }}
+            onClick={() => setNetworkOpen("followers")}
             className="w-full cursor-pointer text-left"
           >
             <Panel className="flex items-center gap-3 transition-colors hover:border-brand/40">
@@ -663,95 +740,7 @@ function ProfilePage() {
         </div>
 
         <div className="space-y-5">
-          {tab === "Network" ? (
-            <div className="space-y-4">
-              <div className="glass-panel flex items-center gap-1 rounded-full p-1">
-                {(["followers", "following"] as const).map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setNetworkView(v)}
-                    className={cn(
-                      "flex-1 rounded-full px-3 py-2 text-xs sm:text-sm font-bold capitalize transition-all duration-300 cursor-pointer min-h-[38px]",
-                      networkView === v
-                        ? "bg-gradient-to-r from-brand to-brand-pink text-white shadow-soft"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {v} ·{" "}
-                    {compact(
-                      v === "followers" ? userProfile.followers || 0 : userProfile.following || 0,
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              {networkLoading && network[networkView].length === 0 ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {[1, 2, 3, 4].map((n) => (
-                    <div key={n} className="glass-panel animate-pulse rounded-2xl p-3.5 h-[68px]" />
-                  ))}
-                </div>
-              ) : network[networkView].length > 0 ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {network[networkView].map((p) => (
-                    <div
-                      key={p.id}
-                      className="glass-panel flex items-center gap-3 rounded-2xl p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-lift"
-                    >
-                      <Link
-                        to="/profile"
-                        search={{ id: p.id, user: p.username }}
-                        className="shrink-0 transition-transform hover:scale-105 active:scale-95"
-                      >
-                        <Avatar
-                          name={p.display_name}
-                          src={p.avatar_url}
-                          className="h-11 w-11 text-sm"
-                        />
-                      </Link>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <Link
-                            to="/profile"
-                            search={{ id: p.id, user: p.username }}
-                            className="truncate text-sm font-bold text-foreground hover:text-brand transition-colors"
-                          >
-                            {p.display_name}
-                          </Link>
-                          <UserBadge plan={p.plan} verified={p.verified} size="xs" />
-                        </div>
-                        <Link
-                          to="/profile"
-                          search={{ id: p.id, user: p.username }}
-                          className="block truncate text-xs text-muted-foreground hover:text-brand transition-colors"
-                        >
-                          @{p.username}
-                        </Link>
-                      </div>
-                      {p.id !== viewerId && <FollowButton targetUserId={p.id} />}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <Panel className="py-12 text-center">
-                  <Users className="h-8 w-8 text-muted-foreground mx-auto mb-2 opacity-60" />
-                  <p className="font-bold">
-                    No {networkView === "followers" ? "followers" : "following"} yet
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">
-                    {networkView === "followers"
-                      ? isMe
-                        ? "People who follow you appear here the moment they do."
-                        : `@${userProfile.username} has no followers yet.`
-                      : isMe
-                        ? "Accounts you follow will show up here."
-                        : `@${userProfile.username} isn't following anyone yet.`}
-                  </p>
-                </Panel>
-              )}
-            </div>
-          ) : loading ? (
+          {loading ? (
             <FeedSkeleton />
           ) : tab === "Analytics" && isMe ? (
             <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl bg-muted/40" />}>
@@ -865,6 +854,24 @@ function ProfilePage() {
           plan: userProfile.plan,
         }}
       />
+
+      {/* Network roster — opened from the Following/Followers stats */}
+      {networkOpen && (
+        <Suspense fallback={null}>
+          <ProfileNetworkModal
+            profileId={authorId ?? userProfile.id}
+            username={userProfile.username}
+            initialView={networkOpen}
+            counts={{
+              followers: userProfile.followers || 0,
+              following: userProfile.following || 0,
+            }}
+            viewerId={viewerId}
+            refreshNonce={countsNonce}
+            onClose={() => setNetworkOpen(null)}
+          />
+        </Suspense>
+      )}
     </AppShell>
   );
 }

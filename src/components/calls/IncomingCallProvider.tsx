@@ -310,7 +310,13 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
         toast.info("This call is no longer available.");
         return;
       }
-      handledRef.current.add(callId);
+      // Deliberately NOT adding callId to handledRef here: this side is about to
+      // open a live modal whose watchCall needs to handle future terminal
+      // events (the caller hanging up). A leftover handled entry would be
+      // consumed by the self-echo guard and swallow that "ended", leaving the
+      // callee stuck on a dead call. Our own answer echo never reaches the
+      // watcher anyway — setIncomingCall(null) above already tore down the ring
+      // subscription, and watchCall subscribes only after the write lands.
       setActiveCall({ user: caller, type, callId, role: "callee", status: "active" });
       // The callee needs the same status feed as the caller: when the other
       // side hangs up, this window must close instead of sitting on a dead peer.
@@ -336,28 +342,28 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
       {activeCall && (
         <Suspense fallback={null}>
           <CallModal
-          partner={activeCall.user}
-          type={activeCall.type}
-          isOpen
-          callId={activeCall.callId}
-          role={activeCall.role}
-          callStatus={activeCall.status}
-          onClose={(seconds) => {
-            if (activeCall.callId) {
-              handledRef.current.add(activeCall.callId);
-              stopStatusRef.current();
-              // Cancelling while it still rings marks it missed — that DB write
-              // (not the timeout on the other device) stops their ringing.
-              // Otherwise the real talk time is recorded; it used to be written
-              // as a constant 0, so the call history never showed a duration.
-              void (
-                activeCall.status === "ringing"
-                  ? markCallMissed(activeCall.callId)
-                  : endCall(activeCall.callId, seconds)
-              ).catch(() => {});
-            }
-            setActiveCall(null);
-          }}
+            partner={activeCall.user}
+            type={activeCall.type}
+            isOpen
+            callId={activeCall.callId}
+            role={activeCall.role}
+            callStatus={activeCall.status}
+            onClose={(seconds) => {
+              if (activeCall.callId) {
+                handledRef.current.add(activeCall.callId);
+                stopStatusRef.current();
+                // Cancelling while it still rings marks it missed — that DB write
+                // (not the timeout on the other device) stops their ringing.
+                // Otherwise the real talk time is recorded; it used to be written
+                // as a constant 0, so the call history never showed a duration.
+                void (
+                  activeCall.status === "ringing"
+                    ? markCallMissed(activeCall.callId)
+                    : endCall(activeCall.callId, seconds)
+                ).catch(() => {});
+              }
+              setActiveCall(null);
+            }}
           />
         </Suspense>
       )}

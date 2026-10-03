@@ -56,7 +56,7 @@ const STOCK_PHOTOS = [
   },
 ];
 
-const MOODS = [
+const MOOD_SUGGESTIONS = [
   "✨ Inspired",
   "☕ Cozy",
   "🚀 Building",
@@ -81,7 +81,9 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
   const [selectedGradient, setSelectedGradient] = useState(GRADIENT_PRESETS[0].class);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [location, setLocation] = useState("Lisbon, PT");
-  const [mood, setMood] = useState("✨ Inspired");
+  // Mood is optional and free-typed: an empty string means "no mood", and both
+  // the preview and the viewer hide the chip for a falsy mood.
+  const [mood, setMood] = useState("");
   const [selectedStickers, setSelectedStickers] = useState<string[]>(["✨"]);
   const [fontSize, setFontSize] = useState<"sm" | "md" | "lg">("md");
 
@@ -155,7 +157,7 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
         gradient: selectedGradient,
         media_url: mediaUrl,
         location: location.trim() || undefined,
-        mood: mood || undefined,
+        mood: mood.trim() || undefined,
         stickers: selectedStickers,
       });
 
@@ -490,19 +492,47 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
 
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-bold text-foreground mb-1">
-                    <Smile className="h-3.5 w-3.5 text-brand" /> Current Mood
+                    <Smile className="h-3.5 w-3.5 text-brand" /> Mood
+                    <span className="font-medium text-muted-foreground">(optional)</span>
                   </label>
-                  <select
-                    value={mood}
-                    onChange={(e) => setMood(e.target.value)}
-                    className="w-full rounded-xl border border-border bg-card p-2.5 text-xs text-foreground focus:border-brand focus:outline-none"
-                  >
-                    {MOODS.map((m) => (
-                      <option key={m} value={m}>
+                  {/* Free-typed mood with one-tap suggestions — not a closed list. */}
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={mood}
+                      onChange={(e) => setMood(e.target.value)}
+                      maxLength={40}
+                      placeholder="Type a mood, e.g. 🌻 Sunny"
+                      className="w-full rounded-xl border border-border bg-foreground/5 p-2.5 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus:border-brand focus:outline-none"
+                    />
+                    {mood && (
+                      <button
+                        type="button"
+                        onClick={() => setMood("")}
+                        aria-label="Clear mood"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {MOOD_SUGGESTIONS.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setMood(m)}
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors",
+                          mood === m
+                            ? "border-brand bg-brand/10 text-brand"
+                            : "border-border bg-foreground/5 text-muted-foreground hover:text-foreground",
+                        )}
+                      >
                         {m}
-                      </option>
+                      </button>
                     ))}
-                  </select>
+                  </div>
                 </div>
               </div>
 

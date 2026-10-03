@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { supabase } from "@/integrations/supabase/client";
 import {
+  AUDIO_MAX_BITRATE,
   CALL_UI_SIGNALS,
+  VIDEO_PROFILES,
+  adaptiveVideoProfile,
   canApplyAnswer,
   classifyQuality,
   selectAudioSender,
@@ -85,17 +88,36 @@ const NO_CONTROLS: CallControls = {
   selectMicrophone: async () => {},
 };
 
-const CAMERA_CONSTRAINTS: MediaTrackConstraints = {
-  facingMode: "user",
-  width: { ideal: 1280 },
-  height: { ideal: 720 },
-  frameRate: { ideal: 30 },
-};
+/**
+ * Camera defaults, taken from the same profile table the adaptive sampler
+ * degrades to, so "good link" and "what we asked for at dial" cannot disagree.
+ */
+function cameraConstraintsFor(profile: keyof typeof VIDEO_PROFILES): MediaTrackConstraints {
+  const { width, height, frameRate } = VIDEO_PROFILES[profile];
+  return {
+    facingMode: "user",
+    width: { ideal: width },
+    height: { ideal: height },
+    frameRate: { ideal: frameRate },
+  };
+}
 
+/**
+ * Microphone constraints.
+ *
+ * `ideal` rather than bare booleans on purpose: a required `echoCancellation`
+ * makes the whole `getUserMedia` reject on a device whose driver cannot honour
+ * it (some headsets, some Linux builds), and the user got "we couldn't reach
+ * your microphone" for a call that could have run perfectly well with the
+ * processing left off. Same for the sample rate — 48 kHz is what Opus wants and
+ * what the call will get wherever the hardware can do it.
+ */
 const MICROPHONE_CONSTRAINTS: MediaTrackConstraints = {
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
+  echoCancellation: { ideal: true },
+  noiseSuppression: { ideal: true },
+  autoGainControl: { ideal: true },
+  channelCount: { ideal: 1 },
+  sampleRate: { ideal: 48_000 },
 };
 
 /** Reads the two numbers that describe how bad the link actually is. */
@@ -104,6 +126,13 @@ interface PairStats {
   selected?: boolean;
   inUse?: boolean;
   currentRoundTripTime?: number;
+}
+
+/** The DTLS handshake is the call's encryption: connected means the media is sealed. */
+interface TransportStats {
+  type?: string;
+  state?: string;
+  dtlsCipher?: string;
 }
 
 interface RtpStats {
@@ -131,6 +160,17 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
    * leave stale.
    */
   const [remoteVideoLive, setRemoteVideoLive] = useState(false);
+  /**
+   * Is the media path actually sealed? Read off the DTLS handshake in the stats
+   * rather than asserted, so a "encrypted" badge can never appear on a call that
+   * is still falling back to something else.
+   */
+  const [mediaEncrypted, setMediaEncrypted] = useState(false);
+  /** Which device ids are live, so the picker can tick the row in use. */
+  const [activeDeviceIds, setActiveDeviceIds] = useState<{ mic: string; camera: string }>({
+    mic: "",
+    camera: "",
+  });
   const [peerMedia, setPeerMedia] = useState<PeerMediaState>({
     camera: kind === "video",
     share: false,
@@ -156,6 +196,8 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
   const cameraOnRef = useRef(kind === "video");
   const sharingRef = useRef(false);
   const restartingRef = useRef(false);
+  /** The resolution the camera was last asked for, so the sampler does not re-ask. */
+  const appliedProfileRef = useRef<"full" | "reduced" | "minimal">("full");
   const handlersRef = useRef(new Map<string, Set<CallSignalHandler>>());
   const controlsRef = useRef<CallControls>(NO_CONTROLS);
 
@@ -228,11 +270,14 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
     localStreamRef.current = null;
     cameraTrackRef.current = null;
     micTrackRef.current = null;
+    appliedProfileRef.current = "full";
     controlsRef.current = NO_CONTROLS;
     setLocalStream(null);
     setRemoteStream(null);
     setRemoteHasVideo(false);
     setRemoteVideoLive(false);
+    setMediaEncrypted(false);
+    setActiveDeviceIds({ mic: "", camera: "" });
     setConnection("closed");
   }, []);
 
@@ -549,6 +594,7 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
           mic.enabled = micOnRef.current;
           micTrackRef.current = mic;
           stream.addTrack(mic);
+          noteDeviceId("mic", mic);
         }
 
         if (kind === "video") {
@@ -559,6 +605,7 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
             camera.enabled = cameraOnRef.current;
             cameraTrackRef.current = camera;
             stream.addTrack(camera);
+            noteDeviceId("camera", camera);
           } else {
             cameraOnRef.current = false;
             setCameraOn(false);
@@ -586,10 +633,11 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
       async function openCameraTrack(): Promise<MediaStreamTrack | null> {
         try {
           const s = await navigator.mediaDevices.getUserMedia({
-            video: CAMERA_CONSTRAINTS,
+            video: cameraConstraintsFor(appliedProfileRef.current),
             audio: false,
           });
           const track = s.getVideoTracks()[0] ?? null;
+          noteDeviceId("camera", track);
           // A face is motion, not text: this is the hint that makes the encoder
           // protect frame rate instead of smearing every movement into blocks.
           if (track) track.contentHint = videoEncodeHint("camera").contentHint;
@@ -597,6 +645,20 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
         } catch {
           return null;
         }
+      }
+
+      /**
+       * Remember which physical device a track came from, so the picker can mark
+       * the row in use instead of highlighting whichever entry has no id.
+       */
+      function noteDeviceId(which: "mic" | "camera", track: MediaStreamTrack | null) {
+        let id = "";
+        try {
+          id = track?.getSettings().deviceId ?? "";
+        } catch {
+          /* an ended track cannot say; the picker falls back to no highlight */
+        }
+        setActiveDeviceIds((prev) => (prev[which] === id ? prev : { ...prev, [which]: id }));
       }
 
       /**
@@ -626,6 +688,32 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
           /* unsupported tuning: the browser's own congestion control still applies */
         }
       }
+      /**
+       * Give the microphone its own guaranteed slice of the link.
+       *
+       * Left alone, the congestion controller treats audio as just another stream
+       * and the first thing it sacrifices when the wifi struggles — which is the
+       * call that turns robotic. Capping it at a transparent-but-small 64 kbps is
+       * the opposite of starving it: it makes speech the cheapest thing on the
+       * wire, so the video yields first and the voice never does.
+       */
+      async function tuneAudioSender(sender: RTCRtpSender | null) {
+        if (!sender) return;
+        try {
+          const params = sender.getParameters();
+          if (!params.encodings?.length) return;
+          await sender.setParameters({
+            ...params,
+            encodings: params.encodings.map((encoding) => ({
+              ...encoding,
+              maxBitrate: encoding.maxBitrate ?? AUDIO_MAX_BITRATE,
+            })),
+          });
+        } catch {
+          /* engine without audio encoding control: its own defaults still apply */
+        }
+      }
+
       /**
        * Puts a video track on the call's single video channel. Replacing an
        * existing one is instant and never renegotiates; going from "no video at
@@ -793,7 +881,10 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
       const selectCamera = async (deviceId: string) => {
         try {
           const s = await navigator.mediaDevices.getUserMedia({
-            video: { ...CAMERA_CONSTRAINTS, deviceId: { exact: deviceId } },
+            video: {
+              ...cameraConstraintsFor(appliedProfileRef.current),
+              deviceId: { exact: deviceId },
+            },
             audio: false,
           });
           const next = s.getVideoTracks()[0];
@@ -801,6 +892,7 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
           const prev = cameraTrackRef.current;
           next.enabled = cameraOnRef.current;
           cameraTrackRef.current = next;
+          noteDeviceId("camera", next);
           // New track in before the old one leaves. Removing first can leave the
           // preview element with no video track to select, and it paints black
           // until the next one lands - a flash the user reads as a bad call.
@@ -829,6 +921,7 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
           const prev = micTrackRef.current;
           next.enabled = micOnRef.current;
           micTrackRef.current = next;
+          noteDeviceId("mic", next);
           localStreamRef.current?.addTrack(next);
           if (prev) localStreamRef.current?.removeTrack(prev);
           syncLocalStream();
@@ -873,6 +966,9 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
           // A broadcast sent while the socket was down is simply gone, so the
           // other side re-syncs its camera/share state on every (re)connect.
           publishMediaState();
+          // Encoding parameters only stick once the transport is negotiated, so
+          // the audio floor is laid down here rather than at addTrack time.
+          void tuneAudioSender(selectAudioSender(pc.getSenders()));
         } else if (state === "failed") {
           // One ICE restart before giving up — flaky wifi and NAT rebinds usually
           // recover this way without dropping the call. Either side may restart now;
@@ -935,12 +1031,14 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
         // track, and the bug it hides is a quality chip that never updates.
         const pairs: PairStats[] = [];
         const inbound: RtpStats[] = [];
+        const transports: TransportStats[] = [];
         stats.forEach((report) => {
-          const row = report as unknown as PairStats & RtpStats;
+          const row = report as unknown as PairStats & RtpStats & TransportStats;
           if (row.type === "candidate-pair" && (row.selected || row.inUse)) pairs.push(row);
           if (row.type === "inbound-rtp" && typeof row.packetsReceived === "number") {
             inbound.push(row);
           }
+          if (row.type === "dtls-transport") transports.push(row);
         });
         // Video is the fragile stream; judge the call by it when there is one,
         // otherwise by the audio the call is actually running on.
@@ -953,6 +1051,12 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
         const lost = Math.max(0, stream?.packetsLost ?? 0);
         const lossRatio = received + lost > 0 ? lost / (received + lost) : null;
         if (!stopped) setQuality(classifyQuality({ rttMs, lossRatio }));
+        // WebRTC media is always DTLS-SRTP, but "encrypted" should be a
+        // measurement and not a claim: only say it once the handshake reports
+        // itself connected and has negotiated a real cipher suite.
+        if (!stopped) {
+          setMediaEncrypted(transports.some((t) => t.state === "connected" && !!t.dtlsCipher));
+        }
       } catch {
         /* getStats can fail mid-teardown */
       }
@@ -965,6 +1069,34 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
       clearInterval(timer);
     };
   }, [connection]);
+
+  // ---- adaptive video -------------------------------------------------------------
+  // A failing link is asking for fewer pixels, and `applyConstraints` is the only
+  // way to answer that costs nothing on the other end: it re-tunes the capture
+  // and the encoder locally, with no renegotiation and no flicker. Hysteresis is
+  // the point of `appliedProfileRef` — a quality chip that oscillates on a shaky
+  // connection would otherwise re-ask the camera twice a second.
+  useEffect(() => {
+    if (connection !== "connected") return;
+    const wanted = adaptiveVideoProfile(quality);
+    if (wanted === appliedProfileRef.current) return;
+    // Never degrade somebody's desktop: a slide at 360p is unreadable, and the
+    // screen share has its own "maintain-resolution" policy on purpose.
+    if (sharingRef.current) return;
+    const track = cameraTrackRef.current;
+    appliedProfileRef.current = wanted;
+    if (!track || track.readyState !== "live") return;
+    const { width, height, frameRate } = VIDEO_PROFILES[wanted];
+    void track
+      .applyConstraints({
+        width: { ideal: width },
+        height: { ideal: height },
+        frameRate: { ideal: frameRate },
+      })
+      .catch(() => {
+        /* a fixed camera cannot retune; the encoder's own degradation still applies */
+      });
+  }, [quality, connection]);
 
   const setMicEnabled = useCallback((on: boolean) => controlsRef.current.setMic(on), []);
   const setCameraEnabled = useCallback((on: boolean) => void controlsRef.current.setCamera(on), []);
@@ -992,6 +1124,9 @@ export function useCallSession({ callId, role, kind, enabled }: Options) {
     remoteHasVideo,
     remoteVideoLive,
     peerMedia,
+    mediaEncrypted,
+    activeDeviceIds,
+    canShareScreen: typeof navigator !== "undefined" && !!navigator.mediaDevices?.getDisplayMedia,
     sendSignal,
     onSignal,
     setMicEnabled,

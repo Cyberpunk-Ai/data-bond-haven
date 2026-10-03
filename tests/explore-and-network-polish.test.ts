@@ -180,7 +180,11 @@ describe("profile re-resolves when the signed-in viewer becomes known", () => {
   it("gates the resolve effect on viewerId so posts land after a fresh login", () => {
     const page = read("../src/routes/profile.tsx");
     expect(page).toContain("const viewerId = useCurrentUserId()");
-    expect(page).toContain("[isMe, targetId, viewerId]");
+    // Matched by pattern rather than a literal array: the deps list grows (a
+    // manual re-resolve nonce sits there now), but dropping `viewerId` out of it
+    // would re-break the case this was written for — landing on someone else's
+    // profile while the session is still resolving, then never re-reading.
+    expect(page).toMatch(/\[[^\]]*\bisMe[^\]]*,[^\]]*\btargetId[^\]]*,[^\]]*\bviewerId[^\]]*\]/);
   });
 });
 
@@ -208,37 +212,49 @@ describe("media proxy sets cache-control for repeat views", () => {
 
 describe("profile network reflects follows immediately", () => {
   const page = read("../src/routes/profile.tsx");
+  const modal = read("../src/components/social/ProfileNetworkModal.tsx");
 
-  it("exposes a roster fetch for both sides of the follow graph", () => {
-    expect(api).toContain("export async function getProfileNetwork");
+  it("exposes a batched roster fetch for both sides of the follow graph", () => {
+    expect(api).toContain("export async function getProfileNetworkPage");
     expect(api).toContain('.eq("target_id", profileId)');
     expect(api).toContain('.eq("follower_id", profileId)');
+    // One edge page per call: the roster walks in batches, never all at once.
+    expect(api).toContain(".range(from, from + limit - 1)");
+    expect(api).not.toContain("NETWORK_LIST_CAP");
+    expect(api).not.toContain("export async function getProfileNetwork(");
   });
 
   it("carries the follower id so a remote follow can light up the target", () => {
     expect(api).toContain("followerId: userId");
   });
 
-  it("adds a real Network tab that lists followers/following", () => {
-    expect(page).toContain('"Network"');
-    expect(page).toContain("getProfileNetwork");
-    expect(page).toContain('tab === "Network"');
-    expect(page).toContain("network[networkView]");
-    expect(page).toContain("<FollowButton");
+  it("drops the Network tab and opens the roster from the stats instead", () => {
+    expect(page).not.toContain('"Network"');
+    expect(page).not.toContain("getProfileNetwork");
+    expect(page).toContain('setNetworkOpen("following")');
+    expect(page).toContain('setNetworkOpen("followers")');
+    expect(page).toContain("<ProfileNetworkModal");
+    // Lazy, like the story modals: the roster's JS is only paid for on click.
+    expect(page).toContain('import("@/components/social/ProfileNetworkModal")');
+  });
+
+  it("fetches the roster in batches and walks older entries on demand", () => {
+    expect(modal).toContain("getProfileNetworkPage(profileId, view, 0)");
+    expect(modal).toContain("getProfileNetworkPage(profileId, view, offset)");
+    expect(modal).toContain("NETWORK_PAGE_SIZE");
+    expect(modal).toContain("<FollowButton");
   });
 
   it("re-reads counts and the roster when a follow event arrives", () => {
     expect(page).toContain('"follow_updated"');
     expect(page).toContain("setCountsNonce");
+    // The nonce is handed to the modal, so an open list re-reads too.
+    expect(page).toContain("refreshNonce={countsNonce}");
     const handler = between(
       page,
       "async function handleToggleFollow",
       "function handleShareProfile",
     );
     expect(handler).toContain("setCountsNonce((n) => n + 1)");
-  });
-
-  it("makes the follower/following stats open the Network tab", () => {
-    expect(page).toContain('setTab("Network")');
   });
 });

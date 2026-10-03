@@ -160,6 +160,15 @@ function ensureDbFeed() {
         }
       },
     )
+    // A call that resolves on either phone must appear in the thread on the
+    // other one. `calls participant read` means the feed only ever delivers a
+    // row belonging to the signed-in profile, so no third party can light this up.
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "calls" }, (p: any) => {
+      const row = p.new;
+      if (row?.id && (row.caller_id === currentUserId || row.callee_id === currentUserId)) {
+        dispatchLocal("call:resolved", { call: row, ...row });
+      }
+    })
     .subscribe();
   // Rejoin with the user's token after sign-in so access rules apply.
   if (authHooked) return;

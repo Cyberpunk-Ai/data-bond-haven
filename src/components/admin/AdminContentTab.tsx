@@ -22,6 +22,7 @@ import {
   getAdminPosts,
   forceDeletePostAdmin,
   hidePostAdmin,
+  markPostSensitiveAdmin,
   terminateSpaceAdmin,
   getSpaces,
   getStories,
@@ -56,6 +57,9 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
   // One in-flight hide/unhide at a time, so a double click cannot send the
   // same moderation action twice.
   const [hidingPostId, setHidingPostId] = useState<string | null>(null);
+  // Same guard for the sensitive-media flag, which is a different write and so
+  // must not be able to overlap with itself on the same row.
+  const [flaggingPostId, setFlaggingPostId] = useState<string | null>(null);
   // Posts page in 50-row chunks; the moderation table no longer ships the
   // newest 200 rows on every tab open or keystroke.
   const POSTS_PAGE = 50;
@@ -176,6 +180,37 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
       toast.error(friendlyError(err, "Couldn't update that post's visibility. Try again."));
     } finally {
       setHidingPostId(null);
+    }
+  };
+
+  /**
+   * The lightest intervention the moderation toolkit has: the post stays
+   * published and stays in every feed, readers who turned the sensitive-content
+   * filter on just see its media behind a tap-to-reveal veil. Use it when the
+   * media is legal but not something people should meet unprepared.
+   */
+  const handleToggleSensitive = async (post: Post) => {
+    const next = !post.is_sensitive;
+    setFlaggingPostId(post.id);
+    try {
+      await markPostSensitiveAdmin(post.id, next);
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === post.id
+            ? { ...p, is_sensitive: next, sensitive_source: next ? "staff" : null }
+            : p,
+        ),
+      );
+      setPreviewPost((prev) =>
+        prev && prev.id === post.id
+          ? { ...prev, is_sensitive: next, sensitive_source: next ? "staff" : null }
+          : prev,
+      );
+      showToast(next ? "Media marked sensitive for filtered readers" : "Sensitive flag cleared");
+    } catch (err: any) {
+      toast.error(friendlyError(err, "Couldn't update that post's sensitivity. Try again."));
+    } finally {
+      setFlaggingPostId(null);
     }
   };
 
@@ -384,6 +419,21 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
                             }
                           >
                             {post.hidden ? "Restore" : "Hide"}
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleToggleSensitive(post);
+                            }}
+                            disabled={flaggingPostId === post.id}
+                            className="rounded-xl border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[0.7rem] font-bold text-violet-700 dark:text-violet-300 hover:bg-violet-500/20 disabled:opacity-60"
+                            title={
+                              post.is_sensitive
+                                ? "Clear the sensitive flag (overrides the community threshold)"
+                                : "Blur this post's media for readers with the filter on"
+                            }
+                          >
+                            {post.is_sensitive ? "Unblur" : "Blur"}
                           </button>
                           <button
                             onClick={(e) => {

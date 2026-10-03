@@ -40,6 +40,8 @@ import { Avatar } from "@/components/social/Avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TimeAgo, useLiveNow } from "@/components/social/TimeAgo";
 import { useCallDialer } from "@/components/calls/IncomingCallProvider";
+import { CallCardChip } from "@/components/social/CallCardChip";
+import { buildThreadTimeline, type CallCard } from "@/lib/call-cards";
 import { usePresenceMap } from "@/lib/presence";
 import { InfoModal } from "@/components/social/InfoModal";
 import { TipModal } from "@/components/social/TipModal";
@@ -49,6 +51,7 @@ import type { Conversation, Message, Profile } from "@/lib/types";
 import {
   getConversations,
   getMessages,
+  getCallHistory,
   sendMessage,
   uploadMedia,
   getUserProfile,
@@ -115,9 +118,17 @@ const DEFAULT_USERS_TO_START = [
   { id: "u_zane", username: "zane", display_name: "Zane Sterling", bio: "Motion designer" },
 ];
 
-/** Calendar day of a message, used to break the thread into dated sections. */
-function dayKey(iso: string) {
-  return new Date(iso).toDateString();
+/** The dated strip that separates one day of the thread from the next. */
+function DayDivider({ ms }: { ms: number }) {
+  return (
+    <div className="my-4 flex items-center gap-3">
+      <span className="h-px flex-1 bg-border/60" />
+      <span className="rounded-full bg-foreground/5 px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
+        {dayLabel(new Date(Number.isFinite(ms) ? ms : Date.now()).toISOString())}
+      </span>
+      <span className="h-px flex-1 bg-border/60" />
+    </div>
+  );
 }
 
 function dayLabel(iso: string) {
@@ -717,6 +728,8 @@ function MessagesPage() {
   const [convsLoading, setConvsLoading] = useState(true);
   const [activeId, setActiveId] = useState<string>("");
   const [all, setAll] = useState<Message[]>([]);
+  /** Finished calls for the open relationship, interleaved into the thread. */
+  const [callCards, setCallCards] = useState<CallCard[]>([]);
   const [draft, setDraft] = useState("");
   const [typingIn, setTypingIn] = useState<Record<string, number>>({});
   const lastTypingSentRef = useRef(0);
@@ -926,6 +939,33 @@ function MessagesPage() {
   const partner = active ? getProfile(active.participant_id) : null;
   const thread = useMemo(() => all.filter((m) => m.conversation_id === activeId), [all, activeId]);
 
+  /**
+   * Calls belong to the *relationship*, not to a conversation row: a thread that
+   * has never exchanged a message still has a call history, and a thread opened
+   * from a profile link only has an invented `c_…` id until the first message is
+   * saved. So this reads by participant id, which works in both cases, and
+   * `calls participant read` keeps it to the two people who were on them.
+   */
+  const [callRefresh, setCallRefresh] = useState(0);
+  const partnerId = active?.participant_id ?? "";
+  useEffect(() => {
+    if (!partnerId) {
+      setCallCards([]);
+      return undefined;
+    }
+    let alive = true;
+    void getCallHistory(partnerId)
+      .then((cards) => {
+        if (alive) setCallCards(cards);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [partnerId, callRefresh]);
+
+  const timeline = useMemo(() => buildThreadTimeline(thread, callCards), [thread, callCards]);
+
   const list = conversations.filter((c) => {
     const p = getProfile(c.participant_id);
     const q = query.toLowerCase();
@@ -934,11 +974,16 @@ function MessagesPage() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [thread.length]);
+  }, [timeline.length]);
 
   // Realtime hook for incoming messages
   useRealtime(
     (event) => {
+      // A call that ends on either phone should leave a card in this thread
+      // straight away rather than on the next page load.
+      if (event.type === "call:resolved") {
+        setCallRefresh((n) => n + 1);
+      }
       const isNewMessage =
         event.type === "message" ||
         event.type === "new_message" ||
@@ -1692,20 +1737,30 @@ function MessagesPage() {
               </div>
 
               <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3 sm:p-4 [scrollbar-width:thin]">
-                {thread.map((m, idx) => {
+                {timeline.map((entry) => {
+                  if (entry.type === "call") {
+                    return (
+                      <div key={entry.key} className="py-0.5">
+                        {entry.newDay && <DayDivider ms={entry.at} />}
+                        <CallCardChip
+                          card={entry.call}
+                          timeLabel={timeAgo(new Date(entry.at).toISOString(), now)}
+                          onCall={(kind) => {
+                            if (partner) startCall(partner, kind);
+                          }}
+                        />
+                      </div>
+                    );
+                  }
+                  const m = entry.message;
                   const mine = m.sender_id === currentUserId;
-                  const isLatestMine = mine && idx === thread.length - 1;
                   const msgReactions = reactions[m.id] || {};
                   const isEditingThis = editingMsgId === m.id;
-                  const prev = idx > 0 ? thread[idx - 1] : null;
-                  const next = idx < thread.length - 1 ? thread[idx + 1] : null;
-                  const newDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at);
-                  // Group runs from the same person so only the last one is timestamped.
-                  const startsGroup = newDay || prev?.sender_id !== m.sender_id;
-                  const endsGroup =
-                    !next ||
-                    next.sender_id !== m.sender_id ||
-                    dayKey(next.created_at) !== dayKey(m.created_at);
+                  const newDay = entry.newDay;
+                  // Grouping comes from the timeline builder: a call card sitting
+                  // between two of your messages must not split them into two runs.
+                  const startsGroup = entry.startsGroup;
+                  const endsGroup = entry.endsGroup;
 
                   // Attachment Type Detection for sleek media frames
                   const kind = attachmentKind(m.body);
@@ -1722,15 +1777,7 @@ function MessagesPage() {
 
                   return (
                     <div key={m.id}>
-                      {newDay && (
-                        <div className="my-4 flex items-center gap-3">
-                          <span className="h-px flex-1 bg-border/60" />
-                          <span className="rounded-full bg-foreground/5 px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
-                            {dayLabel(m.created_at)}
-                          </span>
-                          <span className="h-px flex-1 bg-border/60" />
-                        </div>
-                      )}
+                      {newDay && <DayDivider ms={Date.parse(m.created_at)} />}
                       <div
                         className={cn(
                           "group relative flex items-end gap-1.5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-200",

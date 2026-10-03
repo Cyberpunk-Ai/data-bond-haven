@@ -16,6 +16,7 @@ import { deleteMyMedia } from "@/lib/media.functions";
 import { sanitizeReactionEmoji } from "@/lib/emojis";
 import { tipAnnouncement } from "@/lib/space-reactions";
 import { MAX_SPACE_CHAT_CHARS, lengthError, messageLengthError } from "@/lib/message-length";
+import { callCardsFromRows, type CallCard, type CallRowLike } from "@/lib/call-cards";
 import { emitRealtime } from "@/lib/realtime";
 import { appConfig } from "@/lib/config";
 import type {
@@ -40,6 +41,11 @@ import type {
 } from "@/lib/types";
 
 const db = supabase as any;
+
+/** A participant row is treated as present for this long; the heartbeat is
+ * comfortably faster so an open room never expires its own members. */
+export const SPACE_STALE_SECONDS = 90;
+export const SPACE_HEARTBEAT_MS = 25_000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -101,6 +107,10 @@ export function rowToPost(row: any, extras: Partial<Post> = {}): Post {
     // Moderation state: the admin console lists hidden posts too, so it can
     // restore one. Feeds never see them (they filter on hidden = false).
     hidden: Boolean(row.hidden),
+    // Sensitive media is a reader filter, not a takedown: the row is always
+    // returned, and each viewer's privacy preference decides whether to blur it.
+    is_sensitive: Boolean(row.is_sensitive),
+    sensitive_source: row.sensitive_source ?? null,
     workspace_id: row.workspace_id ?? null,
     ...extras,
   };
@@ -1329,59 +1339,53 @@ export async function getFollowingIds(): Promise<string[]> {
   return ((data ?? []) as any[]).map((r) => String(r.target_id));
 }
 
-// A network list is browsed, not exported — cap the roster we hydrate so one
-// profile with tens of thousands of follows can't ship a megabyte of rows (and
-// blow the request URL) on a single tab open. The headline counts shown next to
-// the tab come from the authoritative profiles.followers/following columns.
-const NETWORK_LIST_CAP = 300;
+// A network list is browsed, not exported — the roster arrives in batches so
+// one profile with tens of thousands of follows can't ship a megabyte of rows
+// (and blow the request URL) on a single open. The headline counts shown next
+// to the lists come from the authoritative profiles.followers/following columns.
+export const NETWORK_PAGE_SIZE = 25;
 
 /**
- * Followers and following for any profile, resolved to fresh Profile rows.
- * Both `follows` and `profiles` are public-read, so this works for a signed-in
- * user viewing their own network and for a guest viewing someone else's.
+ * One batch of followers *or* following for any profile, resolved to fresh
+ * Profile rows, newest relationship first. Both `follows` and `profiles` are
+ * public-read, so this works for a signed-in user viewing their own network
+ * and for a guest viewing someone else's. `more` means the edge page was full,
+ * so the caller can ask for the next `from` offset.
  */
-export async function getProfileNetwork(
+export async function getProfileNetworkPage(
   profileId: string,
-): Promise<{ followers: Profile[]; following: Profile[] }> {
-  const empty = { followers: [] as Profile[], following: [] as Profile[] };
+  view: "followers" | "following",
+  from: number,
+  limit: number = NETWORK_PAGE_SIZE,
+): Promise<{ profiles: Profile[]; more: boolean }> {
+  const empty = { profiles: [] as Profile[], more: false };
   if (!profileId || profileId === "guest") return empty;
 
-  const [followersRes, followingRes] = await Promise.all([
-    db
-      .from("follows")
-      .select("follower_id")
-      .eq("target_id", profileId)
-      .order("created_at", { ascending: false })
-      .limit(NETWORK_LIST_CAP),
-    db
-      .from("follows")
-      .select("target_id")
-      .eq("follower_id", profileId)
-      .order("created_at", { ascending: false })
-      .limit(NETWORK_LIST_CAP),
-  ]);
-  const followerIds = ((followersRes.data ?? []) as any[])
-    .map((r) => String(r.follower_id))
-    .filter(Boolean);
-  const followingIds = ((followingRes.data ?? []) as any[])
-    .map((r) => String(r.target_id))
-    .filter(Boolean);
+  // Followers are the edges whose target is this profile; the accounts this
+  // profile follows are the edges whose follower is it.
+  const column = view === "followers" ? "follower_id" : "target_id";
+  let query = db.from("follows").select(column);
+  query =
+    view === "followers" ? query.eq("target_id", profileId) : query.eq("follower_id", profileId);
+  const { data } = await query
+    .order("created_at", { ascending: false })
+    .range(from, from + limit - 1);
+  const ids = ((data ?? []) as any[]).map((r) => String(r[column])).filter(Boolean);
 
-  const ids = Array.from(new Set([...followerIds, ...followingIds]));
-  const byId = new Map<string, Profile>();
+  const profiles: Profile[] = [];
   if (ids.length) {
-    const { data } = await db.from("profiles").select("*").in("id", ids);
-    for (const row of (data ?? []) as any[]) {
+    const { data: rows } = await db.from("profiles").select("*").in("id", ids);
+    const byId = new Map<string, Profile>();
+    for (const row of (rows ?? []) as any[]) {
       const p = rowToProfile(row);
       if (p?.id) byId.set(p.id, p);
     }
     cacheProfiles([...byId.values()]);
+    // Preserve the follow-graph order (newest relationship first) instead of
+    // the arbitrary order `in(...)` hands back.
+    profiles.push(...ids.map((id) => byId.get(id)).filter((p): p is Profile => Boolean(p)));
   }
-  // Preserve the follow-graph order (newest relationship first) instead of the
-  // arbitrary order `in(...)` hands back.
-  const pick = (list: string[]) =>
-    list.map((id) => byId.get(id)).filter((p): p is Profile => Boolean(p));
-  return { followers: pick(followerIds), following: pick(followingIds) };
+  return { profiles, more: ids.length === limit };
 }
 
 /**
@@ -1567,22 +1571,26 @@ export async function createSpace(input: {
 
 /** Read the room's current headcount so the badge updates without a refetch.
  * The stored `spaces.listeners` is maintained by the `t_space_participants_after`
- * trigger on every join/leave, so there is nothing to write here — an earlier
- * version updated the row from the client, which RLS rejected for anyone who
- * wasn't the host, making the count look ignored rather than missing. */
+ * trigger on every join/leave/heartbeat, so there is nothing to write here — an
+ * earlier version updated the row from the client, which RLS rejected for anyone
+ * who wasn't the host, making the count look ignored rather than missing. It
+ * also *counted participant rows*, which is how a room ended up "full" of people
+ * who had closed their tab: the column is the server's answer (fresh rows, host
+ * excluded) and the only number we should be showing. */
 async function syncSpaceListeners(spaceId: string) {
-  const { count } = await db
-    .from("space_participants")
-    .select("user_id", { count: "exact", head: true })
-    .eq("space_id", spaceId);
-  emitRealtime("space:listeners", { spaceId, listeners: count ?? 0 });
-  return count ?? 0;
+  const { data } = await db.from("spaces").select("listeners").eq("id", spaceId).maybeSingle();
+  const listeners = Number(data?.listeners ?? 0);
+  emitRealtime("space:listeners", { spaceId, listeners });
+  return listeners;
 }
 
 export async function joinSpace(spaceId: string) {
   const { error } = await db
     .from("space_participants")
-    .upsert({ space_id: spaceId, user_id: me(), role: "listener" });
+    .upsert(
+      { space_id: spaceId, user_id: me(), role: "listener", last_seen: nowIso() },
+      { onConflict: "space_id,user_id" },
+    );
   if (error) {
     // The spaces_capacity_guard trigger rejects a join once the room is full
     // for the host's plan tier; surface it so the UI can bail out gracefully.
@@ -1606,6 +1614,32 @@ export async function leaveSpace(spaceId: string) {
   emitRealtime("space:left", { spaceId, userId: me() });
   await syncSpaceListeners(spaceId);
   return { ok: true };
+}
+
+/**
+ * "Still here." Stamps this member's row, sweeps the rows whose people stopped
+ * stamping, and hands back the room's fresh listener count — one round trip,
+ * from the `space_heartbeat` RPC in `20261003000004_spaces_presence.sql`.
+ *
+ * It exists because `leaveSpace()` runs from a React cleanup, and closing a tab
+ * runs no cleanup at all. Without a heartbeat the room's capacity, its headcount
+ * and its signalling-channel access are all held by people who left.
+ *
+ * Failure is not an outage: a dropped beat only means this member looks stale a
+ * minute earlier, so the caller keeps the room and tries again on the next tick.
+ */
+export async function spaceHeartbeat(spaceId: string): Promise<number | null> {
+  const { data, error } = await db.rpc("space_heartbeat", {
+    p_space_id: spaceId,
+    p_stale_seconds: SPACE_STALE_SECONDS,
+  });
+  if (error) {
+    console.warn("[spaces] heartbeat dropped:", error.message);
+    return null;
+  }
+  const listeners = Number(data ?? 0);
+  emitRealtime("space:listeners", { spaceId, listeners });
+  return Number.isFinite(listeners) ? listeners : null;
 }
 
 /** Host-only: close the room for everyone. A room only becomes a replayable
@@ -2081,6 +2115,41 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
     console.warn("getMessages notice:", err);
   }
   return [];
+}
+
+/**
+ * The call log for one 1:1 relationship, as cards for the thread.
+ *
+ * Read from `calls` rather than written into `messages`: the row already holds
+ * who dialled, what kind, how it ended and for how long, `calls participant
+ * read` already limits it to the two people involved, and a second copy of that
+ * history in the message table would be a second thing to keep honest (a
+ * declined call re-mentioned in `body` text could not be trusted, and a forged
+ * `sender_id` on a call card would be a free way to write into somebody else's
+ * thread). Only finished calls come back — a ring that is still going belongs to
+ * the ringing UI, not to the history.
+ */
+export async function getCallHistory(participantId: string): Promise<CallCard[]> {
+  const meId = me();
+  if (!isDbId(meId) || !isDbId(participantId)) return [];
+  try {
+    const { data, error } = await db
+      .from("calls")
+      .select("id,caller_id,callee_id,kind,status,started_at,answered_at,ended_at,duration_seconds")
+      .or(
+        `and(caller_id.eq.${meId},callee_id.eq.${participantId}),and(caller_id.eq.${participantId},callee_id.eq.${meId})`,
+      )
+      .order("started_at", { ascending: false })
+      .limit(100);
+    if (error) {
+      console.warn("getCallHistory notice:", error.message);
+      return [];
+    }
+    return callCardsFromRows((data ?? []) as CallRowLike[], meId);
+  } catch (err) {
+    console.warn("getCallHistory notice:", err);
+    return [];
+  }
 }
 
 export async function getOrCreateConversation(participantId: string): Promise<string> {
@@ -2578,6 +2647,20 @@ export async function hidePostAdmin(postId: string, hidden = true) {
   await moderatePost({ data: { postId, action: hidden ? "hide" : "unhide" } });
   emitRealtime("post:updated", { id: postId, hidden });
   return { ok: true, hidden };
+}
+
+/**
+ * A staff decision on the sensitive-media flag. It overrides the community
+ * threshold (three reports flip it the same way) and pins the source, so a
+ * moderator clearing a flag is not quietly re-flagged by the next report — see
+ * `20261003000003_sensitive_content.sql`.
+ */
+export async function markPostSensitiveAdmin(postId: string, sensitive = true) {
+  await moderatePost({
+    data: { postId, action: sensitive ? "mark_sensitive" : "unmark_sensitive" },
+  });
+  emitRealtime("post:updated", { id: postId, is_sensitive: sensitive });
+  return { ok: true, sensitive };
 }
 
 export async function getAdminAuditLogs(filters: { limit?: number; severity?: string } = {}) {

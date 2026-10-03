@@ -7,11 +7,12 @@ import {
   MicOff,
   Minimize2,
   Monitor,
-  MonitorOff,
+  Phone,
   PhoneOff,
   PictureInPicture2,
   Send,
   Settings2,
+  ShieldCheck,
   Speaker,
   Video,
   VideoOff,
@@ -28,15 +29,19 @@ import {
   CALL_CHAT_HISTORY,
   CALL_REACTION_HISTORY,
   MAX_CALL_CHAT_CHARS,
+  callCarriesVideo,
   canRouteAudio,
   formatCallDuration,
   isNewEvent,
+  isLiveDevice,
   pickAudioOutput,
   pushBounded,
   readChatPayload,
   readReactionPayload,
   remotePaneContent,
+  remotePaneFramed,
   sanitizeCallChat,
+  selfTileVisible,
   type RemotePaneContent,
 } from "@/lib/call-media";
 import { CALL_REACTIONS } from "@/lib/emojis";
@@ -355,6 +360,42 @@ export function CallModal({
     videoLive: session.remoteVideoLive,
   });
 
+  /**
+   * A call carries video when there is a picture in it, not when it was dialled
+   * as one. The kind you chose at dial time is a starting point: either person
+   * can switch their camera on from a voice call, and the layout must follow the
+   * media rather than freeze on the button somebody pressed a minute ago.
+   */
+  const hasVideo = callCarriesVideo({
+    dialled: type,
+    cameraOn: session.cameraOn,
+    sharing: session.sharing,
+    peerCamera: peerMedia.camera,
+    peerShare: peerMedia.share,
+  });
+
+  /**
+   * `framed` is the smooth-transition trick. On a video call the big pane stays
+   * on screen with the avatar composited over it, so the instant their camera
+   * starts producing frames the picture is already there underneath and the
+   * handover is one opacity change — no remount, no black card, no re-decode.
+   * On a voice call there is no picture to wait for, so the pane gives its whole
+   * space to the avatar, which is the clean layout people expect of a call that
+   * was never going to have video in it.
+   */
+  const framedPane = remotePaneFramed(pane, hasVideo);
+
+  /**
+   * Your own tile exists only while you are actually sending a picture. Showing
+   * one with a "Camera off" label in it on a voice call is the chrome people
+   * mean when they say a voice call looks broken: there is nothing wrong with
+   * the call, and the interface keeps insisting on a camera nobody turned on.
+   */
+  const showSelfTile = selfTileVisible({
+    cameraOn: session.cameraOn,
+    sharing: session.sharing,
+  });
+
   const audioOutputs = devices.filter((d) => d.kind === "audiooutput");
   const cameras = devices.filter((d) => d.kind === "videoinput");
   const microphones = devices.filter((d) => d.kind === "audioinput");
@@ -481,6 +522,15 @@ export function CallModal({
         {/* Top Header */}
         <div className="flex items-center justify-between gap-2 z-20">
           <div className="flex min-w-0 items-center gap-2">
+            {/* What kind of call this is right now — a voice call that grew a
+                camera says so here instead of leaving the user to infer it. */}
+            <span
+              title={hasVideo ? "Video call" : "Voice call"}
+              className="flex shrink-0 items-center gap-1 rounded-full bg-white/10 px-2 py-1 text-[11px] font-bold text-white/80"
+            >
+              {hasVideo ? <Video className="h-3 w-3" /> : <Phone className="h-3 w-3" />}
+              {hasVideo ? "Video" : "Voice"}
+            </span>
             <span
               className={cn(
                 "flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold border",
@@ -508,7 +558,20 @@ export function CallModal({
               </span>
               {statusLabel}
             </span>
-            {session.quality !== "unknown" && (
+            {/* Measured, not claimed: the badge appears only once the DTLS
+                handshake reports a negotiated cipher, so it can never promise
+                encryption on a call that has not finished setting it up. Icon
+                only — the header has to stay readable on a phone. */}
+            {session.mediaEncrypted && (
+              <span
+                title="Call audio and video are encrypted end to end (DTLS-SRTP)"
+                aria-label="Call is encrypted end to end"
+                className="flex shrink-0 items-center justify-center rounded-full bg-emerald-500/15 p-1 text-emerald-300"
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+              </span>
+            )}
+            {session.quality !== "unknown" && session.quality !== "good" && (
               <span
                 title={`Link quality: ${QUALITY_LABEL[session.quality]}`}
                 className={cn(
@@ -561,6 +624,19 @@ export function CallModal({
           </button>
         )}
 
+        {/* Being muted without noticing is the most common way a call goes quiet,
+            and a small red circle among six is easy to miss while you are looking
+            at the other person. So the reminder goes across the top of the stage
+            and is the gesture that fixes it. */}
+        {!session.micOn && (
+          <button
+            onClick={() => session.setMicEnabled(true)}
+            className="z-20 mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-rose-400/30 bg-rose-500/85 px-3 py-2 text-xs font-bold text-white transition-transform hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+          >
+            <MicOff className="h-4 w-4" /> You're muted — tap to speak
+          </button>
+        )}
+
         {/* Center Call Area */}
         <div className="my-auto relative flex flex-col items-center justify-center text-center w-full z-10 min-h-0">
           {/* The remote <video> is mounted for the whole call and only hidden with
@@ -576,7 +652,7 @@ export function CallModal({
               // floating in black. The corner radius/border also read oddly at
               // arm's-length from a monitor edge.
               "[&:fullscreen_video]:h-full [&:fullscreen]:rounded-none [&:fullscreen]:border-0",
-              pane === "avatar" && "hidden",
+              pane === "avatar" && !framedPane && "hidden",
             )}
           >
             <video
@@ -586,12 +662,36 @@ export function CallModal({
               muted
               className="h-64 w-full bg-black object-contain"
             />
+            {/* On a video call whose lens is covered, the avatar sits *inside* the
+                frame instead of replacing it. The picture is already decoding
+                underneath, so their camera arriving is one cross-fade rather than
+                a teardown, a remount and a black beat in between. */}
+            {pane === "avatar" && framedPane && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-slate-900/85 backdrop-blur-sm transition-opacity duration-300">
+                <Avatar
+                  name={partner.display_name}
+                  src={partner.avatar_url}
+                  className="h-20 w-20 text-2xl ring-2 ring-white/20"
+                />
+                <p className="text-xs font-semibold text-white/75">
+                  {peerMedia.camera ? "Starting their camera…" : "Their camera is off"}
+                </p>
+              </div>
+            )}
             <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md bg-black/65 px-2 py-0.5 text-[10px] font-bold text-white/90">
               {pane === "screen" && <Monitor className="h-3 w-3 text-indigo-300" />}
               {pane === "screen" ? `${partner.display_name}'s screen` : partner.display_name}
             </span>
+            {/* Their mute belongs on their picture, not only on the avatar: a
+                person waving at a frozen mouth has nothing else telling them the
+                microphone is the problem. */}
+            {peerMedia.muted && (
+              <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded-md bg-rose-500/85 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                <MicOff className="h-3 w-3" /> Muted
+              </span>
+            )}
             {type === "audio" && pane === "screen" && (
-              <span className="absolute top-2 right-2 rounded-md bg-indigo-600/90 px-2 py-0.5 text-[10px] font-bold">
+              <span className="absolute top-14 right-2 rounded-md bg-indigo-600/90 px-2 py-0.5 text-[10px] font-bold">
                 Screen share
               </span>
             )}
@@ -638,7 +738,7 @@ export function CallModal({
             </button>
           </div>
 
-          {pane === "avatar" && (
+          {pane === "avatar" && !framedPane && (
             <div className="relative flex flex-col items-center">
               <div className="relative flex items-center justify-center">
                 <div className="absolute -inset-4 rounded-full bg-gradient-to-r from-brand/30 via-brand-pink/30 to-brand-orange/30 blur-xl animate-pulse" />
@@ -667,8 +767,10 @@ export function CallModal({
           )}
 
           {/* Self tile: the camera normally, your own desktop while sharing. One
-              element for both, so stopping a share does not rebuild the preview. */}
-          {(session.localStream || session.screenStream) && (
+              element for both, so stopping a share does not rebuild the preview.
+              It only exists while there is a picture to show — a voice call gets no
+              black rectangle and no "Camera off" notice, just the clean avatar. */}
+          {showSelfTile && (
             <div className="absolute right-2 -bottom-2 w-28 h-36 rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl bg-black animate-in zoom-in duration-200">
               <video
                 ref={attachSelfVideo}
@@ -684,11 +786,6 @@ export function CallModal({
               <span className="absolute bottom-1.5 left-1.5 text-[10px] font-bold bg-black/60 px-1.5 py-0.5 rounded-md text-white/90">
                 {session.sharing ? "Your screen" : "You"}
               </span>
-              {!session.sharing && !session.cameraOn && (
-                <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-slate-900/90 text-[10px] font-semibold text-white/70">
-                  <VideoOff className="h-5 w-5" /> Camera off
-                </span>
-              )}
             </div>
           )}
 
@@ -779,7 +876,7 @@ export function CallModal({
                 items={microphones.map((d) => ({
                   id: d.deviceId,
                   label: d.label || "Microphone",
-                  active: !d.deviceId,
+                  active: isLiveDevice(d.deviceId, session.activeDeviceIds.mic),
                 }))}
                 emptyLabel="No other microphones"
                 onPick={(id) => {
@@ -792,7 +889,7 @@ export function CallModal({
                 items={cameras.map((d) => ({
                   id: d.deviceId,
                   label: d.label || "Camera",
-                  active: !d.deviceId,
+                  active: isLiveDevice(d.deviceId, session.activeDeviceIds.camera),
                 }))}
                 emptyLabel="No other cameras"
                 onPick={(id) => {
@@ -859,22 +956,33 @@ export function CallModal({
             {session.micOn ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
           </ControlButton>
 
+          {/* A video switch that is off should not read as an error on a call that
+              was dialled for voice: the red paint is reserved for a video call that
+              has lost its picture. */}
           <ControlButton
             label={session.cameraOn ? "Turn off camera" : "Turn on camera"}
-            hint={session.cameraOn ? "Video" : "No video"}
-            danger={!session.cameraOn && !session.sharing}
+            hint={session.cameraOn ? "Video on" : "Video off"}
+            danger={type === "video" && !session.cameraOn && !session.sharing}
+            active={session.cameraOn}
             onClick={() => void session.setCameraEnabled(!session.cameraOn)}
           >
             {session.cameraOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
           </ControlButton>
 
           <ControlButton
-            label={session.sharing ? "Stop sharing screen" : "Share your screen"}
-            hint={session.sharing ? "Stop share" : "Share"}
+            label={
+              session.canShareScreen
+                ? session.sharing
+                  ? "Stop sharing screen"
+                  : "Share your screen"
+                : "This browser can't share your screen"
+            }
+            hint={session.sharing ? "Sharing" : "Not sharing"}
             active={session.sharing}
+            disabled={!session.canShareScreen}
             onClick={() => void toggleShare()}
           >
-            {session.sharing ? <Monitor className="h-5 w-5" /> : <MonitorOff className="h-5 w-5" />}
+            <Monitor className="h-5 w-5" />
           </ControlButton>
 
           <ControlButton
@@ -927,6 +1035,7 @@ function ControlButton({
   active,
   danger,
   badge,
+  disabled,
 }: {
   children: ReactNode;
   label: string;
@@ -935,19 +1044,25 @@ function ControlButton({
   active?: boolean;
   danger?: boolean;
   badge?: number;
+  disabled?: boolean;
 }) {
+  const tone = disabled
+    ? "cursor-not-allowed bg-white/5 text-white/35 ring-1 ring-white/10"
+    : danger
+      ? "bg-rose-500 text-white cursor-pointer"
+      : active
+        ? "bg-indigo-600 text-white ring-1 ring-indigo-300/50 cursor-pointer"
+        : "bg-white/20 text-white ring-1 ring-white/30 hover:bg-white/30 cursor-pointer";
+
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
       title={label}
       className={cn(
-        "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full backdrop-blur-md transition-all active:scale-95 cursor-pointer",
-        danger
-          ? "bg-rose-500 text-white"
-          : active
-            ? "bg-indigo-600 text-white ring-1 ring-indigo-300/50"
-            : "bg-white/20 text-white ring-1 ring-white/30 hover:bg-white/30",
+        "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full backdrop-blur-md transition-all active:scale-95",
+        tone,
       )}
     >
       {children}
