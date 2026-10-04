@@ -26,8 +26,8 @@ import { IncomingCallProvider } from "@/components/calls/IncomingCallProvider";
  * bookmark, or a home-screen shortcut shows.
  */
 const BRAND = appConfig.brand.name;
-const ROOT_TITLE = `${BRAND} — Creator Social Network`;
-const ROOT_DESCRIPTION = `${BRAND} is the creator social network: live audio spaces, stories, messaging, tips and payouts in one place.`;
+const ROOT_TITLE = `${BRAND} — Live Audio Spaces, Stories & Messaging`;
+const ROOT_DESCRIPTION = `${BRAND} brings people together to discover, explore, build and share — live audio spaces, stories, messaging, tips and payouts in one place.`;
 
 function NotFoundComponent() {
   const links = [
@@ -130,8 +130,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: "og:title", content: ROOT_TITLE },
       {
         property: "og:description",
-        content:
-          "Live audio spaces, stories, messaging and creator monetization — all in one social home.",
+        content: appConfig.brand.tagline,
       },
       { property: "og:type", content: "website" },
       { property: "og:site_name", content: BRAND },

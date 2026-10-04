@@ -37,7 +37,7 @@ function bool(key: string, fallback: boolean): boolean {
 export const appConfig = {
   brand: {
     name: str("VITE_APP_NAME", "Spaces1"),
-    tagline: str("VITE_APP_TAGLINE", "Where creators gather, talk and get paid."),
+    tagline: str("VITE_APP_TAGLINE", "Discover. Explore. Build. Share."),
     supportEmail: str("VITE_SUPPORT_EMAIL", "support@spaces1.com"),
   },
   feed: {

@@ -90,7 +90,7 @@ export function ogImageMeta(
   }
   meta.push({
     property: "og:image:alt",
-    content: opts.alt ?? `${appConfig.brand.name} — creator social network`,
+    content: opts.alt ?? `${appConfig.brand.name} — ${appConfig.brand.tagline}`,
   });
   // X reads `twitter:image` rather than falling back to og:image on some card
   // types, so a page that swaps its preview image has to say so twice.

@@ -5,10 +5,11 @@
   Facebook, LinkedIn, Telegram, Slack, Discord) wants og:image at 1.91:1. The
   site's only brand mark is a 512x512 square, so those services letterbox it and
   the preview comes out as a small mark floating in a band of background colour.
-  This composes the same mark at card ratio with the name and tagline.
+  This composes the same mark at card ratio with the name and a short tagline.
 
   The mark is never redrawn: it is scaled from public/logo.png, so the card
-  cannot drift from the app icon.
+  cannot drift from the app icon. The ground is the brand's own black, matching
+  the favicon, so the whole thing reads as one clean mark rather than a poster.
 
   Brand text is baked into bytes, so it arrives as parameters that default to
   the same strings src/lib/config.ts falls back to. Re-run with -Name/-Tagline
@@ -19,20 +20,14 @@
 #>
 param(
   [string]$Name = "Spaces1",
-  [string]$Tagline = "Where creators gather, talk and get paid.",
-  # Left empty on purpose. Windows PowerShell 5.1 decodes a .ps1 with no BOM as
-  # ANSI, so a literal middot written into this file reaches the canvas as two
-  # garbage characters. The source stays pure ASCII and the glyph is built from
-  # its code point at runtime, which no reader can mis-decode.
-  [string]$Features = ""
+  [string]$Tagline = "Discover. Explore. Build. Share."
 )
 
-if (-not $Features) {
-  $sep = " " + [string][char]0x00B7 + " "
-  $Features = @("Live audio spaces", "Stories", "Messages", "Creator payouts") -join $sep
-}
-
 Add-Type -AssemblyName System.Drawing
+
+# The source stays pure ASCII on purpose. Windows PowerShell 5.1 decodes a .ps1
+# with no BOM as ANSI, so any literal non-ASCII glyph written into this file
+# would reach the canvas as two garbage characters. Keep it ASCII.
 
 $publicDir = (Resolve-Path (Join-Path $PSScriptRoot '..\public')).Path
 $logoPath = Join-Path $publicDir 'logo.png'
@@ -46,15 +41,10 @@ $Badge = 264
 $BadgeRadius = 56
 $Gap = 56
 
-# sRGB equivalents of the app's default-accent oklch brand tokens (see
-# src/lib/theme-colors.ts, which derives them from src/styles.css).
-$InkTop = [System.Drawing.Color]::FromArgb(255, 8, 3, 16)
-$InkBottom = [System.Drawing.Color]::FromArgb(255, 34, 7, 60)
+$Black = [System.Drawing.Color]::FromArgb(255, 0, 0, 0)
 $White = [System.Drawing.Color]::FromArgb(255, 255, 255, 255)
-$Muted = [System.Drawing.Color]::FromArgb(255, 209, 201, 226)
-$Lilac = [System.Drawing.Color]::FromArgb(255, 163, 124, 255)
-$Brand = [System.Drawing.Color]::FromArgb(255, 127, 34, 254)
-$Transparent = [System.Drawing.Color]::FromArgb(0, 0, 0, 0)
+$Muted = [System.Drawing.Color]::FromArgb(255, 176, 176, 184)
+$Ring = [System.Drawing.Color]::FromArgb(46, 255, 255, 255)
 
 $bmp = New-Object System.Drawing.Bitmap($W, $H, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -63,25 +53,8 @@ $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
 $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAlias
 $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
-# --- ground: near-black, with the brand violet lifting off the bottom edge ---
-$ground = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
-  (New-Object System.Drawing.Point(0, 0)),
-  (New-Object System.Drawing.Point($W, $H)),
-  $InkTop,
-  $InkBottom
-)
-$g.FillRectangle($ground, 0, 0, $W, $H)
-$ground.Dispose()
-
-$sweepHeight = 220
-$sweepBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
-  (New-Object System.Drawing.Point(0, ($H - $sweepHeight))),
-  (New-Object System.Drawing.Point(0, $H)),
-  $Transparent,
-  [System.Drawing.Color]::FromArgb(64, $Brand.R, $Brand.G, $Brand.B)
-)
-$g.FillRectangle($sweepBrush, 0, ($H - $sweepHeight), $W, $sweepHeight)
-$sweepBrush.Dispose()
+# --- ground: the brand's own flat black -------------------------------------
+$g.Clear($Black)
 
 # --- the mark, in a rounded tile (its own black field becomes the tile) ------
 $tileRect = New-Object System.Drawing.Rectangle($Margin, [int](($H - $Badge) / 2), $Badge, $Badge)
@@ -98,13 +71,15 @@ $g.SetClip($tilePath)
 $g.FillRectangle([System.Drawing.Brushes]::Black, $tileRect)
 $g.DrawImage($logo, $tileRect)
 $g.Restore($state)
-$tilePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(110, $Brand.R, $Brand.G, $Brand.B), 3)
+# A whisper-thin light ring so the mark's tile still reads against the black
+# ground without turning the card busy.
+$tilePen = New-Object System.Drawing.Pen($Ring, 2)
 $g.DrawPath($tilePen, $tilePath)
 $tilePen.Dispose()
 $tilePath.Dispose()
 $logo.Dispose()
 
-# --- wordmark + copy, each line stepped down until it fits the column --------
+# --- wordmark + tagline, each line stepped down until it fits the column -----
 $textX = $Margin + $Badge + $Gap
 $textMax = [float]($W - $Margin - $textX)
 
@@ -138,10 +113,10 @@ function Draw-Line {
   return ($Y + $measure.Height)
 }
 
-$cursor = [float](($H - 292) / 2)
-$cursor = Draw-Line -Text $Name -Size 104 -Bold $true -Color $White -Y $cursor
-$cursor = Draw-Line -Text $Tagline -Size 40 -Bold $false -Color $Muted -Y ($cursor + 12)
-$cursor = Draw-Line -Text $Features -Size 27 -Bold $false -Color $Lilac -Y ($cursor + 16)
+# Two stacked lines, vertically centred against the mark.
+$cursor = [float](($H - 210) / 2)
+$cursor = Draw-Line -Text $Name -Size 112 -Bold $true -Color $White -Y $cursor
+$cursor = Draw-Line -Text $Tagline -Size 42 -Bold $false -Color $Muted -Y ($cursor + 18)
 "copy block ends at y=$([int]$cursor) of $H"
 
 $fmt.Dispose()

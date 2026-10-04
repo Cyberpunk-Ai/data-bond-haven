@@ -344,15 +344,17 @@ describe("every public asset the app promises is on disk and honestly sized", ()
 
   it("the card has a reproducible generator that Windows PowerShell can read", () => {
     const script = read("../scripts/build-og-image.ps1");
-    // PowerShell 5.1 decodes a .ps1 without a BOM as ANSI, so a literal `·` in
-    // this file reached the canvas as mojibake. The source has to stay ASCII and
-    // build any non-ASCII glyph from its code point at runtime.
+    // PowerShell 5.1 decodes a .ps1 without a BOM as ANSI, so any literal
+    // non-ASCII glyph in this file would reach the canvas as mojibake. The
+    // source has to stay pure ASCII.
     expect(
       [...script].some((c) => c.charCodeAt(0) > 0x7f),
       "generator is pure ASCII",
     ).toBe(false);
-    expect(script).toContain("[char]0x00B7");
+    // It composes the real mark (never a redrawn one) onto the brand's black.
     expect(script).toContain("og-image");
+    expect(script).toContain("logo.png");
+    expect(script).toContain("Discover. Explore. Build. Share.");
   });
 });
 
