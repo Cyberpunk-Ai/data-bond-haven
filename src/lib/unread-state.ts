@@ -13,6 +13,16 @@ const globalUnread: UnreadCounts = {
   messages: 0,
 };
 
+// The conversation whose thread is open on screen right now. While it is set,
+// an incoming message in it is marked read the moment it lands (useThread's
+// ingest calls markThreadRead), so the badge must not count it — otherwise a
+// number you have already read is left stranded until a full page reload.
+let activeConversationId = "";
+
+export function setActiveMessagesConversation(id: string) {
+  activeConversationId = id || "";
+}
+
 const listeners = new Set<(counts: UnreadCounts) => void>();
 
 function notify() {
@@ -108,6 +118,11 @@ export function useUnreadCounts() {
         // someone else should light up the Messages badge.
         const senderId = event.message?.sender_id || event.sender_id;
         if (senderId && senderId === currentUserId) return;
+        // A message in the thread you are actively reading is marked seen the
+        // instant it arrives, so raising the badge for it would strand a count
+        // that nothing ever clears (you are already looking at it).
+        const convId = event.conversation_id || event.message?.conversation_id;
+        if (convId && convId === activeConversationId) return;
         setUnreadMessagesCount((prev) => prev + 1);
       }
     },

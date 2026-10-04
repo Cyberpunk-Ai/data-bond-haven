@@ -28,7 +28,7 @@ import {
   hideCallForMe,
   deleteCallForEveryone,
 } from "@/lib/api-client";
-import { decrementUnreadMessages } from "@/lib/unread-state";
+import { decrementUnreadMessages, setActiveMessagesConversation } from "@/lib/unread-state";
 import { useAuth } from "@/lib/auth-state";
 import { useRealtime } from "@/lib/realtime";
 import { cn } from "@/lib/utils";
@@ -263,6 +263,14 @@ function MessagesPage() {
     setActiveId(id);
     setMobileOpen(true);
   }
+
+  // Tell the global badge which thread is open so messages arriving in it are
+  // counted as read live (useThread marks them) instead of stacking a number
+  // nobody clears. Cleared on unmount so a closed page counts again normally.
+  useEffect(() => {
+    setActiveMessagesConversation(activeId && !activeId.startsWith("c_") ? activeId : "");
+    return () => setActiveMessagesConversation("");
+  }, [activeId]);
 
   // Call history belongs to the *relationship*, so it reads by participant id —
   // it survives a placeholder thread that hasn't been saved yet.
