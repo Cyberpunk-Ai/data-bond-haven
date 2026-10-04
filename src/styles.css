@@ -314,15 +314,20 @@ html.reduce-motion *::after {
   transition-duration: 0.001ms !important;
 }
 
-/* Route entrance: a keyed wrapper around the per-page content fades + rises the
+/* Route entrance: a keyed wrapper around the per-page content settles the
  * incoming page in on every SPA navigation, so swapping pages cross-fades
- * instead of hard-cutting. Paired with AppShell's `key={pathname}` content
- * div. Opted out for readers who ask for reduced motion (both the OS media
- * query and the app's own html.reduce-motion toggle). */
+ * instead of hard-cutting. It deliberately starts ALMOST opaque (never 0) with
+ * only a hair of movement: a fade up from full transparency is exactly what
+ * reads as a blank FLASH, because for the first frames the page is invisible and
+ * the ambient background shows through. 42% start + 4px + 170ms ease-out keeps the
+ * content present the whole time — a calm settle, not a reveal. Paired with
+ * AppShell's `key={pathname}` content div. Opted out for readers who ask for
+ * reduced motion (both the OS media query and the app's own html.reduce-motion
+ * toggle). */
 @keyframes route-enter {
   from {
-    opacity: 0;
-    transform: translateY(6px);
+    opacity: 0.42;
+    transform: translateY(4px);
   }
   to {
     opacity: 1;
@@ -331,7 +336,7 @@ html.reduce-motion *::after {
 }
 
 .route-enter {
-  animation: route-enter 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: route-enter 170ms ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {

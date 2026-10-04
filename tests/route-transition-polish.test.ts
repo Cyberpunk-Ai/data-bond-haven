@@ -45,10 +45,21 @@ describe("route-enter fade utility", () => {
   it("defines the keyframes, the utility, and a reduced-motion opt-out", () => {
     expect(css).toContain("@keyframes route-enter");
     expect(css).toContain(".route-enter {");
-    expect(css).toContain("animation: route-enter 220ms");
+    expect(css).toContain("animation: route-enter 170ms ease-out");
     // Motion is a courtesy, not a demand: readers who opt out get none of it.
     const block = between(css, "@media (prefers-reduced-motion: reduce)", "animation: none;");
     expect(block).toContain(".route-enter");
+  });
+
+  it("settles in calm — the keyframe never starts fully transparent", () => {
+    // A fade up from opacity 0 is exactly the blank FLASH the user rejected: for
+    // the first frames the page is invisible and the ambient background shows
+    // through. The entrance must start ALMOST opaque (and only nudge a few px).
+    const kf = between(css, "@keyframes route-enter", ".route-enter {");
+    const from = between(kf, "from {", "to {");
+    expect(from).not.toMatch(/opacity:\s*0(?![.\d])/);
+    expect(from).toMatch(/opacity:\s*0\.[2-9]/);
+    expect(from).toContain("translateY(4px)");
   });
 });
 

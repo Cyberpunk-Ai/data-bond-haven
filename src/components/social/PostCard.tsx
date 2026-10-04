@@ -1537,7 +1537,16 @@ function PostCardBase({
                         <div
                           style={{ width: `${pct}%` }}
                           className={cn(
-                            "absolute inset-y-0 left-0 transition-all duration-700 ease-out",
+                            // A pure background layer, pinned behind the label and
+                            // non-interactive. `transition-[width]` (NOT all): a
+                            // width-only settle. `transition-all` also animated the
+                            // semi-transparent background/opacity, so on every
+                            // re-render (feed rotation, live results) the fill faded
+                            // in as a stray translucent slab sitting on top of the
+                            // option — the "slight faded transparent component".
+                            // `pointer-events-none` keeps it from ever intercepting
+                            // the tap; the parent's `overflow-hidden` clips it.
+                            "pointer-events-none absolute inset-y-0 left-0 transition-[width] duration-500 ease-out",
                             isSelected
                               ? "bg-gradient-to-r from-brand/25 to-brand-pink/25"
                               : isLeader

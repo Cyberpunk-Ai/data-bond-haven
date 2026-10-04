@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "@tanstack/react-router";
 import { X, Users, Loader2 } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
@@ -92,7 +93,26 @@ export function ProfileNetworkModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
+  // Freeze the page behind while open, so scrolling the roster never drags the
+  // blurred profile underneath it.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  if (typeof document === "undefined") return null;
+
+  // Portalled to <body>. This is a full-screen `fixed` overlay, but the profile
+  // mounted it deep inside #app-main (an `lg:overflow-y-auto` scroller) wrapped by
+  // the animated `.route-enter` (which sets `transform`). A transform ancestor
+  // becomes the containing block for a fixed descendant and the scroller then
+  // clips it — so only the frosted backdrop painted and the card was lost, which
+  // is the "transparent blurred background" the roster showed. A portal escapes
+  // both, exactly like the image lightbox and the post action menu.
+  return createPortal(
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
       onClick={onClose}
@@ -222,6 +242,7 @@ export function ProfileNetworkModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

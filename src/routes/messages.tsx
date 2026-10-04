@@ -287,6 +287,14 @@ function MessagesPage() {
   // it survives a placeholder thread that hasn't been saved yet.
   const [callCards, setCallCards] = useState<CallCard[]>([]);
   const [callRefresh, setCallRefresh] = useState(0);
+  // The instant the open partner changes, wipe the previous relationship's call
+  // cards. `getCallHistory` is async, so without this the last person's call
+  // chips stayed painted beside the new (already-cleared) messages — part of the
+  // "flashing irrelevant" jump between people. Runs on partnerId only, so a
+  // callRefresh (a call that just ended) re-reads WITHOUT blanking first.
+  useEffect(() => {
+    setCallCards([]);
+  }, [partnerId]);
   useEffect(() => {
     if (!partnerId) {
       setCallCards([]);
@@ -553,6 +561,10 @@ function MessagesPage() {
     const snapshot = conversations;
     setConversations((prev) => prev.filter((c) => c.id !== conversationId));
     if (activeId === conversationId) setActiveId("");
+    // A hidden chat is out of sight, so it must be out of the count immediately:
+    // drop its share from the per-conversation badge map now, rather than leaving
+    // the nav total counting unread you have deliberately put away.
+    setConversationUnread(conversationId, 0);
     void hideConversationForMe(conversationId)
       .then(() => toast.success("Chat hidden — it returns when a new message arrives"))
       .catch(() => {
@@ -772,6 +784,7 @@ function MessagesPage() {
                 onScroll={thread.onScroll}
                 hasMore={thread.hasMore}
                 loadingOlder={thread.loadingOlder}
+                loading={thread.loading}
                 atEnd={thread.atEnd}
                 pendingCount={thread.pendingCount}
                 scrollToLatest={thread.scrollToLatest}

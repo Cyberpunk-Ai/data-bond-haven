@@ -2075,7 +2075,14 @@ export async function getConversations(): Promise<Conversation[]> {
     };
     let res = await buildConv(true);
     if (res.error) res = await buildConv(false);
-    const rows = (res.data ?? []) as any[];
+    // Whether the filtered or the no-filter fallback read served the list, drop any
+    // thread the viewer hid. A hidden chat must never light the badge; the
+    // fallback path (schema-cache lag) otherwise returns hidden rows and their
+    // unread messages — which are only individually tombstoned on "delete for me",
+    // not on "hide chat" — would still be tallied below.
+    const rows = ((res.data ?? []) as any[]).filter(
+      (r) => !Array.isArray(r.hidden_for) || !r.hidden_for.includes(userId),
+    );
     if (rows.length > 0) {
       // Hydrating the people behind each thread and tallying unread messages are
       // independent, so run them concurrently — this round-trip gates how fast

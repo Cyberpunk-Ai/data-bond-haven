@@ -105,6 +105,16 @@ describe("a stale database re-count can never resurrect a cleared badge", () => 
     );
     expect(refresh).toContain("syncFromConversations(convs, fetchedAt)");
   });
+
+  it("the reconcile publishes — the badge can't lag the map it just rebuilt", () => {
+    // The messages route calls syncFromConversations() directly and only follows
+    // it with setConversationUnread (which notifies) when the opened thread had
+    // unread > 0. So syncFromConversations MUST notify() itself, or a nav total
+    // can disagree with the freshly reconciled map until an unrelated event.
+    const sync = between(store, "export function syncFromConversations(", "let refreshSeq = 0;");
+    expect(sync).toContain("recomputeMessagesTotal();");
+    expect(sync).toContain("notify();");
+  });
 });
 
 describe("the store does not count a message you are already reading", () => {

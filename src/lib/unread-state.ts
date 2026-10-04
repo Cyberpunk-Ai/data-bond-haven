@@ -131,6 +131,13 @@ export function syncFromConversations(
   unreadByConversation.clear();
   for (const [id, u] of next) unreadByConversation.set(id, u);
   recomputeMessagesTotal();
+  // The reconcile IS the truth for the badge now, so publish it. Callers may not
+  // follow up with another move: the messages route's loadConversations() only
+  // calls setConversationUnread (which notifies) when the opened thread happened
+  // to carry unread — so without this the nav total could stay stale/disagree
+  // with the freshly reconciled map until some unrelated later event fired.
+  // refreshUnreadCounts()'s trailing notify() becomes a harmless re-publish.
+  notify();
 }
 
 // Only the newest refresh may apply its result: navigations start overlapping

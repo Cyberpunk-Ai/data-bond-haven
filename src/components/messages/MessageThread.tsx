@@ -28,6 +28,7 @@ export function MessageThread({
   onScroll,
   hasMore,
   loadingOlder,
+  loading,
   atEnd,
   pendingCount,
   scrollToLatest,
@@ -64,6 +65,7 @@ export function MessageThread({
   onScroll: () => void;
   hasMore: boolean;
   loadingOlder: boolean;
+  loading: boolean;
   atEnd: boolean;
   pendingCount: number;
   scrollToLatest: (behavior?: ScrollBehavior) => void;
@@ -112,6 +114,23 @@ export function MessageThread({
         {!hasMore && timeline.length > 0 && (
           <div className="py-1 text-center text-[10px] uppercase tracking-wide text-muted-foreground/70">
             Beginning of conversation
+          </div>
+        )}
+
+        {/* A freshly-opened thread: the list was cleared for the switch, so show
+            a calm skeleton rather than the previous person's messages or an empty
+            pane while the first page is in flight. */}
+        {loading && timeline.length === 0 && (
+          <div className="space-y-3 py-2">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className={cn(
+                  "h-9 w-2/5 rounded-2xl bg-foreground/5 animate-pulse",
+                  i % 2 === 1 && "ml-auto",
+                )}
+              />
+            ))}
           </div>
         )}
 

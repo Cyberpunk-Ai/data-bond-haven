@@ -147,4 +147,15 @@ describe("poll polish (PostCard)", () => {
     expect(card).toContain("if (!poll || hasVotedInPoll || poll.closed) return;");
     expect(card).toContain('? "Final results"');
   });
+
+  it("the result fill is a width-only background layer, never a fading slab", () => {
+    // The fill used to be `transition-all`, which animated its semi-transparent
+    // background/opacity too — so on each re-render (feed rotation, live results)
+    // it faded in as a translucent component sitting on top of the option. It must
+    // transition ONLY the width and be a non-interactive backdrop.
+    expect(card).toContain(
+      "pointer-events-none absolute inset-y-0 left-0 transition-[width] duration-500 ease-out",
+    );
+    expect(card).not.toMatch(/inset-y-0 left-0 transition-all/);
+  });
 });

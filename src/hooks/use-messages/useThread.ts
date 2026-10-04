@@ -29,6 +29,9 @@ export function useThread(args: { conversationId: string; currentUserId: string 
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  // True while a freshly-selected thread's first page is in flight. The pane uses
+  // it to show a calm skeleton instead of the previous person's messages.
+  const [loading, setLoading] = useState(false);
   const [atEnd, setAtEnd] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -59,17 +62,27 @@ export function useThread(args: { conversationId: string; currentUserId: string 
     if (!conversationId || conversationId.startsWith("c_")) {
       setMessages([]);
       setHasMore(false);
+      setLoading(false);
       prevCount.current = 0;
       return;
     }
     let alive = true;
     mountedFor.current = conversationId;
+    // Switching to a different real thread: drop the previous person's messages
+    // synchronously, before the fetch, so they never linger on screen while this
+    // thread's first page loads (that lingering was the "flashing irrelevant
+    // messages" when tapping between people).
+    setMessages([]);
+    setHasMore(false);
+    prevCount.current = 0;
+    setLoading(true);
     setPendingCount(0);
     void getMessagesPage(conversationId, { limit: NEW_PAGE_LIMIT })
       .then(({ messages: page, hasMore: more }) => {
         if (!alive) return;
         setMessages(page);
         setHasMore(more);
+        setLoading(false);
         prevCount.current = page.length;
         // Jump straight to the newest message once the page has painted.
         requestAnimationFrame(() => {
@@ -86,6 +99,7 @@ export function useThread(args: { conversationId: string; currentUserId: string 
       })
       .catch((err) => {
         console.warn("Thread load:", err);
+        if (alive) setLoading(false);
       });
     return () => {
       alive = false;
@@ -253,6 +267,7 @@ export function useThread(args: { conversationId: string; currentUserId: string 
     messages,
     hasMore,
     loadingOlder,
+    loading,
     atEnd,
     pendingCount,
     scrollRef,
