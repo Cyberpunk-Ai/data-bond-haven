@@ -135,7 +135,7 @@ export function useUnreadCounts() {
 let resyncTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Coalesce a burst of read events into a single database re-count. */
-function scheduleUnreadResync() {
+export function scheduleUnreadResync() {
   if (resyncTimer) return;
   resyncTimer = setTimeout(() => {
     resyncTimer = null;

@@ -53,7 +53,7 @@ export const Route = createFileRoute("/")({
       {
         property: "og:description",
         content:
-          "Share moments, join live audio rooms, and grow your audience on Spaces1 — the social home for creators and communities.",
+          "Discover, explore, build and share on Spaces1 — where your world comes to life.",
       },
       // Self-referencing canonical: the marketing root is a real URL with no
       // params to collapse, so declaring it stops `?utm_…`/`?ref=…` variants of

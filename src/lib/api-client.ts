@@ -16,7 +16,12 @@ import { deleteMyMedia } from "@/lib/media.functions";
 import { sanitizeReactionEmoji } from "@/lib/emojis";
 import { tipAnnouncement } from "@/lib/space-reactions";
 import { MAX_SPACE_CHAT_CHARS, lengthError, messageLengthError } from "@/lib/message-length";
-import { callCardsFromRows, type CallCard, type CallRowLike } from "@/lib/call-cards";
+import {
+  callCardFromRow,
+  callCardsFromRows,
+  type CallCard,
+  type CallRowLike,
+} from "@/lib/call-cards";
 import { emitRealtime } from "@/lib/realtime";
 import { errorMessage } from "@/lib/error-messages";
 import { appConfig } from "@/lib/config";
@@ -2090,23 +2095,59 @@ export async function getConversations(): Promise<Conversation[]> {
         const first = await buildUnread(true);
         return first.error ? buildUnread(false) : first;
       };
-      const [, unreadRes] = await Promise.all([
+      const [, unreadRes, callsRes] = await Promise.all([
         hydrateAuthors(rows.flatMap((r) => [r.user_a, r.user_b])),
         runUnread(),
+        // Last finished call per relationship — the inbox rail shows a phone
+        // glyph when a call beat the last message. Calls live in `calls`, never
+        // in `messages`, so the conversation row cannot stamp them itself. RLS
+        // (`calls participant read`) already confines rows to my pairs, and a
+        // call hidden/deleted for me is invisible here, matching the thread.
+        db
+          .from("calls")
+          .select(
+            "id,caller_id,callee_id,kind,status,started_at,answered_at,ended_at,duration_seconds",
+          )
+          .or(`caller_id.eq.${userId},callee_id.eq.${userId}`)
+          .order("started_at", { ascending: false })
+          .limit(200),
       ]);
       const unreadByConversation = new Map<string, number>();
       for (const row of (unreadRes?.data ?? []) as any[]) {
         const key = String(row.conversation_id);
         unreadByConversation.set(key, (unreadByConversation.get(key) ?? 0) + 1);
       }
-      return rows.map((row: any) => ({
-        id: row.id,
-        participant_id: row.user_a === userId ? row.user_b : row.user_a,
-        preview: row.preview ?? "",
-        unread: unreadByConversation.get(String(row.id)) ?? 0,
-        online: false,
-        updated_at: row.updated_at ?? nowIso(),
-      }));
+      // The newest call per peer drives the rail glyph. `calls` came back
+      // ordered newest-first, so the first row that yields a real history card
+      // (callCardFromRow drops live rings) for a peer is that peer's latest.
+      const lastCallByPeer = new Map<string, { at: string; kind: "voice" | "video" }>();
+      const callRows = (callsRes?.data ?? []) as CallRowLike[];
+      const seenCallIds = new Set<string>();
+      for (const row of callRows) {
+        if (!row?.id || seenCallIds.has(row.id)) continue;
+        const card = callCardFromRow(row, userId);
+        if (!card) continue;
+        seenCallIds.add(row.id);
+        const peer = String(row.caller_id === userId ? row.callee_id : row.caller_id);
+        if (!peer || lastCallByPeer.has(peer)) continue;
+        lastCallByPeer.set(peer, {
+          at: card.at,
+          kind: card.kind === "video" ? "video" : "voice",
+        });
+      }
+      return rows.map((row: any) => {
+        const participantId = row.user_a === userId ? row.user_b : row.user_a;
+        const lastCall = lastCallByPeer.get(String(participantId));
+        return {
+          id: row.id,
+          participant_id: participantId,
+          preview: row.preview ?? "",
+          unread: unreadByConversation.get(String(row.id)) ?? 0,
+          online: false,
+          updated_at: row.updated_at ?? nowIso(),
+          ...(lastCall ? { last_call_at: lastCall.at, last_call_kind: lastCall.kind } : {}),
+        };
+      });
     }
   } catch (err) {
     console.warn("getConversations notice:", err);

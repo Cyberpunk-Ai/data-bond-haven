@@ -351,10 +351,11 @@ describe("every public asset the app promises is on disk and honestly sized", ()
       [...script].some((c) => c.charCodeAt(0) > 0x7f),
       "generator is pure ASCII",
     ).toBe(false);
-    // It composes the real mark (never a redrawn one) onto the brand's black.
+    // It composes the real mark (never a redrawn one) onto the brand's black,
+    // centred and ALONE: no wordmark, no tagline, nothing drawn as text at all.
     expect(script).toContain("og-image");
     expect(script).toContain("logo.png");
-    expect(script).toContain("Discover. Explore. Build. Share.");
+    expect(script).not.toMatch(/DrawString|Draw-Line|New-Font|StringFormat|\$Tagline|\$Name\b/);
   });
 });
 

@@ -272,6 +272,13 @@ export interface Conversation {
   updated_at: string;
   /** Per-user hide list — cleared automatically when a new message arrives. */
   hidden_for?: string[];
+  /**
+   * The last finished call in this relationship (`calls` table — calls are
+   * never copied into `messages`). The inbox rail shows a phone glyph when the
+   * call is newer than `updated_at`, i.e. the call *was* the last activity.
+   */
+  last_call_at?: string;
+  last_call_kind?: "voice" | "video";
   messages?: Message[];
 }
 

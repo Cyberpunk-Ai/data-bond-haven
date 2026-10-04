@@ -1,11 +1,16 @@
 import { useState } from "react";
-import { EyeOff, Film, ImageIcon, MoreVertical, Music, FileText } from "lucide-react";
+import { EyeOff, Film, ImageIcon, MoreVertical, Music, FileText, Phone, Video } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { Conversation, Profile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { TimeAgo } from "@/components/social/TimeAgo";
 import { Avatar } from "@/components/social/Avatar";
-import { attachmentKind, previewLabel } from "@/lib/message-helpers";
+import {
+  attachmentKind,
+  callPreviewLabel,
+  isCallActivity,
+  previewLabel,
+} from "@/lib/message-helpers";
 
 /**
  * One inbox row.
@@ -34,8 +39,15 @@ export function ConversationRow({
   const [menuOpen, setMenuOpen] = useState(false);
 
   const kind = attachmentKind(conversation.preview);
-  const PreviewIcon =
-    kind === "image"
+  // A call that beat the last message takes over the preview line — the same
+  // glyph treatment photos/videos/files get, sourced from `calls` instead of
+  // the (untouched) message preview.
+  const lastWasCall = isCallActivity(conversation.last_call_at, conversation.updated_at);
+  const PreviewIcon = lastWasCall
+    ? conversation.last_call_kind === "video"
+      ? Video
+      : Phone
+    : kind === "image"
       ? ImageIcon
       : kind === "video"
         ? Film
@@ -81,7 +93,11 @@ export function ConversationRow({
           <span className="mt-0.5 flex items-center gap-2">
             <span className="line-clamp-1 flex-1 flex items-center gap-1.5 text-xs text-muted-foreground">
               {PreviewIcon && <PreviewIcon className="h-3.5 w-3.5 shrink-0 opacity-70" />}
-              <span className="truncate">{previewLabel(conversation.preview)}</span>
+              <span className="truncate">
+                {lastWasCall
+                  ? callPreviewLabel(conversation.last_call_kind)
+                  : previewLabel(conversation.preview)}
+              </span>
             </span>
             {conversation.unread > 0 && (
               <span className="grid h-5 min-w-5 place-items-center rounded-full bg-gradient-to-r from-brand to-brand-pink px-1.5 text-[0.65rem] font-bold text-white">

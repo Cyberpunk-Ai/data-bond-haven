@@ -308,6 +308,30 @@ function MessagesPage() {
   useRealtime((event) => {
     if (event.type === "call:resolved") {
       setCallRefresh((n) => n + 1);
+      // Stamp the rail immediately so the finished call shows its phone glyph —
+      // calls never bump `conversations.updated_at` (no message row is written),
+      // so without this the icon only appears after a full reload. The event
+      // carries the raw `calls` row; a DELETE delivers the old row instead.
+      const callPeer =
+        event.caller_id && event.callee_id
+          ? event.caller_id === currentUserId
+            ? event.callee_id
+            : event.caller_id
+          : "";
+      const callAt = event.ended_at || event.started_at || new Date().toISOString();
+      if (callPeer) {
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.participant_id === callPeer
+              ? {
+                  ...c,
+                  last_call_at: callAt,
+                  last_call_kind: event.kind === "video" ? "video" : "voice",
+                }
+              : c,
+          ),
+        );
+      }
       return;
     }
 

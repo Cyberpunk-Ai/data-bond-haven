@@ -110,6 +110,33 @@ export function canEdit(m: Message): boolean {
   return Date.now() - new Date(m.created_at).getTime() <= MESSAGE_EDIT_WINDOW_MS;
 }
 
+/* -------------------------------------------------------------------- calls */
+
+/**
+ * Was the last activity in a thread a call rather than a message?
+ *
+ * Calls never enter `messages` (they are derived from the `calls` table, so the
+ * conversation trigger cannot stamp them), which leaves the row's own
+ * timestamps as the only honest comparison: a call that started after the last
+ * message beat it. An unparseable date on either side says "not a call" — the
+ * rail must never claim one it cannot prove.
+ */
+export function isCallActivity(
+  lastCallAt?: string | null,
+  conversationUpdatedAt?: string | null,
+): boolean {
+  const call = Date.parse(lastCallAt ?? "");
+  if (!Number.isFinite(call)) return false;
+  const message = Date.parse(conversationUpdatedAt ?? "");
+  if (!Number.isFinite(message)) return true;
+  return call > message;
+}
+
+/** The inbox-rail label for a last activity that was a call. */
+export function callPreviewLabel(kind?: "voice" | "video"): string {
+  return kind === "video" ? "📹 Video call" : "📞 Voice call";
+}
+
 /** The dated strip label: "Today", "Yesterday", or a short weekday/date. */
 export function dayLabel(iso: string) {
   const d = new Date(iso);

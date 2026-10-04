@@ -83,6 +83,17 @@ describe("the premise: an inbound message in the open thread is marked read live
     expect(ingest).toContain("msg.sender_id !== currentUserId");
     expect(ingest).toContain("msg.conversation_id === conversationId");
     expect(ingest).toContain('document.visibilityState === "visible"');
-    expect(ingest).toContain("void markThreadRead(conversationId);");
+    // The resync chained on the write is what makes the badge *persist*: the DB
+    // is re-read only after `read_at` actually committed, so navigating away
+    // (AppShell re-counts on mount) cannot resurrect a count already read.
+    expect(ingest).toContain("void markThreadRead(conversationId).then(scheduleUnreadResync);");
+  });
+
+  it("re-syncs the global badge after the write of every read path, not just live arrivals", () => {
+    // Opening a thread marks it read too — that write must reconcile the badge
+    // as well, or the resurrected count survives until the next coincidence.
+    const load = between(thread, "Load the newest page whenever", "const onScroll = useCallback(");
+    expect(load).toContain("void markThreadRead(conversationId).then(scheduleUnreadResync);");
+    expect(thread).toContain('import { scheduleUnreadResync } from "@/lib/unread-state"');
   });
 });
