@@ -73,6 +73,13 @@ export function CallCardChip({ card, onCall, timeLabel, onHide, onDelete }: Call
       className={cn(
         "group/call relative mx-auto flex w-full max-w-[24rem] items-center gap-3 rounded-2xl border p-2 pr-2.5 text-left shadow-xs transition-all",
         "motion-safe:hover:-translate-y-px motion-safe:hover:shadow-sm motion-reduce:transform-none",
+        // While the kebab menu is open this whole card must sit above its
+        // siblings: the popover hangs down over the *next* call card, and a
+        // later sibling paints above an earlier one — hovering through it
+        // triggered that card's hover-reveal styles underneath the menu, which
+        // read as flicker. Position `relative` alone creates no stacking order,
+        // so the lift has to happen here.
+        menuOpen && "z-50",
         warning
           ? "border-rose-500/20 bg-rose-500/[0.06] dark:bg-rose-500/[0.08]"
           : "border-border/60 bg-card/70 hover:border-border",

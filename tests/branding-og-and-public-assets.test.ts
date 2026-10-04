@@ -315,6 +315,10 @@ describe("every public asset the app promises is on disk and honestly sized", ()
     expect(pngSize("/icon-192.png")).toBe("192x192");
     expect(pngSize("/icon-512.png")).toBe("512x512");
     expect(pngSize("/apple-touch-icon.png")).toBe("180x180");
+    expect(pngSize("/favicon-16x16.png")).toBe("16x16");
+    expect(pngSize("/favicon-32x32.png")).toBe("32x32");
+    expect(pngSize("/favicon-48x48.png")).toBe("48x48");
+    expect(pngSize("/favicon-256x256.png")).toBe("256x256");
     expect(pngSize(APP_ICON_PATH)).toBe("512x512");
     expect(pngSize("/logo.png")).toBe("512x512");
   });
@@ -396,11 +400,19 @@ describe("the manifest describes an installable app", () => {
     const seen = new Set<string>();
     for (const icon of manifest.icons) {
       expect(icon.src).toMatch(/^\//);
-      expect(icon.type).toBe("image/png");
       expect(seen.has(`${icon.src}:${icon.purpose}`), "no duplicate icon entries").toBe(false);
       seen.add(`${icon.src}:${icon.purpose}`);
       expect(existsSync(publicFile(icon.src)), `${icon.src} is declared but missing`).toBe(true);
-      expect(pngSize(icon.src)).toBe(icon.sizes);
+      // A vector carries a sharp mark at every slot, so it declares `any`; a
+      // raster must honestly report the pixel box it actually is.
+      if (icon.type === "image/svg+xml") {
+        expect(icon.sizes).toBe("any");
+        const text = readFileSync(publicFile(icon.src), "utf8");
+        expect(text).toContain("<svg");
+      } else {
+        expect(icon.type).toBe("image/png");
+        expect(pngSize(icon.src)).toBe(icon.sizes);
+      }
     }
     expect(manifest.icons.some((i: { purpose?: string }) => i.purpose === "maskable")).toBe(true);
   });

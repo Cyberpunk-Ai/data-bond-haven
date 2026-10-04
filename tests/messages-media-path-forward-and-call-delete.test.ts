@@ -262,6 +262,11 @@ describe("app icons are served by a route handler, not only static hosting", () 
   it("serves only a whitelist, never a caller-supplied path", () => {
     for (const name of [
       "favicon.ico",
+      "favicon.svg",
+      "favicon-16x16.png",
+      "favicon-32x32.png",
+      "favicon-48x48.png",
+      "favicon-256x256.png",
       "icon-192.png",
       "icon-512.png",
       "apple-touch-icon.png",
@@ -282,6 +287,11 @@ describe("app icons are served by a route handler, not only static hosting", () 
   it("each icon route dynamically imports the server module in its GET handler", () => {
     for (const [file, asset] of [
       ["routes/favicon[.]ico.ts", "favicon.ico"],
+      ["routes/favicon[.]svg.ts", "favicon.svg"],
+      ["routes/favicon-16x16[.]png.ts", "favicon-16x16.png"],
+      ["routes/favicon-32x32[.]png.ts", "favicon-32x32.png"],
+      ["routes/favicon-48x48[.]png.ts", "favicon-48x48.png"],
+      ["routes/favicon-256x256[.]png.ts", "favicon-256x256.png"],
       ["routes/icon-192[.]png.ts", "icon-192.png"],
       ["routes/icon-512[.]png.ts", "icon-512.png"],
       ["routes/apple-touch-icon[.]png.ts", "apple-touch-icon.png"],

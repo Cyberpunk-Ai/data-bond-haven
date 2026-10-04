@@ -34,6 +34,15 @@ Save-Png 192 'icon-192.png'
 Save-Png 180 'apple-touch-icon.png'
 Save-Png 512 'logo.png'
 
+# Standard-named favicon sizes. Validators (and browsers hunting for implicit
+# paths) look for exactly these names: a 32px desktop tab mark, plus 16/48 for
+# the small slots and 256 for the high-dpi/Windows store slot. These also feed
+# the multi-size favicon.ico via scripts/build-favicon-ico.mjs.
+Save-Png 16 'favicon-16x16.png'
+Save-Png 32 'favicon-32x32.png'
+Save-Png 48 'favicon-48x48.png'
+Save-Png 256 'favicon-256x256.png'
+
 # favicon.ico from a 32x32 render
 $fb = Make-Square 32
 $hicon = $fb.GetHicon()

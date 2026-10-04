@@ -437,7 +437,7 @@ describe("the icon set exists on disk", () => {
       return `${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`;
     };
     const pngs = ICON_LINKS.filter((l) => l.href.endsWith(".png"));
-    expect(pngs).toHaveLength(3);
+    expect(pngs).toHaveLength(7);
     for (const link of pngs) {
       const declared = "sizes" in link ? link.sizes : undefined;
       expect(dims(link.href), `${link.href} disagrees with its sizes attribute`).toBe(declared);
@@ -469,12 +469,13 @@ describe("the icon set exists on disk", () => {
 
     // Legacy bitmap for readers that only understand the old format…
     expect(entries.some((e) => e.width === 32 && !isPngEntry(e))).toBe(true);
-    // …plus the real marks, with the big one declared in the 256+ slot.
+    // …plus PNG entries for the classic small slots and the 256 slot — not the
+    // oversized 192/512 marks validators flag as "extra" for an .ico.
     const pngSizes = entries
       .filter(isPngEntry)
       .map((e) => e.payload.readUInt32BE(16))
       .sort((a, b) => a - b);
-    expect(pngSizes).toEqual([192, 512]);
+    expect(pngSizes).toEqual([16, 48, 256]);
   });
 
   it("the web app manifest covers the same icons and is valid json", () => {
@@ -483,6 +484,8 @@ describe("the icon set exists on disk", () => {
     const sizes = manifest.icons.map((i: { sizes: string }) => i.sizes);
     expect(sizes).toContain("192x192");
     expect(sizes).toContain("512x512");
+    // An `any`-sized vector so installers can render a sharp mark at any slot.
+    expect(sizes).toContain("any");
     expect(manifest.icons.some((i: { purpose?: string }) => i.purpose === "maskable")).toBe(true);
     for (const icon of manifest.icons) {
       expect(existsSync(publicFile(icon.src)), `${icon.src} is declared but missing`).toBe(true);

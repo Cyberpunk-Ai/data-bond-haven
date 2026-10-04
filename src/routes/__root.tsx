@@ -146,6 +146,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       // hex is derived from the same oklch brand token the stylesheet uses, and
       // `applyThemeToDOM` re-points it when someone picks another accent.
       { name: "theme-color", content: themeColorFor() },
+      // iOS reads these instead of the manifest: without a title here (and an
+      // `id`/`name` in the manifest) a home-screen shortcut lands as an
+      // untitled blank web app, which PWA audits score as "no touch web app
+      // title declared".
+      { name: "apple-mobile-web-app-title", content: BRAND },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "mobile-web-app-capable", content: "yes" },
       // Deliberately no `robots` meta here: the root head is merged into every
       // route, and a blanket `index,follow` would compete with the
       // `noindex,nofollow` that private routes declare for themselves.
@@ -158,8 +165,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap",
       },
-      // Sized icon set (ico + 192/512 png + apple-touch + manifest) — see
-      // ICON_LINKS for why the legacy .ico stays and why `sizes` is declared.
+      // Sized icon set (svg + 16/32/48/192/256/512 png + ico + apple-touch +
+      // manifest) — see ICON_LINKS for the reading order and why each lives.
       ...ICON_LINKS,
     ],
   }),

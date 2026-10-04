@@ -17,7 +17,12 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as BookmarksRouteImport } from './routes/bookmarks'
 import { Route as ContactRouteImport } from './routes/contact'
 import { Route as ExploreRouteImport } from './routes/explore'
+import { Route as Favicon16x16DotpngRouteImport } from './routes/favicon-16x16[.]png'
+import { Route as Favicon256x256DotpngRouteImport } from './routes/favicon-256x256[.]png'
+import { Route as Favicon32x32DotpngRouteImport } from './routes/favicon-32x32[.]png'
+import { Route as Favicon48x48DotpngRouteImport } from './routes/favicon-48x48[.]png'
 import { Route as FaviconDoticoRouteImport } from './routes/favicon[.]ico'
+import { Route as FaviconDotsvgRouteImport } from './routes/favicon[.]svg'
 import { Route as FeedRouteImport } from './routes/feed'
 import { Route as GuidelinesRouteImport } from './routes/guidelines'
 import { Route as HelpRouteImport } from './routes/help'
@@ -91,9 +96,34 @@ const ExploreRoute = ExploreRouteImport.update({
   path: '/explore',
   getParentRoute: () => rootRouteImport,
 } as any)
+const Favicon16x16DotpngRoute = Favicon16x16DotpngRouteImport.update({
+  id: '/favicon-16x16.png',
+  path: '/favicon-16x16.png',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Favicon256x256DotpngRoute = Favicon256x256DotpngRouteImport.update({
+  id: '/favicon-256x256.png',
+  path: '/favicon-256x256.png',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Favicon32x32DotpngRoute = Favicon32x32DotpngRouteImport.update({
+  id: '/favicon-32x32.png',
+  path: '/favicon-32x32.png',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Favicon48x48DotpngRoute = Favicon48x48DotpngRouteImport.update({
+  id: '/favicon-48x48.png',
+  path: '/favicon-48x48.png',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const FaviconDoticoRoute = FaviconDoticoRouteImport.update({
   id: '/favicon.ico',
   path: '/favicon.ico',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FaviconDotsvgRoute = FaviconDotsvgRouteImport.update({
+  id: '/favicon.svg',
+  path: '/favicon.svg',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FeedRoute = FeedRouteImport.update({
@@ -268,7 +298,12 @@ export interface FileRoutesByFullPath {
   '/bookmarks': typeof BookmarksRoute
   '/contact': typeof ContactRoute
   '/explore': typeof ExploreRoute
+  '/favicon-16x16.png': typeof Favicon16x16DotpngRoute
+  '/favicon-256x256.png': typeof Favicon256x256DotpngRoute
+  '/favicon-32x32.png': typeof Favicon32x32DotpngRoute
+  '/favicon-48x48.png': typeof Favicon48x48DotpngRoute
   '/favicon.ico': typeof FaviconDoticoRoute
+  '/favicon.svg': typeof FaviconDotsvgRoute
   '/feed': typeof FeedRoute
   '/guidelines': typeof GuidelinesRoute
   '/help': typeof HelpRoute
@@ -311,7 +346,12 @@ export interface FileRoutesByTo {
   '/bookmarks': typeof BookmarksRoute
   '/contact': typeof ContactRoute
   '/explore': typeof ExploreRoute
+  '/favicon-16x16.png': typeof Favicon16x16DotpngRoute
+  '/favicon-256x256.png': typeof Favicon256x256DotpngRoute
+  '/favicon-32x32.png': typeof Favicon32x32DotpngRoute
+  '/favicon-48x48.png': typeof Favicon48x48DotpngRoute
   '/favicon.ico': typeof FaviconDoticoRoute
+  '/favicon.svg': typeof FaviconDotsvgRoute
   '/feed': typeof FeedRoute
   '/guidelines': typeof GuidelinesRoute
   '/help': typeof HelpRoute
@@ -355,7 +395,12 @@ export interface FileRoutesById {
   '/bookmarks': typeof BookmarksRoute
   '/contact': typeof ContactRoute
   '/explore': typeof ExploreRoute
+  '/favicon-16x16.png': typeof Favicon16x16DotpngRoute
+  '/favicon-256x256.png': typeof Favicon256x256DotpngRoute
+  '/favicon-32x32.png': typeof Favicon32x32DotpngRoute
+  '/favicon-48x48.png': typeof Favicon48x48DotpngRoute
   '/favicon.ico': typeof FaviconDoticoRoute
+  '/favicon.svg': typeof FaviconDotsvgRoute
   '/feed': typeof FeedRoute
   '/guidelines': typeof GuidelinesRoute
   '/help': typeof HelpRoute
@@ -400,7 +445,12 @@ export interface FileRouteTypes {
     | '/bookmarks'
     | '/contact'
     | '/explore'
+    | '/favicon-16x16.png'
+    | '/favicon-256x256.png'
+    | '/favicon-32x32.png'
+    | '/favicon-48x48.png'
     | '/favicon.ico'
+    | '/favicon.svg'
     | '/feed'
     | '/guidelines'
     | '/help'
@@ -443,7 +493,12 @@ export interface FileRouteTypes {
     | '/bookmarks'
     | '/contact'
     | '/explore'
+    | '/favicon-16x16.png'
+    | '/favicon-256x256.png'
+    | '/favicon-32x32.png'
+    | '/favicon-48x48.png'
     | '/favicon.ico'
+    | '/favicon.svg'
     | '/feed'
     | '/guidelines'
     | '/help'
@@ -486,7 +541,12 @@ export interface FileRouteTypes {
     | '/bookmarks'
     | '/contact'
     | '/explore'
+    | '/favicon-16x16.png'
+    | '/favicon-256x256.png'
+    | '/favicon-32x32.png'
+    | '/favicon-48x48.png'
     | '/favicon.ico'
+    | '/favicon.svg'
     | '/feed'
     | '/guidelines'
     | '/help'
@@ -530,7 +590,12 @@ export interface RootRouteChildren {
   BookmarksRoute: typeof BookmarksRoute
   ContactRoute: typeof ContactRoute
   ExploreRoute: typeof ExploreRoute
+  Favicon16x16DotpngRoute: typeof Favicon16x16DotpngRoute
+  Favicon256x256DotpngRoute: typeof Favicon256x256DotpngRoute
+  Favicon32x32DotpngRoute: typeof Favicon32x32DotpngRoute
+  Favicon48x48DotpngRoute: typeof Favicon48x48DotpngRoute
   FaviconDoticoRoute: typeof FaviconDoticoRoute
+  FaviconDotsvgRoute: typeof FaviconDotsvgRoute
   FeedRoute: typeof FeedRoute
   GuidelinesRoute: typeof GuidelinesRoute
   HelpRoute: typeof HelpRoute
@@ -623,11 +688,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ExploreRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/favicon-16x16.png': {
+      id: '/favicon-16x16.png'
+      path: '/favicon-16x16.png'
+      fullPath: '/favicon-16x16.png'
+      preLoaderRoute: typeof Favicon16x16DotpngRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/favicon-256x256.png': {
+      id: '/favicon-256x256.png'
+      path: '/favicon-256x256.png'
+      fullPath: '/favicon-256x256.png'
+      preLoaderRoute: typeof Favicon256x256DotpngRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/favicon-32x32.png': {
+      id: '/favicon-32x32.png'
+      path: '/favicon-32x32.png'
+      fullPath: '/favicon-32x32.png'
+      preLoaderRoute: typeof Favicon32x32DotpngRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/favicon-48x48.png': {
+      id: '/favicon-48x48.png'
+      path: '/favicon-48x48.png'
+      fullPath: '/favicon-48x48.png'
+      preLoaderRoute: typeof Favicon48x48DotpngRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/favicon.ico': {
       id: '/favicon.ico'
       path: '/favicon.ico'
       fullPath: '/favicon.ico'
       preLoaderRoute: typeof FaviconDoticoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/favicon.svg': {
+      id: '/favicon.svg'
+      path: '/favicon.svg'
+      fullPath: '/favicon.svg'
+      preLoaderRoute: typeof FaviconDotsvgRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/feed': {
@@ -866,7 +966,12 @@ const rootRouteChildren: RootRouteChildren = {
   BookmarksRoute: BookmarksRoute,
   ContactRoute: ContactRoute,
   ExploreRoute: ExploreRoute,
+  Favicon16x16DotpngRoute: Favicon16x16DotpngRoute,
+  Favicon256x256DotpngRoute: Favicon256x256DotpngRoute,
+  Favicon32x32DotpngRoute: Favicon32x32DotpngRoute,
+  Favicon48x48DotpngRoute: Favicon48x48DotpngRoute,
   FaviconDoticoRoute: FaviconDoticoRoute,
+  FaviconDotsvgRoute: FaviconDotsvgRoute,
   FeedRoute: FeedRoute,
   GuidelinesRoute: GuidelinesRoute,
   HelpRoute: HelpRoute,

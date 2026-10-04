@@ -24,12 +24,18 @@ import path from "node:path";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ICO = path.join(root, "public", "favicon.ico");
 const PNGS = [
-  { file: "public/icon-192.png", declared: 192 },
-  // 256+ cannot be expressed in the one-byte size fields, so the spec says to
-  // write 0 and let the reader take the real width from the PNG header. Our
-  // largest mark is 512px; declaring it as the 256 slot is the standard
-  // convention and Chrome/Firefox/Windows all honour it.
-  { file: "public/icon-512.png", declared: 0 },
+  // The set PWA validators ask an .ico to carry: 16, 48 and the 256 slot, next
+  // to the legacy 32 bitmap the builder keeps from the existing file. The old
+  // build embedded the 192/512 marks, which the audit flagged as *extra* sizes —
+  // the .ico is for small classic slots, the declared PNG `<link>`s and the
+  // manifest are what should carry 192/512.
+  { file: "public/favicon-16x16.png", declared: 16 },
+  { file: "public/favicon-48x48.png", declared: 48 },
+  // A 256px payload must still be declared as 0: sizes of 256+ cannot be
+  // expressed in the one-byte directory fields, so the spec says to write 0 and
+  // let the reader take the real width from the PNG header. Chrome, Firefox and
+  // Windows all honour that, and the validator reports the entry as 256x256.
+  { file: "public/favicon-256x256.png", declared: 0 },
 ];
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

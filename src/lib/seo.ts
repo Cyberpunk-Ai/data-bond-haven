@@ -178,20 +178,27 @@ export function isDisallowedForCrawlers(path: string): boolean {
 /**
  * The icon set, in the order a browser should read it.
  *
- * `favicon.ico` stays because it is still what some crawlers, feed readers and
- * Windows shortcuts request when they ignore `<link>` tags — and it now carries
- * a legacy 32px bitmap alongside a 192px and a 512px PNG, so a tab icon stops
- * being an upscale of a 32px square on a high-dpi screen. The sized PNG links
- * are what modern browsers pick; declaring `sizes` is what lets them pick
- * instead of guess.
+ * The SVG goes first because it is the only mark that stays sharp at any tab
+ * size, and every browser that understands it prefers it; the raster `<link>`s
+ * behind it are the fallbacks, declared with their real pixel size so a browser
+ * picks instead of guessing. `favicon.ico` stays because it is still what some
+ * crawlers, feed readers and Windows shortcuts request when they ignore
+ * `<link>` tags — and it now carries 16, 32, 48 and 256 entries (see
+ * `scripts/build-favicon-ico.mjs`) rather than the oversized 192/512 some
+ * validators flag as "extra" for an .ico.
  *
  * No `mask-icon` line: that needs a monochrome SVG, and shipping one would mean
  * inventing brand artwork rather than reusing the existing marks.
  */
 export const ICON_LINKS = [
-  { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+  { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+  { rel: "icon", href: "/favicon-16x16.png", type: "image/png", sizes: "16x16" },
+  { rel: "icon", href: "/favicon-32x32.png", type: "image/png", sizes: "32x32" },
+  { rel: "icon", href: "/favicon-48x48.png", type: "image/png", sizes: "48x48" },
   { rel: "icon", href: "/icon-192.png", type: "image/png", sizes: "192x192" },
+  { rel: "icon", href: "/favicon-256x256.png", type: "image/png", sizes: "256x256" },
   { rel: "icon", href: "/icon-512.png", type: "image/png", sizes: "512x512" },
+  { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
   { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" },
   { rel: "manifest", href: "/manifest.webmanifest" },
 ] as const;
