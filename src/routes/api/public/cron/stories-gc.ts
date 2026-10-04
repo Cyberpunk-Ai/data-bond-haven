@@ -14,9 +14,9 @@ export const Route = createFileRoute("/api/public/cron/stories-gc")({
           return json({ error: "unauthorized" }, 401);
         }
 
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        const { adminDb } = await import("@/integrations/supabase/client.server");
         const { deleteStoredMedia } = await import("@/lib/media-cleanup.server");
-        const db = supabaseAdmin as any;
+        const db = adminDb();
 
         const now = new Date().toISOString();
         const { data: expired, error } = await db

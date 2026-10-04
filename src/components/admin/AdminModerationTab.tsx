@@ -4,11 +4,9 @@ import {
   ShieldCheck,
   ShieldAlert,
   Trash2,
-  UserX,
   CheckCircle2,
   XCircle,
   Clock,
-  Filter,
   Eye,
   MessageSquare,
   Radio,
@@ -101,7 +99,7 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
       const updated = await updateReportStatus(reportId, status, actionTaken, currentUserId);
       setReports((prev) => prev.map((r) => (r.id === reportId ? updated : r)));
       showToast(`Report updated: ${actionTaken}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't update that report. Try again."));
     }
   };
@@ -125,7 +123,7 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
         ),
       );
       showToast(`Content purged and report marked resolved.`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "That action didn't work. Try again."));
     }
   };
@@ -144,7 +142,7 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
         currentUserId,
       );
       showToast(`Warning issued to author and report resolved.`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "That action didn't work. Try again."));
     }
   };

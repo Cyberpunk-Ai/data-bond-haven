@@ -17,7 +17,7 @@
  * viewers rebuilt per tick, and a setImmediate yield between viewers so the
  * loop is handed back to HTTP serving and HTML never starves behind ranking.
  */
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { adminDb } from "@/integrations/supabase/client.server";
 import { RANK_EPOCH_MS, rankForYou } from "@/lib/feed-rank-core";
 
 const TICK_MS = 10_000; // rebuild cadence (cold misses / refreshes queue due-now jobs)
@@ -55,11 +55,7 @@ async function writeTimeline(
   entries: Array<{ row: any; score: number }>,
 ): Promise<void> {
   const epochBucket = Math.floor(Date.now() / RANK_EPOCH_MS);
-  await supabase
-    .from("timeline_items")
-    .delete()
-    .eq("viewer_id", viewerId)
-    .eq("kind", "foryou");
+  await supabase.from("timeline_items").delete().eq("viewer_id", viewerId).eq("kind", "foryou");
 
   const top = entries.slice(0, TIMELINE_STORE_MAX);
   if (top.length === 0) return;
@@ -92,7 +88,7 @@ async function rebuildViewer(supabase: any, viewerId: string): Promise<void> {
 async function tick(): Promise<void> {
   if (ticking) return; // never overlap ticks on the single event loop
   ticking = true;
-  const supabase = supabaseAdmin as any;
+  const supabase = adminDb();
   try {
     const ids = await claimDueJobs(supabase);
     for (const viewerId of ids) {
@@ -101,17 +97,15 @@ async function tick(): Promise<void> {
       } catch (err) {
         console.warn(`feed worker: rebuild failed for ${viewerId}:`, err);
         try {
-          await supabase
-            .from("feed_rank_jobs")
-            .upsert(
-              {
-                viewer_id: viewerId,
-                reason: "retry",
-                due_at: new Date(Date.now() + BACKOFF_MS).toISOString(),
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "viewer_id" },
-            );
+          await supabase.from("feed_rank_jobs").upsert(
+            {
+              viewer_id: viewerId,
+              reason: "retry",
+              due_at: new Date(Date.now() + BACKOFF_MS).toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "viewer_id" },
+          );
         } catch {
           /* give up; the viewer re-enqueues on their next feed read */
         }

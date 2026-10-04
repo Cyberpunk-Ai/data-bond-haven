@@ -69,3 +69,20 @@ export const supabaseAdmin = new Proxy({} as ReturnType<typeof createSupabaseAdm
     return Reflect.get(_supabaseAdmin, prop, receiver);
   },
 });
+
+/**
+ * The single, reviewed data-layer escape hatch for trusted server code.
+ *
+ * `./types.ts` is generated and currently lags the live schema — newer tables
+ * and RPCs are not in the typed `Database` yet (full regeneration is a separate,
+ * scheduled task). Rather than sprinkle `supabaseAdmin as any` across dozens of
+ * modules, every untyped service-role access goes through `adminDb()`, so the
+ * opt-out from generated types lives in exactly one place and cannot silently
+ * regress. Server-only: never import this into client-bundled code.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- one reviewed escape for schema that the generated types do not cover yet
+export type LooseAdminClient = any;
+
+export function adminDb(): LooseAdminClient {
+  return supabaseAdmin;
+}

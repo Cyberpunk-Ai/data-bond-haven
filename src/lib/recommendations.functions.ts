@@ -93,17 +93,15 @@ async function enqueueRankJob(supabase: any, myId: string, immediate = false) {
     const dueAt = immediate
       ? new Date().toISOString()
       : new Date((Math.floor(Date.now() / RANK_EPOCH_MS) + 1) * RANK_EPOCH_MS).toISOString();
-    await supabase
-      .from("feed_rank_jobs")
-      .upsert(
-        {
-          viewer_id: myId,
-          reason: immediate ? "cold" : "read",
-          due_at: dueAt,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "viewer_id" },
-      );
+    await supabase.from("feed_rank_jobs").upsert(
+      {
+        viewer_id: myId,
+        reason: immediate ? "cold" : "read",
+        due_at: dueAt,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "viewer_id" },
+    );
   } catch {
     /* best-effort: a dropped enqueue just means the epoch sweep re-ranks later */
   }
@@ -140,9 +138,7 @@ async function mergeFreshFollowedPosts(
     const have = new Set(entries.map((e) => e.row.id));
     const { data: fresh } = await supabase
       .from("posts")
-      .select(
-        "id,user_id,created_at,like_count,comment_count,repost_count,view_count,workspace_id",
-      )
+      .select("id,user_id,created_at,like_count,comment_count,repost_count,view_count,workspace_id")
       .in("user_id", authorIds)
       .eq("hidden", false)
       .gt("created_at", new Date(watermark).toISOString())
@@ -158,7 +154,9 @@ async function mergeFreshFollowedPosts(
     // for just this small fresh set; RLS may hide another org's workspace plan,
     // in which case scoreFreshRow correctly falls back to the author's own plan.
     const planAuthorIds = [...new Set(freshList.map((p) => p.user_id).filter(Boolean))] as string[];
-    const planWsIds = [...new Set(freshList.map((p) => p.workspace_id).filter(Boolean))] as string[];
+    const planWsIds = [
+      ...new Set(freshList.map((p) => p.workspace_id).filter(Boolean)),
+    ] as string[];
     const [authorPlans, wsPlans] = await Promise.all([
       planAuthorIds.length
         ? supabase.from("profiles").select("id,plan").in("id", planAuthorIds)
@@ -170,7 +168,9 @@ async function mergeFreshFollowedPosts(
     const authorPlan = new Map<string, string>(
       ((authorPlans.data ?? []) as any[]).map((r) => [r.id, r.plan]),
     );
-    const wsPlan = new Map<string, string>(((wsPlans.data ?? []) as any[]).map((r) => [r.id, r.plan]));
+    const wsPlan = new Map<string, string>(
+      ((wsPlans.data ?? []) as any[]).map((r) => [r.id, r.plan]),
+    );
 
     const epoch = Math.floor(Date.now() / RANK_EPOCH_MS) * RANK_EPOCH_MS;
     const extra = freshList.map((p) => {

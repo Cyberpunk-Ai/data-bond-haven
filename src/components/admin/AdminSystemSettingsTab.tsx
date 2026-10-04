@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   RefreshCw,
   Bell,
-  AlertTriangle,
   Lock,
   Upload,
   Layers,
@@ -72,7 +71,7 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
     try {
       setCheckingStorage(true);
       setStorage((await getStorageStatus()) as never);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't read the storage backend status."));
     } finally {
       setCheckingStorage(false);
@@ -99,7 +98,7 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
         // refresh it after a full copy rather than leaving a stale card.
         setStorage((await getStorageStatus()) as never);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't work through the legacy bucket. Try again."));
     } finally {
       setRelocating(null);
@@ -112,7 +111,7 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
       const res = await syncSupabaseDatabase();
       setSyncResult({ counts: res.counts, durationMs: res.durationMs });
       toast.success(`Remote Supabase database synchronized (${res.durationMs}ms)`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't sync the remote database. Try again."));
     } finally {
       setSyncingDb(false);
@@ -155,7 +154,7 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
       const updated = await updateAdminSettings(settings, currentUserId);
       setSettings(updated);
       showToast("Platform system settings & banner published live");
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't save these settings. Try again."));
     } finally {
       setSaving(false);

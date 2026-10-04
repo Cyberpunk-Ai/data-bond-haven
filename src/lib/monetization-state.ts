@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { signedInProfileId } from "@/lib/remote-store";
+import { errorMessage } from "@/lib/error-messages";
 import {
   getEarnings,
   requestPayout as requestPayoutApi,
@@ -141,11 +142,11 @@ export async function refreshMonetization() {
         payoutDestination: data.payoutDestination,
         openPayout: data.openPayout,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       publish({
         ...state,
         loading: false,
-        error: err?.message || "We couldn't load your earnings. Please try again.",
+        error: errorMessage(err) || "We couldn't load your earnings. Please try again.",
       });
     } finally {
       inFlight = null;

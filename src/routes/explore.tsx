@@ -1,4 +1,5 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { canonicalLink, ogUrlMeta, ORG_NAME } from "@/lib/seo";
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Flame,
@@ -7,7 +8,6 @@ import {
   Search,
   X,
   Loader2,
-  Sparkles,
   Image as ImageIcon,
   Heart,
   MessageCircle,
@@ -24,14 +24,9 @@ import { UserBadge } from "@/components/social/UserBadge";
 import { compact } from "@/lib/formatters";
 import { currentUser, profileRegistry, getProfile } from "@/lib/profile-service";
 import type { Post, Profile, Topic } from "@/lib/types";
-import {
-  getPostsPage,
-  getCreatorsPage,
-  globalSearch,
-  getTopics,
-} from "@/lib/api-client";
+import { getPostsPage, getCreatorsPage, globalSearch, getTopics } from "@/lib/api-client";
 import { getWhoToFollow } from "@/lib/recommendations.functions";
-import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS, isVideoUrl } from "@/lib/utils";
+import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS, isVideoUrl, firstMediaUrl } from "@/lib/utils";
 
 export const Route = createFileRoute("/explore")({
   validateSearch: (
@@ -43,18 +38,24 @@ export const Route = createFileRoute("/explore")({
   }),
   head: () => ({
     meta: [
-      { title: "Explore — Discover Creators & Topics on Spaces1" },
+      { title: `Explore — Discover Creators & Topics on ${ORG_NAME}` },
       {
         name: "description",
         content:
           "Explore trending tags, rising creators, media posts, and the topics moving fastest across Spaces right now.",
       },
-      { property: "og:title", content: "Explore — Discover Creators & Topics on Spaces1" },
+      { property: "og:title", content: `Explore — Discover Creators & Topics on ${ORG_NAME}` },
       {
         property: "og:description",
-        content: "Trending tags, rising creators, and the topics moving fastest on Spaces1.",
+        content: `Trending tags, rising creators, and the topics moving fastest on ${ORG_NAME}.`,
       },
+      // Every `?q=`/filter variant rolls up here on purpose: the result list is
+      // rendered client-side from the same endpoint, so a parameterised copy is a
+      // duplicate, not a page. This is also the URL the WebSite SearchAction in
+      // `index.tsx` points at.
+      ogUrlMeta("/explore"),
     ],
+    links: [canonicalLink("/explore")],
   }),
   component: ExplorePage,
 });
@@ -109,7 +110,7 @@ function VideoPreviewTile({ src }: { src: string }) {
 function ExplorePage() {
   const search = Route.useSearch();
   const [filter, setFilter] = useState<(typeof filters)[number]>(() => {
-    if (search.tab && filters.includes(search.tab as any)) {
+    if (search.tab && (filters as readonly string[]).includes(search.tab)) {
       return search.tab as (typeof filters)[number];
     }
     return "Top";
@@ -150,7 +151,7 @@ function ExplorePage() {
       setSearchQuery(search.q || "");
       setDebouncedQuery(search.q || "");
     }
-    if (search.tab && filters.includes(search.tab as any)) {
+    if (search.tab && (filters as readonly string[]).includes(search.tab)) {
       setFilter(search.tab as (typeof filters)[number]);
     }
   }, [search.tag, search.q, search.tab]);
@@ -424,10 +425,7 @@ function ExplorePage() {
   }
 
   return (
-    <AppShell
-      title="Explore"
-      right={<DefaultRail />}
-    >
+    <AppShell title="Explore" right={<DefaultRail />}>
       <div className="mx-auto max-w-3xl space-y-6">
         <PageHeader
           title="Explore"
@@ -645,7 +643,7 @@ function ExplorePage() {
                         <FollowButton targetUserId={p.id} />
                       </div>
                       <p className="mt-3 line-clamp-2 text-xs sm:text-sm text-muted-foreground leading-relaxed">
-                        {p.bio || "Digital creator & visual explorer on Spaces1"}
+                        {p.bio || `Digital creator & visual explorer on ${ORG_NAME}`}
                       </p>
                     </div>
                   </div>
@@ -712,7 +710,7 @@ function ExplorePage() {
                     // thumbnail uses the first, and we must know whether that
                     // first is a video so it previews instead of rendering a
                     // broken <img src="....mp4">.
-                    const thumbSrc = (p.image_url || p.media_url || "").split(",")[0]?.trim();
+                    const thumbSrc = firstMediaUrl(p.image_url || p.media_url);
                     const isVideo =
                       isVideoUrl(thumbSrc) ||
                       (p as unknown as { media_type?: string }).media_type === "video";

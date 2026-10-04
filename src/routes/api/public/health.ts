@@ -17,7 +17,7 @@ export const Route = createFileRoute("/api/public/health")({
         }),
       GET: async ({ request }) => {
         const cors = apiCorsHeaders(request.headers.get("origin"));
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        const { adminDb } = await import("@/integrations/supabase/client.server");
         // Probed through the storage abstraction, never a named vendor: an R2
         // or B2 deployment must not read as "media degraded" just because it no
         // longer uses the Supabase bucket.
@@ -27,7 +27,7 @@ export const Route = createFileRoute("/api/public/health")({
         const { paymentConfigReady } = await import("@/lib/paystack-api.server");
 
         const [dbRes, mediaRes] = await Promise.allSettled([
-          (supabaseAdmin as any).from("profiles").select("id", { count: "exact", head: true }),
+          adminDb().from("profiles").select("id", { count: "exact", head: true }),
           getStorageProvider().verifyAccess(),
         ]);
         const dbOk =

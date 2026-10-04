@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { canonicalLink, ogUrlMeta } from "@/lib/seo";
 
 import { Section, StaticPage } from "@/components/site/StaticPage";
 import { appConfig } from "@/lib/config";
@@ -28,8 +29,7 @@ export const Route = createFileRoute("/privacy")({
       { title: `Privacy Policy — ${name}` },
       {
         name: "description",
-        content:
-          "The personal data Spaces1 collects, the purpose of each category, who processes it, how long we keep it, how it is protected, and how to exercise your rights — including data received from Google sign-in.",
+        content: `The personal data ${name} collects, the purpose of each category, who processes it, how long we keep it, how it is protected, and how to exercise your rights — including data received from Google sign-in.`,
       },
       { property: "og:title", content: `Privacy Policy — ${name}` },
       {
@@ -37,8 +37,12 @@ export const Route = createFileRoute("/privacy")({
         content: `What ${name} collects, why, who it goes to, how long it stays, and your rights.`,
       },
       { property: "og:type", content: "article" },
-      { name: "twitter:card", content: "summary" },
+      // The site card is this page's picture, and it is 1200x630 — a `summary`
+      // card would shrink that banner to a thumbnail next to the text.
+      { name: "twitter:card", content: "summary_large_image" },
+      ogUrlMeta("/privacy"),
     ],
+    links: [canonicalLink("/privacy")],
   }),
   component: Privacy,
 });

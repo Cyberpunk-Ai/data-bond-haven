@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { supabase } from "@/integrations/supabase/client";
+import { appConfig } from "@/lib/config";
 import { ensureMyProfile } from "@/lib/profile.functions";
 import {
   currentUser,
@@ -85,7 +86,7 @@ async function loadSessionProfile() {
         // (the in-app notification tells them) but are write-blocked by RLS.
         if (profile.status === "banned") {
           setRestrictedReason(
-            "Your account has been banned for violating the Spaces1 Community Guidelines.",
+            `Your account has been banned for violating the ${appConfig.brand.name} Community Guidelines.`,
           );
           // signOut() returns a promise: wrapped in `void`, a rejection sailed past
           // the try/catch as an unhandled error while the token stayed in storage.

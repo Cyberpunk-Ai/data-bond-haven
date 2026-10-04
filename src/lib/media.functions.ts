@@ -17,8 +17,8 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 // reachable from the client bundle, so top-level `.server.ts` imports are not
 // allowed.
 async function admin() {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  return supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  return adminDb();
 }
 
 async function myProfileId(supabase: any, userId: string): Promise<string | null> {

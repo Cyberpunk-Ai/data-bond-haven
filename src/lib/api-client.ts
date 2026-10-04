@@ -18,6 +18,7 @@ import { tipAnnouncement } from "@/lib/space-reactions";
 import { MAX_SPACE_CHAT_CHARS, lengthError, messageLengthError } from "@/lib/message-length";
 import { callCardsFromRows, type CallCard, type CallRowLike } from "@/lib/call-cards";
 import { emitRealtime } from "@/lib/realtime";
+import { errorMessage } from "@/lib/error-messages";
 import { appConfig } from "@/lib/config";
 import type {
   AdminCharts,
@@ -771,8 +772,7 @@ export async function getProfileTabPage(options: {
       .eq("hidden", false)
       .order("created_at", { ascending: false })
       .limit(limit);
-    if (tab === "media")
-      query = query.or("media_url.not.null,image_url.not.null,image_gradient.not.null");
+    if (tab === "media") query = query.or("media_url.not.is.null,image_url.not.is.null");
     if (options.before) query = query.lt("created_at", options.before);
     const { data, error, count } = await query;
     if (error) console.warn("getProfileTabPage notice:", error.message);
@@ -1437,8 +1437,8 @@ export async function uploadMedia(
         console.warn("Media upload notice:", failure?.error || res.statusText);
       }
     }
-  } catch (err: any) {
-    console.warn("Storage upload notice:", err?.message);
+  } catch (err: unknown) {
+    console.warn("Storage upload notice:", errorMessage(err));
   }
 
   if (rejection) throw new Error(rejection);
@@ -2032,6 +2032,22 @@ export async function terminateSpaceAdmin(spaceId: string, _actorId?: string) {
 
 /* ------------------------------------------------------------------- chat */
 
+/**
+ * Both "Edit" and "Delete for everyone" share this window — 15 minutes from
+ * `created_at`. It's a UX guard, not a security boundary: the DB still lets
+ * participants update rows they can see (needed for the hidden_for tombstone),
+ * and we re-check the window here so a caller can't skip the menu and hit
+ * the client function directly.
+ */
+export const MESSAGE_EDIT_WINDOW_MS = 15 * 60 * 1000;
+
+function withinEditWindow(createdAt: string | null | undefined): boolean {
+  if (!createdAt) return false;
+  const t = new Date(createdAt).getTime();
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t <= MESSAGE_EDIT_WINDOW_MS;
+}
+
 export async function getConversations(): Promise<Conversation[]> {
   const userId = me();
   if (!isDbId(userId)) return [];
@@ -2040,6 +2056,7 @@ export async function getConversations(): Promise<Conversation[]> {
       .from("conversations")
       .select("*")
       .or(`user_a.eq.${userId},user_b.eq.${userId}`)
+      .not("hidden_for", "cs", [userId])
       .order("updated_at", { ascending: false });
     const rows = (data ?? []) as any[];
     if (rows.length > 0) {
@@ -2053,6 +2070,7 @@ export async function getConversations(): Promise<Conversation[]> {
           .select("conversation_id")
           .is("read_at", null)
           .neq("sender_id", userId)
+          .not("hidden_for", "cs", [userId])
           .in(
             "conversation_id",
             rows.map((r) => r.id),
@@ -2080,13 +2098,17 @@ export async function getConversations(): Promise<Conversation[]> {
 
 export async function getMessages(conversationId: string): Promise<Message[]> {
   try {
-    const { data } = await db
+    const myId = me();
+    let query = db
       .from("messages")
       .select("*")
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true });
+    // Skip rows the viewer chose "Delete for me" on — the server keeps them
+    // for the other side, but this reader shouldn't see them any more.
+    if (isDbId(myId)) query = query.not("hidden_for", "cs", [myId]);
+    const { data } = await query;
     if (data && data.length > 0) {
-      const myId = me();
       // Opening the thread means the recipient's device has the messages —
       // mark them delivered even before they are explicitly read.
       const { data: deliveredNow } = await db
@@ -2109,7 +2131,12 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
       if ((marked ?? []).length > 0) {
         emitRealtime("message:read", { conversationId, readerId: myId, at: nowIso() });
       }
-      return data as Message[];
+      // Hydrate `is_edited` from the persisted `edited_at` column so the
+      // "(edited)" marker survives a reload.
+      return (data as any[]).map((row) => ({
+        ...row,
+        is_edited: !!row.edited_at,
+      })) as Message[];
     }
   } catch (err) {
     console.warn("getMessages notice:", err);
@@ -2305,32 +2332,81 @@ export async function toggleMessageReaction(messageId: string, emoji: string, on
 }
 
 export async function editMessage(messageId: string, body: string) {
+  // Window enforcement lives here rather than in RLS: the same policy that
+  // lets a recipient append their id to hidden_for can't also reject a
+  // late edit, so we do the check in the code path that owns the column.
+  const myId = me();
+  if (!isDbId(myId)) throw new Error("Sign in to edit messages");
+  const { data: existing } = await db
+    .from("messages")
+    .select("sender_id, created_at")
+    .eq("id", messageId)
+    .maybeSingle();
+  if (!existing || existing.sender_id !== myId) throw new Error("Not your message");
+  if (!withinEditWindow(existing.created_at)) throw new Error("Edit window closed");
+  const editedAt = nowIso();
   const { data, error } = await db
     .from("messages")
-    .update({ body })
+    .update({ body, edited_at: editedAt })
     .eq("id", messageId)
-    .eq("sender_id", me())
+    .eq("sender_id", myId)
     .select("*")
     .maybeSingle();
   if (error) throw error;
-  emitRealtime("message:edited", { id: messageId, body });
-  return data as Message | null;
+  emitRealtime("message:edited", { id: messageId, body, edited_at: editedAt });
+  return (data ? { ...data, is_edited: true } : null) as Message | null;
 }
 
-export async function deleteMessage(messageId: string) {
+/**
+ * Delete a message. `scope` decides who loses it:
+ *   - "me":       soft-hide just for the caller (RPC appends auth.uid() to
+ *                 messages.hidden_for; the other side keeps the message).
+ *   - "everyone": hard-delete for both sides, only within the edit window
+ *                 and only if the caller is the sender (existing sender
+ *                 policy is unchanged).
+ * Media attached to a "for everyone" message is unlinked from storage so the
+ * file itself does not linger after the row goes away.
+ */
+export async function deleteMessage(messageId: string, scope: "me" | "everyone" = "everyone") {
+  const myId = me();
+  if (!isDbId(myId)) throw new Error("Sign in to delete messages");
+  if (scope === "me") {
+    const { error } = await db.rpc("hide_message_for_me", { p_message_id: messageId });
+    if (error) throw error;
+    emitRealtime("message:hidden", { id: messageId, userId: myId });
+    return { id: messageId, scope: "me" as const };
+  }
   const { data: existing } = await db
     .from("messages")
-    .select("media_url")
+    .select("media_url, created_at, sender_id")
     .eq("id", messageId)
-    .eq("sender_id", me())
+    .eq("sender_id", myId)
     .maybeSingle();
-  const { error } = await db.from("messages").delete().eq("id", messageId).eq("sender_id", me());
+  if (!existing) throw new Error("Not your message");
+  if (!withinEditWindow(existing.created_at)) throw new Error("Delete window closed");
+  const { error } = await db.from("messages").delete().eq("id", messageId).eq("sender_id", myId);
   if (error) throw error;
   if (existing?.media_url) {
     void deleteMyMedia({ data: { urls: [existing.media_url] } }).catch(() => {});
   }
   emitRealtime("message:deleted", { id: messageId });
-  return { id: messageId };
+  return { id: messageId, scope: "everyone" as const };
+}
+
+/**
+ * Hide a whole conversation from the caller's inbox. Non-destructive: the
+ * thread stays for the other participant, and the DB trigger reopens it for
+ * both parties the moment a fresh message lands.
+ */
+export async function hideConversationForMe(conversationId: string) {
+  const myId = me();
+  if (!isDbId(myId) || !isDbId(conversationId)) throw new Error("Not available");
+  const { error } = await db.rpc("hide_conversation_for_me", {
+    p_conversation_id: conversationId,
+  });
+  if (error) throw error;
+  emitRealtime("conversation:hidden", { id: conversationId, userId: myId });
+  return { id: conversationId };
 }
 
 export async function getNotifications(

@@ -24,8 +24,8 @@ export const Route = createFileRoute("/api/public/v1/followers")({
           return json({ error: "insufficient_scope" }, 403, cors);
         const url = new URL(request.url);
         const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 20, 1), 100);
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const { data, error } = await (supabaseAdmin as any)
+        const { adminDb } = await import("@/integrations/supabase/client.server");
+        const { data, error } = await adminDb()
           .from("follows")
           .select(
             "created_at,follower:profiles!follows_follower_id_fkey(id,username,display_name,avatar_url,verified)",

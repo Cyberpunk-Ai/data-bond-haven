@@ -169,9 +169,9 @@ by `db/migrations/20261001000099_media_public_private_buckets.sql`), with the
 pre-split `media` bucket kept readable until relocated.
 The one idea to hold onto
 Media is split by what it is, decided automatically by the folder each file lives in:
-Folder	Examples	Who may see it	Bucket it goes to
-avatars/, posts/, media/	profile pics, post images/video	the whole world	Public bucket
-stories/, messages/, recordings/	stories, DM files, Space replays	only the owner/friends	Private bucket
+Folder Examples Who may see it Bucket it goes to
+avatars/, posts/, media/ profile pics, post images/video the whole world Public bucket
+stories/, messages/, recordings/ stories, DM files, Space replays only the owner/friends Private bucket
 The app routes each upload to the right bucket on its own. You just create the buckets and point two env vars at them.
 Two valid ways to set it up
 Option A — Simplest: ONE bucket (recommended to start)
@@ -202,11 +202,6 @@ Option B: scope one token to BOTH buckets (the bucket selector lets you pick mul
 If you only give the token access to one bucket, writes to the other get a 403. The app is built to survive that — it logs a warning, marks the public bucket "down," and keeps working from the primary bucket — but you'd never get direct CDN URLs. So for two buckets, use one token that covers both.
 My concrete suggestion
 Do Option A now: one private bucket, fill in the 6 env lines, restart. Confirm uploads + feed images work. Then, later, add the second public bucket (Option B) purely as a speed upgrade. Nothing breaks when you go from A → B, and old uploads keep resolving because the app stores keys, not bucket URLs.Want me to add a short "R2 in 5 minutes (Option A / Option B)" copy-paste block to the README so this exact recipe lives next to the reference table?
-
-
-
-
-
 
 #### Why references survive a switch (and what does not)
 

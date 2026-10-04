@@ -35,6 +35,7 @@ import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { PLAN_DETAILS } from "@/lib/plans";
 import { useUnreadCounts } from "@/lib/unread-state";
 import { useTheme, ACCENT_PALETTES, type ThemeAccent } from "@/lib/theme-state";
+import { appConfig } from "@/lib/config";
 import { UpgradeModal } from "@/components/social/UpgradeModal";
 import { cn, getScrollY, onAppScroll } from "@/lib/utils";
 
@@ -133,7 +134,7 @@ function Sidebar({
       <div className="mb-2 flex items-center justify-between px-2 py-2">
         <Link to="/" className="flex items-center gap-2">
           <BrandLogo className="h-9 w-9" />
-          <span className="text-2xl font-extrabold tracking-tight">Spaces1</span>
+          <span className="text-2xl font-extrabold tracking-tight">{appConfig.brand.name}</span>
         </Link>
         {showThemeToggle && (
           <button
@@ -359,7 +360,6 @@ function WorkspaceSwitcher({ mounted = true }: { mounted?: boolean }) {
 export function AppShell({
   children,
   right,
-  title,
 }: {
   children: ReactNode;
   right?: ReactNode;
@@ -454,7 +454,7 @@ export function AppShell({
 
         <Link to="/" className="flex min-h-11 items-center gap-1.5">
           <BrandLogo className="h-7 w-7" />
-          <span className="text-lg font-extrabold tracking-tight">Spaces1</span>
+          <span className="text-lg font-extrabold tracking-tight">{appConfig.brand.name}</span>
         </Link>
 
         <div className="flex items-center gap-1">

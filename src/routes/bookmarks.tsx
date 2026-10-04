@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import { useState, useEffect } from "react";
 import { Bookmark, Search, X } from "lucide-react";
 import { AppShell, PageHeader, Panel } from "@/components/social/AppShell";
@@ -7,23 +8,24 @@ import { FeedSkeleton } from "@/components/social/PostSkeleton";
 import { DefaultRail } from "@/components/social/RightRail";
 import type { Post } from "@/lib/types";
 import { getProfile, subscribeProfiles, currentUserId } from "@/lib/profile-service";
-import { getBookmarks, getPosts } from "@/lib/api-client";
+import { getBookmarks } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/bookmarks")({
   head: () => ({
     meta: [
-      { title: "Bookmarks — Spaces1" },
+      { title: brandedTitle("Bookmarks") },
       {
         name: "description",
-        content:
-          "Your saved posts on Spaces1. Keep the essays, frames and threads worth returning to in one private, searchable collection.",
+        content: `Your saved posts on ${ORG_NAME}. Keep the essays, frames and threads worth returning to in one private, searchable collection.`,
       },
-      { property: "og:title", content: "Bookmarks — Spaces1" },
+      { property: "og:title", content: brandedTitle("Bookmarks") },
       {
         property: "og:description",
-        content: "A private collection of the posts you saved on Spaces1.",
+        content: `A private collection of the posts you saved on ${ORG_NAME}.`,
       },
+      // Saved posts are private by definition.
+      ...NOINDEX_META,
     ],
   }),
   component: BookmarksPage,

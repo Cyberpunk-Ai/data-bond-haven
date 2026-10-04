@@ -2,13 +2,11 @@ import { useState } from "react";
 import {
   Key,
   Webhook,
-  Code2,
   Copy,
   Plus,
   Trash2,
   Lock,
   Crown,
-  Check,
   Terminal,
   Activity,
   Send,

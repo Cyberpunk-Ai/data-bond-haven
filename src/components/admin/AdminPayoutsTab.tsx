@@ -59,7 +59,7 @@ export function AdminPayoutsTab() {
       const [requests, feed] = await Promise.all([listPayoutRequests(), listPaymentActivity()]);
       setRows(requests);
       setActivity(feed);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(friendlyError(err, "We couldn't load payment activity."));
     } finally {
       setLoading(false);
@@ -83,7 +83,7 @@ export function AdminPayoutsTab() {
     try {
       const acct = await getPayoutAccount({ data: { id: row.id } });
       setRevealed((prev) => ({ ...prev, [row.id]: acct }));
-    } catch (err: any) {
+    } catch (err: unknown) {
       setRevealed((prev) => {
         const next = { ...prev };
         delete next[row.id];
@@ -119,7 +119,7 @@ export function AdminPayoutsTab() {
           : "Withdrawal declined, the amount returned, and the creator notified.",
       );
       await load();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "We couldn't update that withdrawal."));
     } finally {
       setBusyId(null);

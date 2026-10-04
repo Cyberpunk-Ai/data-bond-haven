@@ -183,8 +183,8 @@ export const cancelMySubscription = createServerFn({ method: "POST" })
       .maybeSingle();
     if (!profile?.id) throw new Error("Sign in to manage your subscription.");
 
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const admin = supabaseAdmin as any;
+    const { adminDb } = await import("@/integrations/supabase/client.server");
+    const admin = adminDb();
     // Both writes have to land: the UI reads `profiles.plan` for what the account
     // can do, `subscriptions` for what it will be billed. Either one failing on
     // its own silently left a "canceled" screen over a still-charging subscription

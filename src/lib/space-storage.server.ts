@@ -13,11 +13,11 @@
  * trigger cannot see the storage provider; between the two, a handcrafted
  * PostgREST write cannot walk around the cap either way.
  */
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { adminDb } from "@/integrations/supabase/client.server";
 import { getPlanLimits, UpgradeRequiredError, type PlanTier } from "@/lib/plan-guard.server";
 import { resolveSpacesStorageMb, spaceStorageFullMessage } from "@/lib/spaces-storage";
 
-const admin = supabaseAdmin as any;
+const admin = adminDb();
 
 /** `recordings` is the folder Space replays are uploaded into. */
 const RECORDINGS_FOLDER = "recordings";

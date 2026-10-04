@@ -34,17 +34,19 @@ describe("feed timelines migration storage", () => {
     expect(mig).toMatch(/create table if not exists public\.timeline_items/);
     expect(mig).toMatch(/primary key \(viewer_id, kind, post_id\)/);
     // Ranked paging index leads with the viewer, then score desc, then id.
-    expect(mig).toMatch(
-      /on public\.timeline_items \(viewer_id, kind, score desc, post_id\)/,
-    );
+    expect(mig).toMatch(/on public\.timeline_items \(viewer_id, kind, score desc, post_id\)/);
   });
 
   it("gives a viewer access to ONLY their own rows via the schema's owns_profile", () => {
     expect(mig).toMatch(/alter table public\.timeline_items enable row level security/);
     expect(mig).toMatch(/alter table public\.feed_rank_jobs enable row level security/);
     // viewer_id is a PROFILE id, so RLS matches every other profile-keyed table.
-    expect(mig).toMatch(/create policy "timeline owner read" on public\.timeline_items[\s\S]*?using \(public\.owns_profile\(viewer_id\)\)/);
-    expect(mig).toMatch(/public\.feed_rank_jobs for insert to authenticated[\s\S]*?with check \(public\.owns_profile\(viewer_id\)\)/);
+    expect(mig).toMatch(
+      /create policy "timeline owner read" on public\.timeline_items[\s\S]*?using \(public\.owns_profile\(viewer_id\)\)/,
+    );
+    expect(mig).toMatch(
+      /public\.feed_rank_jobs for insert to authenticated[\s\S]*?with check \(public\.owns_profile\(viewer_id\)\)/,
+    );
     // The worker runs as service_role (bypasses RLS), never as the viewer.
     expect(mig).toMatch(/grant all on public\.timeline_items to service_role/);
   });
@@ -65,8 +67,12 @@ describe("feed timelines migration storage", () => {
   });
 
   it("lets the service role run the retrieval RPCs the worker depends on", () => {
-    expect(mig).toMatch(/grant execute on function public\.for_you_candidates\(integer\) to service_role/);
-    expect(mig).toMatch(/grant execute on function public\.for_you_signals\(uuid\) to service_role/);
+    expect(mig).toMatch(
+      /grant execute on function public\.for_you_candidates\(integer\) to service_role/,
+    );
+    expect(mig).toMatch(
+      /grant execute on function public\.for_you_signals\(uuid\) to service_role/,
+    );
   });
 });
 
@@ -106,8 +112,9 @@ describe("the background worker owns the ranking", () => {
 
   it("is a server-only module that runs the pipeline and writes the timeline", () => {
     // The .server suffix is enforced by vite's import protection; it holds the
-    // service-role client and must never reach the browser bundle.
-    expect(worker).toMatch(/import \{ supabaseAdmin \} from "@\/integrations\/supabase\/client\.server"/);
+    // service-role client and must never reach the browser bundle. Access is
+    // centralized behind the reviewed adminDb() escape.
+    expect(worker).toMatch(/import \{ adminDb \} from "@\/integrations\/supabase\/client\.server"/);
     expect(worker).toMatch(/rankForYou\(supabase, viewerId, \{/);
     expect(worker).toMatch(/from\("timeline_items"\)\.insert\(/);
     expect(worker).toMatch(/from\("feed_rank_jobs"\)[\s\S]*?\.lte\("due_at"/);

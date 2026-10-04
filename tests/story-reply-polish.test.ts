@@ -55,8 +55,10 @@ describe("composing a reply owns the viewer", () => {
   it("freezes the carousel while the reply box has focus or a send is in flight", () => {
     // `|| holdClock` arrived with the smooth-paint work: a frame that cannot
     // paint yet is a third reason not to run the clock, alongside the two here.
+    // `|| replyEmojiOpen` joined with the emoji picker: its search box takes the
+    // caret off the reply, so `replyFocused` goes false mid-composition.
     expect(modal).toMatch(
-      /if \(!isOpen \|\| !currentStory \|\| isPaused \|\| replyFocused \|\| sendingReply \|\| holdClock\) return;/,
+      /if \(\s*!isOpen \|\|[\s\S]{0,300}?isPaused \|\|\s*replyFocused \|\|\s*replyEmojiOpen \|\|\s*sendingReply \|\|\s*holdClock\s*\)\s*return;/,
     );
     expect(modal).toContain("onFocus={() => setReplyFocused(true)}");
     expect(modal).toContain("onBlur={() => setReplyFocused(false)}");
@@ -66,7 +68,13 @@ describe("composing a reply owns the viewer", () => {
     // and typing a reply advanced the story anyway.
     const timer = between(modal, "// Auto-progress timer", "// Reset progress when index changes");
     const deps = timer.slice(timer.lastIndexOf("}, ["));
-    for (const flag of ["isPaused", "replyFocused", "sendingReply", "holdClock"]) {
+    for (const flag of [
+      "isPaused",
+      "replyFocused",
+      "replyEmojiOpen",
+      "sendingReply",
+      "holdClock",
+    ]) {
       expect(deps, `the timer effect must depend on ${flag}`).toContain(flag);
     }
   });
@@ -110,7 +118,12 @@ describe("send results are honest", () => {
   it("emoji buttons draft into the reply box without claiming a reaction was sent", () => {
     const src = read("../src/components/social/StoryModal.tsx");
     expect(src).not.toContain("Reacted with");
-    expect(src).toContain("replyInputRef.current?.focus();");
+    // Refocusing is the shared hook's job now: it puts the glyph at the caret,
+    // then focuses the field and restores the caret after the render — the thing
+    // a bare `replyInputRef.current?.focus()` used to do by hand, mid-append.
+    expect(src).toMatch(/const insertReplyEmoji = useEmojiInsert\(replyInputRef,/);
+    expect(src).toContain("onClick={() => insertReplyEmoji(emoji)}");
+    expect(src).not.toMatch(/prev \? `\$\{prev\} \$\{emoji\}`/);
   });
 
   it("offers a heart, not a DM-to-self, on your own story", () => {

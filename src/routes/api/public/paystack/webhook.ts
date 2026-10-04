@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createHmac, timingSafeEqual } from "crypto";
 
 import { env } from "@/lib/env.server";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { adminDb } from "@/integrations/supabase/client.server";
 
 type PaystackEvent = {
   event?: string;
@@ -59,7 +59,7 @@ export const Route = createFileRoute("/api/public/paystack/webhook")({
 
         const event = payload.event ?? "";
         const tx = payload.data ?? {};
-        const admin = supabaseAdmin as any;
+        const admin = adminDb();
 
         // Best-effort event log for replay defence / auditing. event_id may be
         // absent for some Paystack events; the unique index tolerates nulls.

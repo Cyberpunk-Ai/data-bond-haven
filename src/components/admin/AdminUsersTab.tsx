@@ -1,22 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import {
-  Search,
-  Filter,
-  Shield,
-  ShieldAlert,
-  Award,
-  AlertTriangle,
-  Ban,
-  CheckCircle2,
-  MoreHorizontal,
-  UserCheck,
-  UserX,
-  Mail,
-  Calendar,
-  AlertCircle,
-  RefreshCw,
-  Plus,
-} from "lucide-react";
+import { Search, Award, CheckCircle2, RefreshCw } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { getAdminUsers, updateUserAdmin } from "@/lib/api-client";
 import { listAccessLevels, setAccessLevel } from "@/lib/admin.functions";
@@ -122,7 +105,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
       setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u)));
       setEditingUser(null);
       showNotice(`Updated access for @${res.username} to ${newRole}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't update that role. Try again."));
     }
   };
@@ -132,7 +115,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
       const updated = await updateUserAdmin(userId, { status: newStatus }, currentUserId);
       setUsers((prev) => prev.map((u) => (u.id === userId ? updated : u)));
       showNotice(`User @${updated.username} marked as ${newStatus}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't update that status. Try again."));
     }
   };
@@ -146,7 +129,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
           ? `Granted verified creator badge to @${user.username}`
           : `Revoked verification from @${user.username}`,
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't update the verified badge. Try again."));
     }
   };
@@ -157,7 +140,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
       const updated = await updateUserAdmin(user.id, { warning_count: newCount }, currentUserId);
       setUsers((prev) => prev.map((u) => (u.id === user.id ? updated : u)));
       showNotice(`Warning count for @${user.username} is now ${newCount}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't change the warning count. Try again."));
     }
   };
@@ -169,7 +152,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
       const updated = await updateUserAdmin(user.id, { plan }, currentUserId);
       setUsers((prev) => prev.map((u) => (u.id === user.id ? updated : u)));
       showNotice(`@${user.username} is now on the ${plan} plan`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Could not change that plan. Please try again."));
     }
   };

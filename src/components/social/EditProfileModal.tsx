@@ -109,7 +109,7 @@ export function EditProfileModal({
       setForm((prev) => ({ ...prev, avatar_url: res.url }));
       updateUserSession({ avatar_url: res.url });
       toast.success("Avatar image uploaded");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Avatar upload failed:", err);
       toast.error(friendlyError(err, "Could not upload image. Please try again."));
     } finally {
@@ -136,7 +136,7 @@ export function EditProfileModal({
       onProfileUpdated?.(updatedUser as Profile);
       toast.success("Profile saved successfully!");
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Saving profile failed:", err);
       toast.error(friendlyError(err, "Could not save your profile. Please try again."));
     } finally {

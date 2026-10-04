@@ -1,14 +1,75 @@
-User-agent: Googlebot
-Allow: /
+# https://spaces1.com — Spaces1, the creator social network
+#
+# Three rules, and why they are written separately:
+#
+# 1. Every private / signed-in page below is also `noindex, nofollow` in its own
+#    <meta name="robots">. That tag is what actually keeps it out of the index.
+#    These Disallow lines only save crawl budget: a disallowed URL can still get
+#    indexed from the links pointing at it, so robots.txt is never the thing to
+#    rely on to hide a page.
+#
+# 2. Link-preview bots get `Allow: /` with no Disallow at all. Twitter,
+#    Facebook, LinkedIn, Slack, Telegram and WhatsApp must be able to FETCH the
+#    page to build a card — blocking a disallowed route breaks previews of
+#    pages people share every day, while `noindex` costs them nothing (preview
+#    bots never index).
+#
+# Public content stays open: /u/<handle>, /post/<id>, /explore, /spaces,
+# /pricing and the static pages. See https://spaces1.com/sitemap.xml.
+#
+# 3. Avatars and post photos — the bytes behind a preview card — are served from
+#    /api/public/media/, inside the /api/ block at the bottom. Robots rules are
+#    matched by LONGEST path, so the one Allow below is what governs those URLs
+#    and the Disallow still covers every other endpoint. Without it, an
+#    image-only share (a profile's avatar) fetches a 403-ish nothing and the
+#    card renders blank for everyone who receives the link.
 
-User-agent: Bingbot
-Allow: /
-
+# --- Link previews and social unfurlers: fetch anything, index nothing -------
 User-agent: Twitterbot
 Allow: /
 
 User-agent: facebookexternalhit
 Allow: /
 
+User-agent: LinkedInBot
+Allow: /
+
+User-agent: Slackbot-LinkExpanding 1.0
+Allow: /
+
+User-agent: TelegramBot
+Allow: /
+
+User-agent: Discordbot
+Allow: /
+
 User-agent: *
 Allow: /
+# Longest match wins, so this beats `Disallow: /api/` further down for the
+# public media proxy — the origin of every og:image a crawler will be asked to
+# render. Only world-readable folders live under it (avatars, posts, media);
+# story, DM and replay objects are served from separate, unlisted prefixes.
+Allow: /api/public/media/
+
+# --- Signed-in app surfaces: nothing a search result should ever offer -------
+# (they render an empty shell or somebody else's data to a crawler)
+Disallow: /feed
+Disallow: /messages
+Disallow: /notifications
+Disallow: /bookmarks
+Disallow: /profile
+Disallow: /settings
+Disallow: /workspace
+
+# --- Staff, diagnostics and transactional endpoints --------------------------
+Disallow: /admin
+Disallow: /status
+Disallow: /oauth/
+Disallow: /billing/
+# Server endpoints: reachable, but following them only burns crawl budget and
+# risks a raw JSON response landing in the index. The media exception above is
+# the one /api/ path a crawler genuinely needs to fetch.
+Disallow: /api/
+
+# --- Sitemap ----------------------------------------------------------------
+Sitemap: https://spaces1.com/sitemap.xml

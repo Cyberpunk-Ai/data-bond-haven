@@ -13,7 +13,6 @@ import {
   CheckCircle2,
   StopCircle,
   Tag,
-  AlertTriangle,
   X,
   MapPin,
   ExternalLink,
@@ -155,7 +154,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
       await forceDeletePostAdmin(postId, currentUserId);
       setPosts((prev) => prev.filter((p) => p.id !== postId));
       showToast("Post removed by administrator");
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't delete that post. Try again."));
     }
   };
@@ -176,7 +175,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
         prev && prev.id === post.id ? { ...prev, hidden: nextHidden } : prev,
       );
       showToast(nextHidden ? "Post hidden from all feeds" : "Post restored to feeds");
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't update that post's visibility. Try again."));
     } finally {
       setHidingPostId(null);
@@ -207,7 +206,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
           : prev,
       );
       showToast(next ? "Media marked sensitive for filtered readers" : "Sensitive flag cleared");
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't update that post's sensitivity. Try again."));
     } finally {
       setFlaggingPostId(null);
@@ -219,7 +218,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
       await terminateSpaceAdmin(spaceId, currentUserId);
       setSpaces((prev) => prev.map((s) => (s.id === spaceId ? { ...s, is_live: false } : s)));
       showToast("Audio space session terminated");
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't end that Space. Try again."));
     }
   };
@@ -229,7 +228,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
       await deleteStory(storyId);
       setStories((prev) => prev.filter((s) => s.id !== storyId));
       showToast("Story deleted");
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't delete that story. Try again."));
     }
   };

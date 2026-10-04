@@ -13,6 +13,8 @@
  * product down.
  */
 
+import { appConfig } from "@/lib/config";
+
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 export type PlatformFlag =
@@ -131,6 +133,6 @@ export async function requirePlatformOpen(authUserId: string): Promise<void> {
   if (!flags.maintenance_mode) return;
   if (await isStaffAuthUser(authUserId)) return;
   throw new Error(
-    "Spaces1 is in maintenance mode — this action is limited to staff accounts right now. Please check back shortly.",
+    `${appConfig.brand.name} is in maintenance mode — this action is limited to staff accounts right now. Please check back shortly.`,
   );
 }

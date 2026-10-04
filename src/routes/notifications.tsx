@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import { useState, useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Heart,
@@ -58,17 +59,19 @@ import { supabase } from "@/integrations/supabase/client";
 export const Route = createFileRoute("/notifications")({
   head: () => ({
     meta: [
-      { title: "Notifications — Spaces1" },
+      { title: brandedTitle("Notifications") },
       {
         name: "description",
         content:
           "Every like, follow, mention, live Space invite, and tip in one clean timeline. Stay close to your Spaces community without the noise.",
       },
-      { property: "og:title", content: "Notifications — Spaces1" },
+      { property: "og:title", content: brandedTitle("Notifications") },
       {
         property: "og:description",
         content: "Likes, follows, mentions, Space invites, and tips — all in one calm timeline.",
       },
+      // Activity about the signed-in user specifically.
+      ...NOINDEX_META,
     ],
   }),
   component: NotificationsPage,
@@ -76,16 +79,14 @@ export const Route = createFileRoute("/notifications")({
 
 const meta: Record<Notification["type"], { icon: typeof Heart; tint: string }> = {
   like: { icon: Heart, tint: "from-rose-500 to-pink-500" },
-  ...({
-    workspace_invite: { icon: UserPlus, tint: "from-emerald-500 to-teal-500" },
-    workspace: { icon: UserPlus, tint: "from-emerald-500 to-teal-500" },
-    // Server-side money and staff notices arrive without an actor — give them
-    // their own icons instead of falling back to the "like" heart.
-    payout: { icon: Banknote, tint: "from-emerald-500 to-teal-500" },
-    system: { icon: Info, tint: "from-slate-500 to-zinc-500" },
-    story_like: { icon: Heart, tint: "from-rose-500 to-pink-500" },
-    message: { icon: MessageCircle, tint: "from-sky-500 to-cyan-500" },
-  } as any),
+  workspace_invite: { icon: UserPlus, tint: "from-emerald-500 to-teal-500" },
+  workspace: { icon: UserPlus, tint: "from-emerald-500 to-teal-500" },
+  // Server-side money and staff notices arrive without an actor — give them
+  // their own icons instead of falling back to the "like" heart.
+  payout: { icon: Banknote, tint: "from-emerald-500 to-teal-500" },
+  system: { icon: Info, tint: "from-slate-500 to-zinc-500" },
+  story_like: { icon: Heart, tint: "from-rose-500 to-pink-500" },
+  message: { icon: MessageCircle, tint: "from-sky-500 to-cyan-500" },
   follow: { icon: UserPlus, tint: "from-violet-500 to-fuchsia-500" },
   comment: { icon: MessageCircle, tint: "from-sky-500 to-cyan-500" },
   reply: { icon: MessageCircle, tint: "from-blue-500 to-indigo-500" },
@@ -237,7 +238,7 @@ function NotificationsPage() {
       return;
     }
     if ((n.type as string) === "workspace_invite" || (n.type as string) === "workspace") {
-      void navigate({ to: "/settings", search: { section: "workspaces" } as any });
+      void navigate({ to: "/settings", search: { section: "workspaces" } });
       return;
     }
     if ((n.type as string) === "message") {
@@ -374,7 +375,7 @@ function NotificationsPage() {
                         </>
                       ) : (
                         // Payout / system notices come from the platform, not a person.
-                        <span className="text-sm font-bold">Spaces1</span>
+                        <span className="text-sm font-bold">{ORG_NAME}</span>
                       )}
                       <TimeAgo
                         iso={n.created_at}
@@ -382,9 +383,7 @@ function NotificationsPage() {
                       />
                     </span>
                     <span className="mt-1 block text-sm text-muted-foreground">{n.body}</span>
-                    {(n as any).action?.kind === "workspace_invite" && (
-                      <InviteActions notification={n as any} />
-                    )}
+                    {n.action?.kind === "workspace_invite" && <InviteActions action={n.action} />}
                   </span>
                   <span className="flex shrink-0 items-center gap-2 pl-1">
                     {!n.read && <span className="h-2 w-2 shrink-0 rounded-full bg-brand" />}
@@ -433,17 +432,13 @@ function NotificationsPage() {
   );
 }
 
-function InviteActions({
-  notification,
-}: {
-  notification: { action: { member_id: string; state: string } };
-}) {
-  const [state, setState] = useState(notification.action.state);
+function InviteActions({ action }: { action: NonNullable<Notification["action"]> }) {
+  const [state, setState] = useState(action.state);
   const [busy, setBusy] = useState(false);
   async function respond(accept: boolean) {
     setBusy(true);
     const { error } = await (supabase as any).rpc("respond_workspace_invite", {
-      _member_id: notification.action.member_id,
+      _member_id: action.member_id,
       _accept: accept,
     });
     setBusy(false);

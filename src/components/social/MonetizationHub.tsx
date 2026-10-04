@@ -90,7 +90,7 @@ export function MonetizationHub() {
           record.feeUsd != null ? ` (after a ${usd(record.feeUsd)} fee)` : ""
         } will reach your account after review.`,
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "We couldn't send that withdrawal."));
     } finally {
       setPayoutProcessing(false);
@@ -102,7 +102,7 @@ export function MonetizationHub() {
     try {
       await saveTipSettings({ minimumTip: minTipDraft, tipsEnabled: tipsEnabledDraft });
       toast.success("Tip settings saved.");
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "We couldn't save those settings."));
     } finally {
       setSavingSettings(false);

@@ -108,7 +108,7 @@ export const getProfileTabPosts = createServerFn({ method: "GET" })
       // ignored, and dropping rows after `limit` could hand back an empty page
       // with no cursor even when the profile did have media older than it.
       if (tab === "media") {
-        q = q.or("media_url.not.null,image_url.not.null,image_gradient.not.null");
+        q = q.or("media_url.not.is.null,image_url.not.is.null");
       }
       if (cursor) q = q.lt("created_at", cursor);
       const { data: rows, error } = await q;

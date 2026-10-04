@@ -117,3 +117,20 @@ export function isVideoUrl(url?: string | null): boolean {
     lower.includes("video_")
   );
 }
+
+/**
+ * The first attachment of a media column, as a single url.
+ *
+ * A multi-image post stores its attachments comma-joined in one column, so the
+ * raw value is never directly usable as an element's `src`: handing
+ * `a.jpg,b.jpg` to an `<img>` produces a broken image, which is exactly what
+ * every surface that shows only one frame has to avoid. Thumbnails, previews
+ * and link cards all want "the first one", so it is decided here.
+ */
+export function firstMediaUrl(raw?: string | null): string | null {
+  for (const part of String(raw ?? "").split(",")) {
+    const url = part.trim();
+    if (url) return url;
+  }
+  return null;
+}

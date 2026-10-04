@@ -11,8 +11,8 @@ export async function assertStaff(context: any) {
   ]);
   if (!isAdmin && !isMod) throw new Error("You don't have moderation access.");
 
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const admin = supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  const admin = adminDb();
   const { data: profile } = await admin
     .from("profiles")
     .select("id, display_name, username")

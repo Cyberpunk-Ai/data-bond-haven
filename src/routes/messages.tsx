@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Search,
@@ -14,14 +15,12 @@ import {
   DollarSign,
   Plus,
   Mic,
-  Square,
-  Sparkles,
   X,
   CheckCheck,
   Edit2,
   Trash2,
-  Check,
   MoreVertical,
+  Check,
   Play,
   ExternalLink,
   Globe,
@@ -30,7 +29,6 @@ import {
   FileCode,
   FileSpreadsheet,
   File,
-  Eye,
   Film,
   Image as ImageIcon,
   Music,
@@ -40,13 +38,14 @@ import { Avatar } from "@/components/social/Avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TimeAgo, useLiveNow } from "@/components/social/TimeAgo";
 import { useCallDialer } from "@/components/calls/IncomingCallProvider";
+import { useEmojiInsert } from "@/hooks/useEmojiInsert";
 import { CallCardChip } from "@/components/social/CallCardChip";
 import { buildThreadTimeline, type CallCard } from "@/lib/call-cards";
 import { usePresenceMap } from "@/lib/presence";
 import { InfoModal } from "@/components/social/InfoModal";
 import { TipModal } from "@/components/social/TipModal";
 import { timeAgo } from "@/lib/formatters";
-import { currentUserId, currentUser, getProfile, profileRegistry } from "@/lib/profile-service";
+import { currentUserId, getProfile, profileRegistry } from "@/lib/profile-service";
 import type { Conversation, Message, Profile } from "@/lib/types";
 import {
   getConversations,
@@ -54,12 +53,13 @@ import {
   getCallHistory,
   sendMessage,
   uploadMedia,
-  getUserProfile,
   getUsers,
   getMessageReactions,
   toggleMessageReaction,
   editMessage,
   deleteMessage,
+  hideConversationForMe,
+  MESSAGE_EDIT_WINDOW_MS,
 } from "@/lib/api-client";
 import { decrementUnreadMessages } from "@/lib/unread-state";
 import { useAuth } from "@/lib/auth-state";
@@ -75,7 +75,6 @@ import {
   isMessageWithinLimit,
   messageCharsOver,
   messageCounterLabel,
-  messageLength,
   messageLengthError,
   shouldShowMessageCounter,
 } from "@/lib/message-length";
@@ -89,17 +88,18 @@ export const Route = createFileRoute("/messages")({
   }),
   head: () => ({
     meta: [
-      { title: "Messages — Spaces1" },
+      { title: brandedTitle("Messages") },
       {
         name: "description",
-        content:
-          "Private, fast conversations on Spaces1. Catch up with collaborators, share frames, and keep every thread in one calm inbox.",
+        content: `Private, fast conversations on ${ORG_NAME}. Catch up with collaborators, share frames, and keep every thread in one calm inbox.`,
       },
-      { property: "og:title", content: "Messages — Spaces1" },
+      { property: "og:title", content: brandedTitle("Messages") },
       {
         property: "og:description",
-        content: "Private, fast conversations with the people you create with on Spaces1.",
+        content: `Private, fast conversations with the people you create with on ${ORG_NAME}.`,
       },
+      // Private thread store — must never reach an index.
+      ...NOINDEX_META,
     ],
   }),
   component: MessagesPage,
@@ -192,6 +192,16 @@ const URL_TEST_REGEX = /^https?:\/\/[^\s]+$/;
 
 /** Modern clean message text with full unshortened links and clean link preview cards */
 function MessageText({ body, isMine }: { body: string; isMine: boolean }) {
+  // Long-message collapse — keeps tall walls of text from pushing the thread
+  // downward without horizontal breathing room. Reader opts in to expand.
+  const LONG_MESSAGE_THRESHOLD = 500;
+  const isLong = body.length > LONG_MESSAGE_THRESHOLD;
+  const [expanded, setExpanded] = useState(!isLong);
+  // Reset when a different message reuses this component slot.
+  useEffect(() => {
+    setExpanded(!isLong);
+  }, [body, isLong]);
+
   const links = useMemo(() => {
     const matches = body.match(URL_REGEX);
     return matches ? Array.from(new Set(matches)) : [];
@@ -203,7 +213,12 @@ function MessageText({ body, isMine }: { body: string; isMine: boolean }) {
 
   return (
     <div className="space-y-2">
-      <div className="whitespace-pre-wrap break-words text-[13px] sm:text-sm leading-relaxed">
+      <div
+        className={cn(
+          "whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] sm:text-sm leading-relaxed",
+          isLong && !expanded && "max-h-[240px] overflow-hidden",
+        )}
+      >
         {parts.map((part, idx) => {
           if (URL_TEST_REGEX.test(part)) {
             return (
@@ -229,6 +244,22 @@ function MessageText({ body, isMine }: { body: string; isMine: boolean }) {
           return <span key={idx}>{part}</span>;
         })}
       </div>
+
+      {isLong && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          className={cn(
+            "-mt-1 text-[11px] font-bold underline underline-offset-2 opacity-80 hover:opacity-100 transition-opacity",
+            isMine ? "text-white decoration-white/60" : "text-brand decoration-brand/50",
+          )}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
 
       {/* Clean Link Preview Card (No large bulky bezels) */}
       {links.length > 0 && (
@@ -418,7 +449,7 @@ function SafeAudioAttachment({ src }: { src: string }) {
   }
 
   return (
-    <div className="my-1 flex w-56 max-w-full items-center gap-1">
+    <div className="my-1 flex w-full max-w-[260px] items-center gap-1">
       <audio
         src={playable}
         controls
@@ -581,7 +612,7 @@ function VoiceNotePlayer({ body, isMine }: { body: string; isMine: boolean }) {
   useEffect(() => {
     if (audioUrl) return; // Managed by audioRef timeupdate
 
-    let interval: any;
+    let interval: ReturnType<typeof setInterval> | undefined;
     if (isPlaying) {
       interval = setInterval(() => {
         setProgress((prev) => {
@@ -751,6 +782,10 @@ function MessagesPage() {
   // Edit message state
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  // Which message currently has its "Just for me / For everyone" popover open.
+  const [deleteScopeFor, setDeleteScopeFor] = useState<string | null>(null);
+  // Which conversation row has its action menu open (mobile long-press / desktop hover).
+  const [conversationMenuFor, setConversationMenuFor] = useState<string | null>(null);
 
   // Voice note simulation state
   const [isRecording, setIsRecording] = useState(false);
@@ -1091,6 +1126,12 @@ function MessagesPage() {
         setAll((prev) => prev.filter((m) => m.id !== event.id));
       }
 
+      // "Hidden for me" is viewer-scoped: only the caller's device should drop
+      // the bubble; the other participant keeps it via `hidden_for` in the DB.
+      if (event.type === "message:hidden" && event.id && event.userId === currentUserId) {
+        setAll((prev) => prev.filter((m) => m.id !== event.id));
+      }
+
       if (
         event.type === "message:read" &&
         event.conversationId &&
@@ -1133,6 +1174,7 @@ function MessagesPage() {
       "message:reaction",
       "message:edited",
       "message:deleted",
+      "message:hidden",
       "message:read",
       "message:delivered",
       "message:typing",
@@ -1168,27 +1210,19 @@ function MessagesPage() {
   /**
    * Puts an emoji where the caret is, not at the end of the line.
    *
-   * Appending is what people notice: type "see you ", pick 🙏, and the glyph
-   * lands after the next word you wrote instead of where you left off.
+   * The behaviour lives in `insertAtCaret` so the post composer and story replies
+   * insert glyphs exactly the way this field does; `useEmojiInsert` adds the part
+   * that only a live field can do — refocus and put the caret back after the
+   * render. The composer caps what you can type, so a picker writing straight
+   * into state has to respect the same ceiling: past it the pick is refused and
+   * the draft is left alone, which the counter next to Send already explains.
    */
+  const placeDraftEmoji = useEmojiInsert(draftInputRef, draft, setDraft, {
+    maxLength: MAX_MESSAGE_CHARS,
+  });
+
   function insertDraftEmoji(emoji: string) {
-    const el = draftInputRef.current;
-    const before = draft;
-    const start = el?.selectionStart ?? before.length;
-    const end = el?.selectionEnd ?? before.length;
-    const next = `${before.slice(0, start)}${emoji}${before.slice(end)}`;
-    // The composer caps what you can type; a picker writing straight into state
-    // bypasses that, so it has to respect the same ceiling.
-    if (messageLength(next) > MAX_MESSAGE_CHARS) return;
-    setDraft(next);
-    notifyTyping();
-    const caret = start + emoji.length;
-    requestAnimationFrame(() => {
-      const input = draftInputRef.current;
-      if (!input) return;
-      input.focus();
-      input.setSelectionRange(caret, caret);
-    });
+    if (placeDraftEmoji(emoji)) notifyTyping();
   }
 
   /**
@@ -1199,9 +1233,9 @@ function MessagesPage() {
   async function persistMessage(body: string, tempId: string, mediaUrl?: string | null) {
     const conv = conversations.find((c) => c.id === activeId);
     const target = activeId.startsWith("c_") && conv ? conv.participant_id : activeId;
-    const res: any = await sendMessage(target, body, mediaUrl ?? null, tempId);
-    const serverMsg = res?.message ?? res;
-    const realId: string = res?.conversationId ?? activeId;
+    const res = await sendMessage(target, body, mediaUrl ?? null, tempId);
+    const serverMsg = res.message;
+    const realId: string = res.conversationId ?? activeId;
     const stale = activeId;
 
     if (realId && realId !== stale) {
@@ -1268,7 +1302,7 @@ function MessagesPage() {
         setAll((prev) => [...prev, newMsg]);
         try {
           await persistMessage(body, tempId);
-        } catch (err: any) {
+        } catch (err: unknown) {
           // Never pretend an unsent message was delivered.
           setAll((prev) => prev.filter((m) => m.id !== tempId));
           setDraft(body);
@@ -1298,7 +1332,7 @@ function MessagesPage() {
           };
           setAll((prev) => [...prev, newMsg]);
           await persistMessage(bodyString, tempId, res.url);
-        } catch (err: any) {
+        } catch (err: unknown) {
           toast.error(friendlyError(err, `Could not send ${att.name}`), { id: att.id });
           setAll((prev) => prev.filter((m) => m.id !== tempId));
         } finally {
@@ -1366,18 +1400,32 @@ function MessagesPage() {
       .then(() => toast.success("Message edited"))
       .catch(() => {
         if (original) setAll((prev) => prev.map((m) => (m.id === msgId ? original : m)));
-        toast.error("Couldn't edit that message");
+        toast.error(friendlyError("Couldn't edit that message"));
       });
   };
 
-  const handleDeleteMessage = (msgId: string) => {
+  const handleDeleteMessage = (msgId: string, scope: "me" | "everyone" = "everyone") => {
     const targetMsg = all.find((m) => m.id === msgId);
+    setDeleteScopeFor(null);
     setAll((prev) => prev.filter((m) => m.id !== msgId));
-    void deleteMessage(msgId)
-      .then(() => toast.success("Message deleted"))
+    void deleteMessage(msgId, scope)
+      .then(() => toast.success(scope === "me" ? "Hidden for you" : "Message deleted"))
       .catch(() => {
         if (targetMsg) setAll((prev) => [...prev, targetMsg]);
-        toast.error("Couldn't delete that message");
+        toast.error(friendlyError("Couldn't delete that message"));
+      });
+  };
+
+  const handleHideConversation = (conversationId: string) => {
+    setConversationMenuFor(null);
+    const snapshot = conversations;
+    setConversations((prev) => prev.filter((c) => c.id !== conversationId));
+    if (activeId === conversationId) setActiveId("");
+    void hideConversationForMe(conversationId)
+      .then(() => toast.success("Chat hidden — it returns when a new message arrives"))
+      .catch(() => {
+        setConversations(snapshot);
+        toast.error(friendlyError("Couldn't hide that chat"));
       });
   };
 
@@ -1584,11 +1632,19 @@ function MessagesPage() {
                             ? FileText
                             : null;
                   return (
-                    <button
+                    <div
                       key={c.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => selectConversation(c.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          selectConversation(c.id);
+                        }
+                      }}
                       className={cn(
-                        "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all duration-200 cursor-pointer border",
+                        "group/row relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all duration-200 cursor-pointer border",
                         isActive
                           ? "bg-brand/10 text-foreground border-brand/25 shadow-xs"
                           : "hover:bg-muted/40 border-transparent",
@@ -1626,7 +1682,19 @@ function MessagesPage() {
                           )}
                         </span>
                       </span>
-                    </button>
+                      <button
+                        type="button"
+                        aria-label="Hide this chat"
+                        title="Hide this chat (returns on the next message)"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleHideConversation(c.id);
+                        }}
+                        className="opacity-0 group-hover/row:opacity-100 focus:opacity-100 transition-opacity rounded-full p-1.5 text-muted-foreground hover:bg-rose-500/10 hover:text-rose-500 shrink-0 cursor-pointer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   );
                 })}
                 {list.length === 0 && (
@@ -1733,6 +1801,14 @@ function MessagesPage() {
                   >
                     <Info className="h-4 w-4" />
                   </button>
+                  <button
+                    onClick={() => active && handleHideConversation(active.id)}
+                    aria-label="Hide this chat"
+                    title="Hide this chat (returns on the next message)"
+                    className="rounded-full p-2 transition-all duration-300 hover:bg-rose-500/10 hover:text-rose-500 min-h-[38px] min-w-[38px] flex items-center justify-center cursor-pointer"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
               </div>
 
@@ -1787,7 +1863,7 @@ function MessagesPage() {
                       >
                         <div
                           className={cn(
-                            "relative max-w-[88%] rounded-3xl text-xs leading-relaxed shadow-soft transition-all sm:max-w-[72%] sm:text-sm border",
+                            "relative max-w-[88%] rounded-3xl text-xs leading-relaxed shadow-soft transition-all sm:max-w-[76%] lg:max-w-[65%] sm:text-sm border [overflow-wrap:anywhere]",
                             // Beautiful frames
                             mine
                               ? "bg-gradient-to-br from-brand to-brand-pink border-white/10 text-white"
@@ -1894,9 +1970,7 @@ function MessagesPage() {
                                 )}
                               >
                                 <span>{timeAgo(m.created_at, now)}</span>
-                                {(m as any).is_edited && (
-                                  <span className="italic opacity-80">(edited)</span>
-                                )}
+                                {m.is_edited && <span className="italic opacity-80">(edited)</span>}
                                 {mine && (
                                   <span
                                     className="flex items-center gap-0.5 ml-1"
@@ -1979,17 +2053,23 @@ function MessagesPage() {
                             {mine && (
                               <>
                                 <span className="w-px h-3 bg-border/60 mx-0.5" />
+                                {!isAttachment &&
+                                  Date.now() - new Date(m.created_at).getTime() <=
+                                    MESSAGE_EDIT_WINDOW_MS && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleStartEdit(m)}
+                                      title="Edit message"
+                                      className="p-1 text-muted-foreground hover:text-foreground rounded-full hover:bg-foreground/5 transition-colors"
+                                    >
+                                      <Edit2 className="h-3 w-3" />
+                                    </button>
+                                  )}
                                 <button
                                   type="button"
-                                  onClick={() => handleStartEdit(m)}
-                                  title="Edit message"
-                                  className="p-1 text-muted-foreground hover:text-foreground rounded-full hover:bg-foreground/5 transition-colors"
-                                >
-                                  <Edit2 className="h-3 w-3" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteMessage(m.id)}
+                                  onClick={() =>
+                                    setDeleteScopeFor((prev) => (prev === m.id ? null : m.id))
+                                  }
                                   title="Delete message"
                                   className="p-1 text-muted-foreground hover:text-rose-500 rounded-full hover:bg-foreground/5 transition-colors"
                                 >
@@ -1997,7 +2077,70 @@ function MessagesPage() {
                                 </button>
                               </>
                             )}
+                            {!mine && (
+                              <>
+                                <span className="w-px h-3 bg-border/60 mx-0.5" />
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteMessage(m.id, "me")}
+                                  title="Hide for me"
+                                  className="p-1 text-muted-foreground hover:text-rose-500 rounded-full hover:bg-foreground/5 transition-colors"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              </>
+                            )}
                           </div>
+                        )}
+
+                        {/* Delete scope popover — own messages only. "Everyone"
+                            disappears once the 15-min edit window closes; "Just
+                            for me" is a soft hide that works whenever. */}
+                        {mine && deleteScopeFor === m.id && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-30"
+                              onClick={() => setDeleteScopeFor(null)}
+                              aria-hidden
+                            />
+                            <div
+                              className={cn(
+                                "absolute z-40 mt-1 min-w-[180px] rounded-2xl border border-border/80 bg-card shadow-lg overflow-hidden",
+                                mine ? "right-0" : "left-0",
+                              )}
+                              style={{ top: "calc(100% + 4px)" }}
+                              role="menu"
+                            >
+                              <p className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground border-b border-border/60">
+                                Delete this message
+                              </p>
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => handleDeleteMessage(m.id, "me")}
+                                className="w-full text-left px-3 py-2 text-xs hover:bg-foreground/5 transition-colors"
+                              >
+                                <span className="font-bold">Just for me</span>
+                                <span className="block text-[10px] text-muted-foreground mt-0.5">
+                                  Hides from your view; the other person keeps it.
+                                </span>
+                              </button>
+                              {Date.now() - new Date(m.created_at).getTime() <=
+                                MESSAGE_EDIT_WINDOW_MS && (
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => handleDeleteMessage(m.id, "everyone")}
+                                  className="w-full text-left px-3 py-2 text-xs hover:bg-rose-500/10 text-rose-600 dark:text-rose-400 transition-colors border-t border-border/60"
+                                >
+                                  <span className="font-bold">For everyone</span>
+                                  <span className="block text-[10px] text-muted-foreground mt-0.5">
+                                    Removes the message on both sides.
+                                  </span>
+                                </button>
+                              )}
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>
@@ -2039,7 +2182,7 @@ function MessagesPage() {
               </div>
 
               {/* Bottom Message Input bar */}
-              <div className="border-t border-border/60 p-2.5 sm:p-3 relative">
+              <div className="border-t border-border/60 p-2.5 sm:p-3 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:pb-3 relative">
                 <input
                   type="file"
                   ref={fileInputRef}

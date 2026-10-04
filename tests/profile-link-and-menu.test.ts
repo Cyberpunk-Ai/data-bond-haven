@@ -54,9 +54,14 @@ describe("profile links open the full profile", () => {
   it("the hand-off renders a spinner, never the profile teaser", () => {
     const route = read("../src/routes/u.$username.tsx");
     // The stub card that used to flash before the redirect is gone entirely.
+    // Scoped to the components below the route definition: `head()` is allowed to
+    // publish a follower count as structured data, which is metadata a crawler
+    // reads, not a teaser in the visual tree.
+    const render = route.slice(route.indexOf("function ProfileHandoff"));
+    expect(render).not.toBe(route);
     expect(route).not.toContain("Open full profile");
-    expect(route).not.toContain("followers");
-    expect(route).not.toContain("profile.posts.map");
+    expect(render).not.toContain("followers");
+    expect(render).not.toContain("profile.posts.map");
     // Both the loader round-trip and the redirect show the same quiet state.
     expect(route).toContain("pendingComponent: ProfileHandoff");
     expect(route).toContain("animate-spin");

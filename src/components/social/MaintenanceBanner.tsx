@@ -1,6 +1,7 @@
 import { AlertTriangle, Construction, ShieldCheck } from "lucide-react";
 
 import { usePlatform } from "@/lib/platform-state";
+import { appConfig } from "@/lib/config";
 
 /**
  * The visible half of Maintenance Mode. Enforcement is elsewhere (the database
@@ -32,7 +33,9 @@ export function MaintenanceBanner() {
         <Construction className="h-4 w-4 text-rose-600 dark:text-rose-400" />
       </span>
       <div>
-        <p className="font-bold text-rose-900 dark:text-rose-100">Spaces1 is under maintenance</p>
+        <p className="font-bold text-rose-900 dark:text-rose-100">
+          {appConfig.brand.name} is under maintenance
+        </p>
         <p className="mt-0.5 text-xs text-rose-900/80 dark:text-rose-100/80">
           You can keep reading, but posting, messaging, Spaces and payments are paused for a short
           while. Nothing you have already saved is affected — try again once the banner disappears.

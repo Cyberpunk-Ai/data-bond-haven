@@ -1,14 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "@tanstack/react-router";
-import {
-  AlertCircle,
-  AlertTriangle,
-  CheckCircle2,
-  Info,
-  X,
-  ChevronRight,
-  ShieldAlert,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, X, ChevronRight, ShieldAlert } from "lucide-react";
 import { getPublicSettings } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
 import type { SystemSettings } from "@/lib/types";

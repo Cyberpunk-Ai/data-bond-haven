@@ -98,7 +98,7 @@ export function ReportModal({
         setSubmitted(false);
         onClose();
       }, 1600);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't submit your report. Please try again."));
     } finally {
       setSubmitting(false);

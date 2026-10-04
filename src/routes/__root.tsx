@@ -12,10 +12,22 @@ import { Toaster } from "@/components/ui/sonner";
 
 import appCss from "../styles.css?url";
 import { reportError } from "../lib/error-reporting";
-import { bootstrapTheme } from "../lib/theme-state";
+import { bootstrapTheme, themeColorFor } from "../lib/theme-state";
+import { appConfig } from "../lib/config";
 import { OG_IMAGE_META } from "../lib/og-meta";
+import { ICON_LINKS } from "../lib/seo";
 import { supabase } from "@/integrations/supabase/client";
 import { IncomingCallProvider } from "@/components/calls/IncomingCallProvider";
+
+/**
+ * The fallback document title and description, from the one brand name the
+ * deployment configures (`VITE_APP_NAME`, see src/lib/config.ts). Indexable
+ * routes override both; this is what a page with no head of its own, a
+ * bookmark, or a home-screen shortcut shows.
+ */
+const BRAND = appConfig.brand.name;
+const ROOT_TITLE = `${BRAND} — Creator Social Network`;
+const ROOT_DESCRIPTION = `${BRAND} is the creator social network: live audio spaces, stories, messaging, tips and payouts in one place.`;
 
 function NotFoundComponent() {
   const links = [
@@ -110,25 +122,33 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         name: "viewport",
         content: "width=device-width, initial-scale=1, viewport-fit=cover",
       },
-      { title: "Spaces1 — Creator Social Network" },
+      { title: ROOT_TITLE },
       {
         name: "description",
-        content:
-          "Spaces1 is the creator social network: live audio spaces, stories, messaging, tips and payouts in one place.",
+        content: ROOT_DESCRIPTION,
       },
-      { property: "og:title", content: "Spaces1 — Creator Social Network" },
+      { property: "og:title", content: ROOT_TITLE },
       {
         property: "og:description",
         content:
           "Live audio spaces, stories, messaging and creator monetization — all in one social home.",
       },
       { property: "og:type", content: "website" },
-      { property: "og:site_name", content: "Spaces1" },
-      // Shared post/profile links preview with the crisp 512px brand icon
-      // instead of a scraped 32px favicon. Merged into every route's head.
+      { property: "og:site_name", content: BRAND },
+      { property: "og:locale", content: "en_US" },
+      // The site's own 1200x630 preview card, merged into every route's head.
+      // Pages with a picture of their own (a profile avatar, a post's photo)
+      // override it with `pagePreviewMeta`, which is why this is a spread and
+      // not a constant.
       ...OG_IMAGE_META,
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "theme-color", content: "#7f22fe" },
+      // Paints the browser's address bar and the installed-app title bar. The
+      // hex is derived from the same oklch brand token the stylesheet uses, and
+      // `applyThemeToDOM` re-points it when someone picks another accent.
+      { name: "theme-color", content: themeColorFor() },
+      // Deliberately no `robots` meta here: the root head is merged into every
+      // route, and a blanket `index,follow` would compete with the
+      // `noindex,nofollow` that private routes declare for themselves.
     ],
     links: [
       { rel: "stylesheet", href: appCss },
@@ -138,9 +158,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap",
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
-      { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
-      { rel: "manifest", href: "/manifest.webmanifest" },
+      // Sized icon set (ico + 192/512 png + apple-touch + manifest) — see
+      // ICON_LINKS for why the legacy .ico stays and why `sizes` is declared.
+      ...ICON_LINKS,
     ],
   }),
   shellComponent: RootShell,

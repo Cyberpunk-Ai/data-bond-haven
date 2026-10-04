@@ -10,7 +10,6 @@ import {
   Share2,
   BarChart3,
   MoreHorizontal,
-  BadgeCheck,
   Send,
   Trash2,
   Copy,
@@ -20,9 +19,6 @@ import {
   Sparkles,
   CheckCircle2,
   Maximize2,
-  Compass,
-  Zap,
-  Flame,
   ThumbsUp,
   ThumbsDown,
   ExternalLink,
@@ -32,6 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { appConfig } from "@/lib/config";
 import { friendlyError } from "@/lib/error-messages";
 import { editPost } from "@/lib/post-edit.functions";
 import { Avatar } from "@/components/social/Avatar";
@@ -62,7 +59,6 @@ import {
   sendFeedFeedback,
 } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
-import { usePlan } from "@/lib/plan-state";
 import { useAuth } from "@/lib/auth-state";
 import { usePreferences } from "@/lib/preferences-state";
 import {
@@ -273,7 +269,6 @@ function PostCardBase({
   index?: number;
   onDeleted?: (id: string) => void;
 }) {
-  const { currentPlan, isPlus, isPro } = usePlan();
   const { user } = useAuth();
   const activeUser = user || currentUser;
   const { profile: hookProfile } = useProfile(post.user_id);
@@ -400,7 +395,7 @@ function PostCardBase({
         setPoll((prev) => {
           if (!prev) return prev;
           const counts = new Map<string, number>(
-            (event.tallies as any[]).map((t) => [t.id, t.votes]),
+            (event.tallies as { id: string; votes: number }[]).map((t) => [t.id, t.votes]),
           );
           return {
             ...prev,
@@ -963,7 +958,7 @@ function PostCardBase({
     if (navigator.share) {
       navigator
         .share({
-          title: `${author.display_name} on Spaces1`,
+          title: `${author.display_name} on ${appConfig.brand.name}`,
           text: post.content,
           url: shareUrl,
         })
@@ -980,7 +975,7 @@ function PostCardBase({
       await deletePost(post.id);
       onDeleted?.(post.id);
       toast.success("Post deleted");
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "We couldn't delete that post. Please try again."));
     }
   }

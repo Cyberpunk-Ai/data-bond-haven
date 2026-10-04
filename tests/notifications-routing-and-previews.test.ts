@@ -106,7 +106,8 @@ describe("link previews carry a sharp logo", () => {
     const og = read("../src/lib/og-meta.ts");
     expect(og).toContain("window.location.origin");
     expect(og).toContain("https://spaces1.com");
-    expect(og).toContain('OG_IMAGE_PATH = "/icon-512.png"');
+    expect(og).toContain('OG_IMAGE_PATH = "/og-image.png"');
+    expect(og).toContain('APP_ICON_PATH = "/icon-512.png"');
     expect(og).toContain('property: "og:image:width"');
     expect(og).toContain('property: "og:image:height"');
     expect(og).toContain('name: "twitter:image"');

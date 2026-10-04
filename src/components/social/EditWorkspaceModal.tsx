@@ -4,6 +4,7 @@ import { X, Camera, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Avatar } from "@/components/social/Avatar";
+import { LogoEmojiField } from "@/components/social/LogoEmojiField";
 import { uploadMedia } from "@/lib/api-client";
 import { friendlyError } from "@/lib/error-messages";
 
@@ -168,19 +169,13 @@ export function EditWorkspaceModal({
             </span>
           </div>
 
-          <div className="grid grid-cols-[96px_1fr] gap-3">
-            <div>
-              <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground block mb-1">
-                Emoji
-              </label>
-              <input
-                type="text"
-                value={form.logoEmoji}
-                onChange={(e) => setForm((prev) => ({ ...prev, logoEmoji: e.target.value }))}
-                maxLength={4}
-                className="w-full rounded-2xl bg-muted/40 border border-border px-3 py-2.5 text-center text-lg outline-none focus:border-brand"
-              />
-            </div>
+          <div className="grid grid-cols-[7.5rem_1fr] gap-3">
+            <LogoEmojiField
+              label="Emoji"
+              value={form.logoEmoji}
+              onChange={(logoEmoji) => setForm((prev) => ({ ...prev, logoEmoji }))}
+              inputClassName="rounded-2xl px-3 py-2.5 text-lg"
+            />
             <div>
               <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground block mb-1">
                 Team Name

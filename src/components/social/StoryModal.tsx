@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Heart,
-  Sparkles,
   Send,
   Trash2,
   MapPin,
@@ -15,10 +14,13 @@ import {
   VolumeX,
 } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
+import { EmojiPicker } from "@/components/social/EmojiPicker";
+import { useEmojiInsert } from "@/hooks/useEmojiInsert";
 import type { Profile, Story } from "@/lib/types";
 import { getProfile, isProfilePending, currentUserId } from "@/lib/profile-service";
 import { toggleLikeStory, deleteStory, sendMessage } from "@/lib/api-client";
 import { storyReplyBody } from "@/lib/formatters";
+import { MAX_MESSAGE_CHARS } from "@/lib/message-length";
 import { authorizedMediaUrl } from "@/lib/media-access";
 import {
   storyLayer,
@@ -61,6 +63,18 @@ export function StoryModal({
   // whole viewer closing) mid-sentence retargets or destroys the draft.
   const [replyFocused, setReplyFocused] = useState(false);
   const replyInputRef = useRef<HTMLInputElement>(null);
+  // The picker holds its own search box, so opening it takes the caret out of
+  // the reply field and `replyFocused` goes false. Without a flag of its own in
+  // the pause guard below, the story would advance mid-pick and the draft it
+  // was meant for would be retargeted or lost.
+  const [replyEmojiOpen, setReplyEmojiOpen] = useState(false);
+  // One glyph in the middle of a sentence the reader is typing is worth getting
+  // right, so this reuses the message composer's insert: caret position read
+  // before the update, restored after the render, capped at what a DM accepts.
+  const insertReplyEmoji = useEmojiInsert(replyInputRef, replyText, setReplyText, {
+    maxLength: MAX_MESSAGE_CHARS,
+    onRefused: () => toast.info(`A reply can be up to ${MAX_MESSAGE_CHARS} characters`),
+  });
   const [deleting, setDeleting] = useState(false);
   // Optimistic like state for the story currently open. Writing back into the
   // `stories` prop mutated a shared object and only re-rendered when the parent
@@ -173,7 +187,16 @@ export function StoryModal({
 
   // Auto-progress timer
   useEffect(() => {
-    if (!isOpen || !currentStory || isPaused || replyFocused || sendingReply || holdClock) return;
+    if (
+      !isOpen ||
+      !currentStory ||
+      isPaused ||
+      replyFocused ||
+      replyEmojiOpen ||
+      sendingReply ||
+      holdClock
+    )
+      return;
 
     const step = storyProgressStep(STORY_TICK_MS, STORY_DURATION_MS);
     const interval = setInterval(() => {
@@ -202,6 +225,7 @@ export function StoryModal({
     currentStory,
     isPaused,
     replyFocused,
+    replyEmojiOpen,
     sendingReply,
     holdClock,
     stories.length,
@@ -216,6 +240,7 @@ export function StoryModal({
     // A draft belongs to the story it was written under. Carrying it over and
     // hitting Send would DM the *new* author words meant for the old one.
     setReplyText("");
+    setReplyEmojiOpen(false);
     // A manual jump drops the typing guard too; the blur clears `replyFocused`.
     replyInputRef.current?.blur();
   }, [currentIndex]);
@@ -224,6 +249,9 @@ export function StoryModal({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
+      // While the picker is up, Escape is its own key: closing the panel and the
+      // viewer on one press would throw away the reply being composed.
+      if (replyEmojiOpen) return;
       if (e.key === "Escape") return onClose();
       // While the reply box has the caret, arrow keys move the cursor and the
       // space bar types — not story controls.
@@ -237,7 +265,7 @@ export function StoryModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, currentIndex, stories.length]);
+  }, [isOpen, currentIndex, stories.length, replyEmojiOpen]);
 
   if (!isOpen || !currentStory || !author) return null;
 
@@ -290,7 +318,7 @@ export function StoryModal({
       } else {
         handleNext();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't delete that story. Please try again."));
     } finally {
       setDeleting(false);
@@ -309,7 +337,7 @@ export function StoryModal({
       await sendMessage(author.id, storyReplyBody(currentStory, reply));
       toast.success(`Reply sent to ${author.display_name}! 💬`);
       setReplyText("");
-    } catch (err: any) {
+    } catch (err: unknown) {
       // A failed reply is NOT a sent one: keep the draft, say what happened.
       toast.error(friendlyError(err, "Couldn't send your reply — it's still here, try again."));
     } finally {
@@ -567,6 +595,33 @@ export function StoryModal({
           ) : (
             <>
               <form onSubmit={handleSendReply} className="flex items-center gap-2">
+                {/* Full picker, same one the DM composer and the post composer
+                    open: search, categories and recents. */}
+                <div className="relative shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setReplyEmojiOpen((open) => !open)}
+                    aria-expanded={replyEmojiOpen}
+                    aria-label="Insert emoji"
+                    className={cn(
+                      "grid h-9 w-9 place-items-center rounded-full backdrop-blur-md transition-all active:scale-90 cursor-pointer",
+                      replyEmojiOpen
+                        ? "bg-white/30 text-white"
+                        : "bg-white/15 text-white hover:bg-white/25",
+                    )}
+                  >
+                    <Smile className="h-4 w-4" />
+                  </button>
+                  {replyEmojiOpen && (
+                    <EmojiPicker
+                      multiple
+                      label="Emoji"
+                      className="bottom-full left-0 mb-2"
+                      onPick={insertReplyEmoji}
+                      onClose={() => setReplyEmojiOpen(false)}
+                    />
+                  )}
+                </div>
                 <input
                   ref={replyInputRef}
                   type="text"
@@ -616,10 +671,7 @@ export function StoryModal({
                   <button
                     key={emoji}
                     type="button"
-                    onClick={() => {
-                      setReplyText((prev) => (prev ? `${prev} ${emoji}` : emoji));
-                      replyInputRef.current?.focus();
-                    }}
+                    onClick={() => insertReplyEmoji(emoji)}
                     className="text-lg hover:scale-125 transition-transform active:scale-95 cursor-pointer"
                   >
                     {emoji}

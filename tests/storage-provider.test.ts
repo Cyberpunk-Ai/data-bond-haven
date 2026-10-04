@@ -516,7 +516,7 @@ describe("read mirror for a backend switch", () => {
     const provider: StorageProvider & { calls: string[] } = {
       info,
       calls,
-      async put(key, body, contentType) {
+      async put(key, _body, contentType) {
         calls.push(`put:${key}`);
         objects.set(key, contentType);
         return { key };

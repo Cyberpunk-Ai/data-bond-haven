@@ -39,8 +39,8 @@ interface AdminOverviewTabProps {
   onNavigateTab: (tab: string) => void;
 }
 
-export function AdminOverviewTab({ overview, activeRole, onNavigateTab }: AdminOverviewTabProps) {
-  const { stats, charts, recent_activity, recent_reports, recent_tips } = overview;
+export function AdminOverviewTab({ overview, onNavigateTab }: AdminOverviewTabProps) {
+  const { stats, charts, recent_activity, recent_tips } = overview;
   const [chartMetric, setChartMetric] = useState<"impressions" | "engagement">("impressions");
 
   const statCards = [

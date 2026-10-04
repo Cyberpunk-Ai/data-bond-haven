@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { canonicalLink, ogUrlMeta } from "@/lib/seo";
 
 import { Section, StaticPage } from "@/components/site/StaticPage";
 import { appConfig } from "@/lib/config";
@@ -13,8 +14,12 @@ export const Route = createFileRoute("/about")({
       { property: "og:title", content: `About — ${name}` },
       { property: "og:description", content: `Why ${name} exists and the people it's built for.` },
       { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary" },
+      // The site card is this page's picture, and it is 1200x630 — a `summary`
+      // card would shrink that banner to a thumbnail next to the text.
+      { name: "twitter:card", content: "summary_large_image" },
+      ogUrlMeta("/about"),
     ],
+    links: [canonicalLink("/about")],
   }),
   component: About,
 });

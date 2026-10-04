@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import { useCallback, useEffect, useState, lazy, Suspense } from "react";
 
 import { AdminHeader } from "@/components/admin/AdminHeader";
@@ -40,20 +41,20 @@ const AdminSystemSettingsTab = lazy(() =>
 export const Route = createFileRoute("/admin")({
   head: () => ({
     meta: [
-      { title: "Admin Console — Spaces1" },
+      { title: brandedTitle("Admin Console") },
       {
         name: "description",
-        content:
-          "Moderation queue, user management, content review, audit logs and platform settings for Spaces administrators.",
+        content: `Moderation queue, user management, content review, audit logs and platform settings for ${ORG_NAME} administrators.`,
       },
-      { property: "og:title", content: "Admin Console — Spaces1" },
+      { property: "og:title", content: brandedTitle("Admin Console") },
       {
         property: "og:description",
         content: "Moderation, users, content, audit logs and platform settings.",
       },
       { property: "og:type", content: "website" },
-      { name: "robots", content: "noindex" },
-      { name: "twitter:card", content: "summary" },
+      ...NOINDEX_META,
+      // NOINDEX anyway, but keep the card honest for a link someone pastes.
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: AdminPage,
@@ -147,7 +148,7 @@ function AdminPage() {
         {access === "denied" ? (
           <>
             <p className="text-sm text-muted-foreground">
-              This console is limited to Spaces1 administrators and moderators. Sign in with an
+              This console is limited to {ORG_NAME} administrators and moderators. Sign in with an
               account that has been given access to continue.
             </p>
             {/* Denied visitors used to land on a dead end with no way out. */}
@@ -208,7 +209,9 @@ function AdminPage() {
           <AdminOverviewTab
             overview={overview}
             activeRole={activeRole}
-            onNavigateTab={(t) => setTab(t as any)}
+            onNavigateTab={(t) => {
+              if ((TABS as readonly string[]).includes(t)) setTab(t as (typeof TABS)[number]);
+            }}
           />
         </Suspense>
       )}

@@ -22,8 +22,8 @@ import { accountNamesMatch, resolveBankCode } from "@/lib/payout-verify";
 // reachable from the client bundle, so top-level `.server.ts` imports are not
 // allowed. `@/lib/money`-style pure modules may be imported statically.
 async function admin() {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  return supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  return adminDb();
 }
 
 /**

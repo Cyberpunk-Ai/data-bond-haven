@@ -13,12 +13,7 @@
  * {@link StorageProvider}.
  */
 import { AwsClient } from "aws4fetch";
-import type {
-  StorageProvider,
-  StorageProbe,
-  StorageRead,
-  StorageStat,
-} from "@/lib/storage/provider.server";
+import type { StorageProvider, StorageProbe, StorageRead } from "@/lib/storage/provider.server";
 import { isPublicMediaPath } from "@/lib/media-folders.server";
 
 export interface S3Config {

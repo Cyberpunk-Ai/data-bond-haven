@@ -33,13 +33,13 @@ export const createApiKey = createServerFn({ method: "POST" })
     }
     const { hashApiKey, newApiToken } = await import("./api-auth.server");
     const token = newApiToken();
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { count } = await (supabaseAdmin as any)
+    const { adminDb } = await import("@/integrations/supabase/client.server");
+    const { count } = await adminDb()
       .from("api_keys")
       .select("id", { count: "exact", head: true })
       .eq("user_id", profileId);
     if ((count ?? 0) >= 10) throw new Error("You can have at most 10 API keys.");
-    const { data: row, error } = await (supabaseAdmin as any)
+    const { data: row, error } = await adminDb()
       .from("api_keys")
       .insert({
         user_id: profileId,
@@ -72,16 +72,18 @@ export const sendTestWebhook = createServerFn({ method: "POST" })
       .eq("id", data.webhookId)
       .maybeSingle();
     if (!hook) throw new Error("Webhook not found");
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error: queueError } = await (supabaseAdmin as any).from("webhook_deliveries").insert({
-      webhook_id: hook.id,
-      event: "ping",
-      payload: {
+    const { adminDb } = await import("@/integrations/supabase/client.server");
+    const { error: queueError } = await adminDb()
+      .from("webhook_deliveries")
+      .insert({
+        webhook_id: hook.id,
         event: "ping",
-        created_at: new Date().toISOString(),
-        data: { message: "Hello from your webhook" },
-      },
-    });
+        payload: {
+          event: "ping",
+          created_at: new Date().toISOString(),
+          data: { message: "Hello from your webhook" },
+        },
+      });
     // The panel reads this as "test event queued and dispatched"; with nothing
     // queued, dispatchDueWebhooks would happily report `{processed: 0}`.
     if (queueError) throw new Error(queueError.message || "Could not queue the test event");

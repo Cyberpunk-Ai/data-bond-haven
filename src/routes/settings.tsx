@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
   User,
@@ -11,8 +12,6 @@ import {
   LogOut,
   CreditCard,
   Sparkles,
-  Zap,
-  Crown,
   CheckCircle2,
   ArrowUpRight,
   Camera,
@@ -26,6 +25,7 @@ import {
   Monitor,
   Code,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { AppShell, PageHeader, Panel } from "@/components/social/AppShell";
 import { Avatar } from "@/components/social/Avatar";
 import { MonetizationHub } from "@/components/social/MonetizationHub";
@@ -40,7 +40,7 @@ import { useTheme, ACCENT_PALETTES, type ThemeAccent, type ThemeMode } from "@/l
 import { usePreferences } from "@/lib/preferences-state";
 import { notificationPermission, requestNotificationPermission } from "@/lib/browser-notifications";
 import { setPresenceHidden } from "@/lib/presence";
-import { PLAN_DETAILS, type PlanTier } from "@/lib/plans";
+import { PLAN_DETAILS } from "@/lib/plans";
 import { PaymentHistory } from "@/components/social/PaymentHistory";
 import { cn } from "@/lib/utils";
 
@@ -55,18 +55,18 @@ const AnalyticsDashboard = lazy(() =>
 export const Route = createFileRoute("/settings")({
   head: () => ({
     meta: [
-      { title: "Settings — Spaces1" },
+      { title: brandedTitle("Settings") },
       {
         name: "description",
-        content:
-          "Manage your Spaces1 account: profile details, notification preferences, privacy controls, appearance, and creator tools.",
+        content: `Manage your ${ORG_NAME} account: profile details, notification preferences, privacy controls, appearance, and creator tools.`,
       },
-      { property: "og:title", content: "Settings — Spaces1" },
+      { property: "og:title", content: brandedTitle("Settings") },
       {
         property: "og:description",
-        content:
-          "Profile, notifications, privacy, appearance, and creator controls for your Spaces1 account.",
+        content: `Profile, notifications, privacy, appearance, and creator controls for your ${ORG_NAME} account.`,
       },
+      // Account controls: nothing here is a page, and it must never be a result.
+      ...NOINDEX_META,
     ],
   }),
   component: SettingsPage,
@@ -78,7 +78,7 @@ export const Route = createFileRoute("/settings")({
 const sections: Array<{
   id: string;
   label: string;
-  icon: any;
+  icon: LucideIcon;
   tier?: "plus" | "pro";
 }> = [
   { id: "profile", label: "Profile", icon: User },
@@ -187,17 +187,8 @@ function SettingsPage() {
   const navigate = useNavigate();
   const { section } = Route.useSearch();
   const { user } = useAuth();
-  const {
-    currentPlan,
-    planDetails,
-    billingCycle,
-    isPro,
-    isUltra,
-    usage,
-    updateBillingCycle,
-    upgradePlan,
-    cancelSubscription,
-  } = usePlan();
+  const { currentPlan, planDetails, billingCycle, usage, updateBillingCycle, cancelSubscription } =
+    usePlan();
   const {
     mode,
     setMode,
@@ -324,7 +315,7 @@ function SettingsPage() {
       });
       updateUserSession({ avatar_url: newAvatarUrl });
       toast.success("Profile photo updated!", { id: "avatar-upload" });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Avatar upload failed:", err);
       toast.error(friendlyError(err, "Could not upload photo. Please try again."), {
         id: "avatar-upload",

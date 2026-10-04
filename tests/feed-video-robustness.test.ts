@@ -36,7 +36,10 @@ describe("feed videos are always detected, never mis-rendered as images", () => 
     for (const type of videoTypes) {
       const escaped = type.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const m = extMap.match(new RegExp(`"${escaped}":\\s*"([a-z0-9]+)"`));
-      expect(m, `no EXTENSION_BY_CONTENT_TYPE entry for ${type} — it would be stored as .bin`).toBeTruthy();
+      expect(
+        m,
+        `no EXTENSION_BY_CONTENT_TYPE entry for ${type} — it would be stored as .bin`,
+      ).toBeTruthy();
       const ext = m![1];
       // The exact path shape the uploader writes; the card must call it a video.
       expect(

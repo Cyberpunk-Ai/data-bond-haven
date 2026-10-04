@@ -5,6 +5,7 @@ import { Search, TrendingUp, Radio, Plus, Check } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
 import { Panel } from "@/components/social/AppShell";
+import { appConfig } from "@/lib/config";
 import { compact } from "@/lib/formatters";
 import { currentUserId } from "@/lib/profile-service";
 import type { Profile, Space, TrendingTag } from "@/lib/types";
@@ -83,7 +84,7 @@ export function FollowButton({
     try {
       const res = await toggleFollowUser(targetUserId);
       setFollowing(res.following);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setFollowing(prev);
       toast.error(friendlyError(err, "Couldn't update follow. Please try again."));
     } finally {
@@ -364,7 +365,10 @@ export function RailFooter() {
           {l.label}
         </Link>
       ))}
-      <span className="mt-2 block">© 2026 Spaces1</span>
+      {/* Read at render time, so the footer cannot quietly go a year behind. */}
+      <span className="mt-2 block">
+        © {new Date().getFullYear()} {appConfig.brand.name}
+      </span>
     </p>
   );
 }

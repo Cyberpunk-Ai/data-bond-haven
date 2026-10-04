@@ -9,11 +9,11 @@
  * table (the single source of truth shared with checkout/pricing), then throws
  * a typed `UpgradeRequiredError` the UI can turn into an "Upgrade" prompt.
  */
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { adminDb } from "@/integrations/supabase/client.server";
 
 // The generated `Database` types predate `plan_limits`; use the untyped admin
 // handle for these newer tables (regenerating types.ts is scheduled for M4).
-const admin = supabaseAdmin as any;
+const admin = adminDb();
 
 export type PlanTier = "free" | "plus" | "pro";
 

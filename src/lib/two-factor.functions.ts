@@ -181,7 +181,9 @@ export const enrollTwoFactor = createServerFn({ method: "POST" })
       provisioningUri: totpProvisioningUri({
         secretBase32: secret,
         accountName,
-        issuer: "Spaces1",
+        // No `issuer`: the authenticator's owner line defaults to the name this
+        // deployment actually runs as (`appConfig.brand.name` in totp.ts), so a
+        // rebranded install cannot enrol a factor under the old product's name.
       }),
     };
   });

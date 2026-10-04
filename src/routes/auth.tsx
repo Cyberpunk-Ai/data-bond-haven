@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { canonicalLink, ogUrlMeta } from "@/lib/seo";
 import { Loader2, CheckCircle2, ArrowRight } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
 import React, { useEffect, useState } from "react";
@@ -29,7 +30,12 @@ export const Route = createFileRoute("/auth")({
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
+      // The signup page is the conversion landing page for every brand search of
+      // the product, so it is indexable and canonical — but it carries no user
+      // data, which is why it needs no `noindex`.
+      ogUrlMeta("/auth"),
     ],
+    links: [canonicalLink("/auth")],
   }),
   component: AuthPage,
 });

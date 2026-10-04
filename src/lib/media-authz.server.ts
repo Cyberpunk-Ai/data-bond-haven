@@ -66,8 +66,8 @@ async function isAuthorizedForStoryMedia(
   if (!authorId) return false;
   if (authorId === profileId) return true;
 
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const db = supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  const db = adminDb();
 
   const { data: staff } = await db
     .from("user_roles")
@@ -100,8 +100,8 @@ async function isAuthorizedForRecording(
   path: string,
   { profileId, authUserId }: MediaIdentity,
 ): Promise<boolean> {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const db = supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  const db = adminDb();
 
   const { data: space } = await db
     .from("spaces")
@@ -132,8 +132,8 @@ async function isAuthorizedForMessageMedia(
   path: string,
   { profileId, authUserId }: MediaIdentity,
 ): Promise<boolean> {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const db = supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  const db = adminDb();
 
   // The attachment is usually linked via `messages.media_url`, but older rows
   // (and any send that only embedded the url inside `body`) leave that column

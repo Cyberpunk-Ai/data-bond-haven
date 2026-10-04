@@ -9,22 +9,37 @@ import { PostCard } from "@/components/social/PostCard";
 import { PostDetailSkeleton } from "@/components/social/PostSkeleton";
 import { compact } from "@/lib/formatters";
 import { getSharedPost } from "@/lib/share.functions";
+import { pagePreviewMeta } from "@/lib/og-meta";
+import {
+  NOINDEX_META,
+  ORG_NAME,
+  breadcrumbJsonLd,
+  brandedTitle,
+  canonicalLink,
+  jsonLdBlock,
+  ogUrlMeta,
+  postJsonLd,
+} from "@/lib/seo";
 import { getPostById } from "@/lib/api-client";
+import { firstMediaUrl, isVideoUrl } from "@/lib/utils";
 import type { Post } from "@/lib/types";
 
 export const Route = createFileRoute("/post/$id")({
   // `.catch` keeps a failed intent-preload from surfacing as an unhandled
   // rejection; a null loaderData renders the "unavailable" head/body below.
-  loader: ({ params }) =>
-    getSharedPost({ data: { id: params.id } }).catch(() => null),
+  loader: ({ params }) => getSharedPost({ data: { id: params.id } }).catch(() => null),
   head: ({ loaderData }) => {
     if (!loaderData) {
+      // Deleted, private or never existed. `noindex` is the part that matters:
+      // without it every stale link target on the internet becomes an indexed
+      // soft-404, which is how a domain loses crawl trust.
       return {
-        meta: [{ title: "Post unavailable — Spaces1" }, { name: "robots", content: "noindex" }],
+        meta: [{ title: brandedTitle("Post unavailable") }, ...NOINDEX_META],
       };
     }
-    const snippet = loaderData.content.slice(0, 150) || "A post on Spaces1";
-    const title = `${loaderData.author.displayName} on Spaces1`;
+    const snippet = loaderData.content.slice(0, 150) || `A post on ${ORG_NAME}`;
+    const title = `${loaderData.author.displayName} on ${ORG_NAME}`;
+    const path = `/post/${loaderData.id}`;
     return {
       meta: [
         { title },
@@ -32,8 +47,39 @@ export const Route = createFileRoute("/post/$id")({
         { property: "og:title", content: title },
         { property: "og:description", content: snippet },
         { property: "og:type", content: "article" },
+        { property: "article:published_time", content: loaderData.createdAt },
         { name: "twitter:card", content: "summary_large_image" },
+        // A post that carries a photo previews that photo, because that is what
+        // the link is actually about; a text-only post keeps the site card.
+        // Private objects (story/DM/replay keys) are refused by
+        // `previewImageUrl`, so a share can never advertise bytes the reader is
+        // not entitled to fetch.
+        ...pagePreviewMeta(loaderData.mediaUrl, snippet),
+        ogUrlMeta(path),
+        // One block for the posting and the trail (home → author → post), in
+        // `meta` because `script:ld+json` is the entry the router renders as a
+        // real `<script>` inside `<head>`.
+        jsonLdBlock(
+          postJsonLd({
+            id: loaderData.id,
+            content: loaderData.content,
+            authorName: loaderData.author.displayName,
+            authorUsername: loaderData.author.username,
+            createdAt: loaderData.createdAt,
+            likeCount: loaderData.likeCount,
+            commentCount: loaderData.commentCount,
+          }),
+          breadcrumbJsonLd([
+            { name: ORG_NAME, path: "/" },
+            {
+              name: `@${loaderData.author.username}`,
+              path: `/u/${encodeURIComponent(loaderData.author.username)}`,
+            },
+            { name: "Post", path },
+          ]),
+        ),
       ],
+      links: [canonicalLink(path)],
     };
   },
   component: PostPage,
@@ -58,6 +104,12 @@ function PostPagePending() {
 function PostPage() {
   const post = Route.useLoaderData();
   const { id } = Route.useParams();
+  // The share DTO's media column is the raw stored value: several comma-joined
+  // urls for a multi-image post, and a video url looks exactly like an image one
+  // until you check the extension. Rendering it straight into an <img src> gave
+  // a broken thumbnail for every multi-image post, so the fallback view goes
+  // through the same two rules the interactive card uses.
+  const shareMedia = firstMediaUrl(post?.mediaUrl);
   // In-app viewers get the full interactive card (like/comment/repost/save);
   // the loader's share DTO is only the crawler/anonymous fallback.
   const [fullPost, setFullPost] = useState<Post | null>(null);
@@ -122,12 +174,28 @@ function PostPage() {
 
             <p className="whitespace-pre-wrap text-[0.975rem] leading-relaxed">{post.content}</p>
 
-            {post.mediaUrl ? (
-              <img
-                src={post.mediaUrl}
-                alt=""
-                className="w-full rounded-2xl border border-border object-cover"
-              />
+            {shareMedia ? (
+              isVideoUrl(shareMedia) ? (
+                // Sound on demand, no autoplay: this view is what an anonymous
+                // or not-yet-loaded visitor gets, and autoplaying audio there is
+                // how a shared link becomes noise.
+                <video
+                  src={shareMedia}
+                  controls
+                  playsInline
+                  muted
+                  preload="metadata"
+                  className="w-full rounded-2xl border border-border bg-black"
+                />
+              ) : (
+                <img
+                  src={shareMedia}
+                  alt={`Image attached to this post by ${post.author.displayName}`}
+                  loading="lazy"
+                  decoding="async"
+                  className="w-full rounded-2xl border border-border object-cover"
+                />
+              )
             ) : post.gradient ? (
               <div className={`h-52 w-full rounded-2xl bg-gradient-to-br ${post.gradient}`} />
             ) : null}

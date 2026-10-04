@@ -1,14 +1,13 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+import { canonicalLink, ogUrlMeta, brandedTitle } from "@/lib/seo";
 import { useState, useEffect } from "react";
 import {
   Sparkles,
   Check,
-  Zap,
   Radio,
   ShieldCheck,
   DollarSign,
   ArrowRight,
-  HelpCircle,
   ChevronDown,
   ChevronUp,
   CheckCircle2,
@@ -18,7 +17,7 @@ import { useMounted } from "@/hooks/use-mounted";
 import { useAuth } from "@/lib/auth-state";
 import { type PlanTier } from "@/lib/plans";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
-import { cn } from "@/lib/utils";
+
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/pricing")({
@@ -27,19 +26,21 @@ export const Route = createFileRoute("/pricing")({
   }),
   head: () => ({
     meta: [
-      { title: "Plans & Perks — Spaces1" },
+      { title: brandedTitle("Plans & Perks") },
       {
         name: "description",
         content:
           "Simple, transparent plans designed for creators, live audio hosts, and media teams.",
       },
-      { property: "og:title", content: "Plans & Perks — Spaces1" },
+      { property: "og:title", content: brandedTitle("Plans & Perks") },
       {
         property: "og:description",
         content:
           "Simple, transparent plans designed for creators, live audio hosts, and media teams.",
       },
+      ogUrlMeta("/pricing"),
     ],
+    links: [canonicalLink("/pricing")],
   }),
   component: PricingPage,
 });

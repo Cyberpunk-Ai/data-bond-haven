@@ -1,16 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { X, Sparkles, Crown, Check, CreditCard, Zap, ShieldCheck, ArrowRight } from "lucide-react";
-import { type PlanTier, type BillingCycle, PLAN_DETAILS } from "@/lib/plans";
-import { usePlan } from "@/lib/plan-state";
-import { useAuth } from "@/lib/auth-state";
+import { type BillingCycle, PLAN_DETAILS } from "@/lib/plans";
 import { startPaystackCheckout } from "@/lib/paystack.functions";
 import { openPaystackPayment } from "@/lib/paystack-checkout";
 import { cn } from "@/lib/utils";
 
 export function UpgradeModal() {
-  const { currentPlan, cycle: defaultCycle, upgradePlan } = usePlan();
-  const { user } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [featureHint, setFeatureHint] = useState<string | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<"plus" | "pro">("plus");

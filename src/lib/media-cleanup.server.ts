@@ -57,8 +57,8 @@ export async function deleteStoredMedia(urls: Array<string | null | undefined>):
     const provider = getStorageProvider();
     const removed = await provider.delete(keys);
     // Reclaim the DB rows whether or not the object still existed.
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await (supabaseAdmin as any).from("media_objects").delete().in("path", keys);
+    const { adminDb } = await import("@/integrations/supabase/client.server");
+    const { error } = await adminDb().from("media_objects").delete().in("path", keys);
     // The bytes are already gone, so a refused delete leaves rows that point at
     // nothing (and get retried by the next GC sweep). Say so instead of failing
     // quietly — supabase-js reports a rejected write as a resolved promise.
@@ -121,8 +121,8 @@ export interface MediaGcResult {
  * written but whose referring row is still being created (a race) is not culled.
  */
 export async function runMediaGarbageCollection(graceSeconds = 3600): Promise<MediaGcResult> {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const db = supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  const db = adminDb();
 
   const cutoff = new Date(Date.now() - graceSeconds * 1000).toISOString();
   const { data: objects, error } = await db

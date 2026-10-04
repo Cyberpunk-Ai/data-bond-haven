@@ -256,6 +256,10 @@ export interface Message {
   media_url?: string | null;
   read_at?: string | null;
   delivered_at?: string | null;
+  /** Persisted edit marker — the source of `is_edited` on hydration. */
+  edited_at?: string | null;
+  /** Viewer-scoped tombstones: users who chose "Delete for me" on this row. */
+  hidden_for?: string[];
   is_edited?: boolean;
 }
 
@@ -266,6 +270,8 @@ export interface Conversation {
   unread: number;
   online: boolean;
   updated_at: string;
+  /** Per-user hide list — cleared automatically when a new message arrives. */
+  hidden_for?: string[];
   messages?: Message[];
 }
 
@@ -295,6 +301,13 @@ export interface Notification {
   body: string;
   created_at: string;
   read: boolean;
+  /** Stamped by the workspace-invite DB trigger; drives the inline accept/decline. */
+  action?: {
+    kind: string;
+    member_id: string;
+    workspace_id: string;
+    state: string;
+  };
 }
 
 export interface TrendingTag {

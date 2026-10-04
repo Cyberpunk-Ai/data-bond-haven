@@ -19,8 +19,8 @@ async function paystackConfig() {
 }
 
 async function admin() {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  return supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  return adminDb();
 }
 
 /**

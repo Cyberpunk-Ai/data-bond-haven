@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { NOINDEX_META } from "@/lib/seo";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, AlertTriangle, Loader2, RotateCw } from "lucide-react";
 
@@ -19,8 +20,9 @@ export const Route = createFileRoute("/status")({
       { property: "og:title", content: `System Status — ${name}` },
       { property: "og:description", content: `Live service availability for ${name}.` },
       { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary" },
-      { name: "robots", content: "noindex" },
+      // NOINDEX anyway, but keep the card honest for a link someone pastes.
+      { name: "twitter:card", content: "summary_large_image" },
+      ...NOINDEX_META,
     ],
   }),
   component: StatusPage,
@@ -60,7 +62,7 @@ function StatusPage() {
       setHealth(body);
       setUnreachable(false);
     } catch (err) {
-      if ((err as any)?.name === "AbortError") return;
+      if (err instanceof Error && err.name === "AbortError") return;
       setUnreachable(true);
     } finally {
       setLoading(false);

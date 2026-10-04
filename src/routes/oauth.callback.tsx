@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
@@ -7,9 +8,10 @@ import { supabase } from "@/integrations/supabase/client";
 export const Route = createFileRoute("/oauth/callback")({
   head: () => ({
     meta: [
-      { title: "Signing you in — Spaces1" },
-      { name: "description", content: "Completing your sign-in to Spaces1." },
-      { name: "robots", content: "noindex" },
+      { title: brandedTitle("Signing you in") },
+      { name: "description", content: `Completing your sign-in to ${ORG_NAME}.` },
+      // One-shot redirect holding an auth code in the query string.
+      ...NOINDEX_META,
     ],
   }),
   component: OAuthCallback,

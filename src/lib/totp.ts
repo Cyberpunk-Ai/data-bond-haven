@@ -15,6 +15,8 @@
  * authenticator app (Google Authenticator, Authy, 1Password, Apple) speaks.
  */
 
+import { appConfig } from "@/lib/config";
+
 const STEP_SECONDS = 30;
 const DIGITS = 6;
 /** Codes stay acceptable one step before and after "now": clocks drift, and a
@@ -161,9 +163,9 @@ export async function verifyTotp(
 
 /**
  * The `otpauth://` line behind a setup QR code. `issuer` is what the
- * authenticator shows as the account's owner, so two "Spaces1" entries stay
- * distinguishable. Reserved characters are encoded because a display name with
- * a space or an `&` would otherwise corrupt the URI.
+ * authenticator shows as the account's owner, so two entries from the same
+ * service stay distinguishable. Reserved characters are encoded because a
+ * display name with a space or an `&` would otherwise corrupt the URI.
  */
 export function totpProvisioningUri(opts: {
   secretBase32: string;
@@ -172,7 +174,11 @@ export function totpProvisioningUri(opts: {
   step?: number;
   digits?: number;
 }): string {
-  const issuer = (opts.issuer ?? "Spaces1").trim() || "Spaces1";
+  // The deployment's own name, not a literal copied in here: an authenticator
+  // row that says one product while the app says another is a trust problem for
+  // the person reading it back five codes a day.
+  const brand = appConfig.brand.name;
+  const issuer = (opts.issuer ?? brand).trim() || brand;
   const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(opts.accountName)}`;
   const params = new URLSearchParams({
     secret: opts.secretBase32,

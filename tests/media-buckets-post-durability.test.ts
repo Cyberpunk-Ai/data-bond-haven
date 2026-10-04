@@ -191,9 +191,9 @@ describe("media GC understands comma-joined media columns", () => {
       mediaKeyFromUrl: (u?: string) => (u ? `key:${u}` : null),
     }));
     vi.doMock("@/integrations/supabase/client.server", () => ({
-      supabaseAdmin: {
+      adminDb: () => ({
         from: () => ({ delete: () => ({ in: () => Promise.resolve({ error: null }) }) }),
-      },
+      }),
     }));
 
     const { deleteStoredMedia } = await import("@/lib/media-cleanup.server");
@@ -294,9 +294,7 @@ describe("For-you candidate pool covers every post", () => {
     // Pagination is still the shared (score, id) helper, so a materialized list
     // and a freshly-computed one page byte-identically; each page hydrates via
     // finalizePage before returning.
-    expect(reader).toMatch(
-      /pageFromSnapshot\(entries, personalised, data\.cursor, data\.limit\)/,
-    );
+    expect(reader).toMatch(/pageFromSnapshot\(entries, personalised, data\.cursor, data\.limit\)/);
     expect(reader).toMatch(/return finalizePage\(supabase, page\);/);
     // The old snapshot cache machinery is fully retired.
     expect(reader).not.toMatch(/rememberSnapshot\(/);
@@ -313,10 +311,7 @@ describe("the ranker's retrieval is pushed into Postgres and stays invoker-scope
     join(process.cwd(), "db", "migrations", "20261002000095_for_you_rank_functions.sql"),
     "utf8",
   );
-  const recs = readFileSync(
-    join(process.cwd(), "src", "lib", "feed-rank-core.ts"),
-    "utf8",
-  );
+  const recs = readFileSync(join(process.cwd(), "src", "lib", "feed-rank-core.ts"), "utf8");
 
   it("defines both functions and grants execute to authenticated only", () => {
     expect(mig).toMatch(/create or replace function public\.for_you_candidates\(p_limit integer\)/);
@@ -355,7 +350,9 @@ describe("intent-preload cannot surface a rejected share-route loader", () => {
   it("catches loader failures to null on the post and profile share routes", () => {
     const post = readFileSync(join(process.cwd(), "src", "routes", "post.$id.tsx"), "utf8");
     const profile = readFileSync(join(process.cwd(), "src", "routes", "u.$username.tsx"), "utf8");
-    expect(post).toMatch(/getSharedPost\(\{ data: \{ id: params\.id \} \}\)\.catch\(\(\) => null\)/);
+    expect(post).toMatch(
+      /getSharedPost\(\{ data: \{ id: params\.id \} \}\)\.catch\(\(\) => null\)/,
+    );
     expect(profile).toMatch(
       /getSharedProfile\(\{ data: \{ username: params\.username \} \}\)\.catch\(\(\) => null\)/,
     );

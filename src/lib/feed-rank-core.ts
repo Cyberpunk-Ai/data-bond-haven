@@ -182,9 +182,7 @@ export async function hydratePageRows(supabase: any, slimRows: any[]): Promise<a
   // Drop entries that no longer hydrate to a real, visible post: serving the
   // stale slim stub would paint an empty card with no content or media (a broken
   // image/video in the feed). The gap self-heals when the worker rebuilds next.
-  return slimRows
-    .map((s) => full.get(s?.id))
-    .filter((row): row is any => Boolean(row));
+  return slimRows.map((s) => full.get(s?.id)).filter((row): row is any => Boolean(row));
 }
 
 /** Slice a page from a ranked list and hydrate it to full rows for the client. */

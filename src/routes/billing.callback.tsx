@@ -1,4 +1,5 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState } from "react";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
@@ -11,17 +12,17 @@ import { usd } from "@/lib/formatters";
 export const Route = createFileRoute("/billing/callback")({
   head: () => ({
     meta: [
-      { title: "Confirming your payment — Spaces1" },
+      { title: brandedTitle("Confirming your payment") },
       {
         name: "description",
-        content: "We're confirming your Spaces1 membership payment and activating your plan.",
+        content: `We're confirming your ${ORG_NAME} membership payment and activating your plan.`,
       },
-      { property: "og:title", content: "Confirming your payment — Spaces1" },
+      { property: "og:title", content: brandedTitle("Confirming your payment") },
       {
         property: "og:description",
-        content: "We're confirming your Spaces1 membership payment and activating your plan.",
+        content: `We're confirming your ${ORG_NAME} membership payment and activating your plan.`,
       },
-      { name: "robots", content: "noindex" },
+      ...NOINDEX_META,
     ],
   }),
   component: BillingCallback,

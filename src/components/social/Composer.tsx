@@ -2,7 +2,6 @@ import { LocationField } from "@/components/social/LocationField";
 import { useState, useRef, useEffect } from "react";
 import {
   Image as ImageIcon,
-  Video,
   Smile,
   MapPin,
   Sparkles,
@@ -22,6 +21,8 @@ import type { Post, Poll } from "@/lib/types";
 import { currentUser } from "@/lib/profile-service";
 import { createPost, uploadMedia } from "@/lib/api-client";
 import { AiDraftModal } from "@/components/social/AiDraftModal";
+import { EmojiPicker } from "@/components/social/EmojiPicker";
+import { useEmojiInsert } from "@/hooks/useEmojiInsert";
 import { useAuth } from "@/lib/auth-state";
 import { appConfig } from "@/lib/config";
 import { usePlatform } from "@/lib/platform-state";
@@ -39,7 +40,6 @@ const sampleLocations = [
   "Design Studio Loft",
   "Remote 🌿",
 ];
-const popularEmojis = ["✨", "🚀", "💡", "🎨", "❤️", "🔥", "🙌", "🌊", "☕", "🧠", "🎯", "⚡"];
 const popularHashtags = [
   "design",
   "build",
@@ -193,7 +193,7 @@ export function Composer({
       toast.success(
         `${files.length} ${files.length === 1 ? "media file" : "media files"} attached`,
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Upload failed:", err);
       toast.error(friendlyError(err, "Upload failed. Please try again."));
     } finally {
@@ -263,7 +263,7 @@ export function Composer({
 
       onPost?.(created.post);
       toast.success("Published to your feed!");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to post:", err);
       toast.error(friendlyError(err, "Your post didn't go through. Please try again."));
     } finally {
@@ -271,9 +271,14 @@ export function Composer({
     }
   }
 
-  function handleInsertEmoji(emoji: string) {
-    setDraft((prev) => prev + emoji);
-  }
+  // A picked emoji lands where the caret is, exactly like the message composer:
+  // `setDraft(prev => prev + emoji)` put the glyph after the words you had not
+  // typed yet, so picking 🎉 mid-sentence wrote it at the very end.
+  //
+  // The ring beside Post counts what you can type, so the picker is held to the
+  // same ceiling — a glyph that pushed the draft past `LIMIT` would leave the
+  // button disabled with no way to undo what a smiley tap had just done.
+  const insertDraftEmoji = useEmojiInsert(textareaRef, draft, setDraft, { maxLength: LIMIT });
 
   function handleAiSelect(content: string) {
     setDraft(content);
@@ -518,21 +523,6 @@ export function Composer({
             )}
 
             {/* Popover Panels */}
-            {showEmojiPicker && (
-              <div className="mt-2 p-3 rounded-2xl bg-foreground/5 border border-border/80 flex flex-wrap gap-2 animate-in fade-in">
-                {popularEmojis.map((em) => (
-                  <button
-                    key={em}
-                    type="button"
-                    onClick={() => handleInsertEmoji(em)}
-                    className="h-8 w-8 rounded-xl hover:bg-foreground/10 text-lg grid place-items-center transition-transform hover:scale-110 active:scale-95"
-                  >
-                    {em}
-                  </button>
-                ))}
-              </div>
-            )}
-
             {showLocationPicker && (
               <LocationField
                 fallback={sampleLocations}
@@ -726,20 +716,39 @@ export function Composer({
                   <Palette className="h-[1.1rem] w-[1.1rem]" />
                 </button>
 
-                {/* Emoji picker */}
-                <button
-                  type="button"
-                  title="Add emoji"
-                  onClick={() => {
-                    setShowEmojiPicker(!showEmojiPicker);
-                    setShowHashtagPicker(false);
-                    setShowLocationPicker(false);
-                    setShowGradientPicker(false);
-                  }}
-                  className="rounded-full p-2 transition-all duration-200 hover:bg-brand/10 active:scale-90 min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
-                >
-                  <Smile className="h-[1.1rem] w-[1.1rem]" />
-                </button>
+                {/* Emoji picker. The same panel the message composer uses —
+                    search, categories and a recents row — instead of the twelve
+                    glyphs we used to decide were enough, and it floats above the
+                    button rather than pushing the whole composer open. */}
+                <div className="relative flex shrink-0 items-center">
+                  <button
+                    type="button"
+                    title="Add emoji"
+                    aria-expanded={showEmojiPicker}
+                    aria-label="Pick an emoji"
+                    onClick={() => {
+                      setShowEmojiPicker(!showEmojiPicker);
+                      setShowHashtagPicker(false);
+                      setShowLocationPicker(false);
+                      setShowGradientPicker(false);
+                    }}
+                    className={cn(
+                      "rounded-full p-2 transition-all duration-200 hover:bg-brand/10 active:scale-90 min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0",
+                      showEmojiPicker && "bg-brand/15 text-brand",
+                    )}
+                  >
+                    <Smile className="h-[1.1rem] w-[1.1rem]" />
+                  </button>
+                  {showEmojiPicker && (
+                    <EmojiPicker
+                      multiple
+                      label="Emoji"
+                      className="bottom-full left-0 mb-2"
+                      onPick={insertDraftEmoji}
+                      onClose={() => setShowEmojiPicker(false)}
+                    />
+                  )}
+                </div>
 
                 {/* Location picker */}
                 <button

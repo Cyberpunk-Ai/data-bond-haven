@@ -25,8 +25,8 @@ export const Route = createFileRoute("/api/public/v1/posts")({
           return json({ error: "insufficient_scope" }, 403, cors);
         const url = new URL(request.url);
         const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 20, 1), 100);
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const { data } = await (supabaseAdmin as any)
+        const { adminDb } = await import("@/integrations/supabase/client.server");
+        const { data } = await adminDb()
           .from("posts")
           .select("id,content,media_url,like_count,comment_count,repost_count,created_at")
           .eq("user_id", auth.caller.profileId)
@@ -44,8 +44,8 @@ export const Route = createFileRoute("/api/public/v1/posts")({
         const parsed = createSchema.safeParse(await request.json().catch(() => null));
         if (!parsed.success)
           return json({ error: "invalid_body", issues: parsed.error.issues }, 400, cors);
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        const { data, error } = await (supabaseAdmin as any)
+        const { adminDb } = await import("@/integrations/supabase/client.server");
+        const { data, error } = await adminDb()
           .from("posts")
           .insert({ user_id: auth.caller.profileId, content: parsed.data.content })
           .select("id,content,created_at")

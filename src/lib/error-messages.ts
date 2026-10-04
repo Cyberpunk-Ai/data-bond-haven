@@ -34,6 +34,21 @@ const TRIGGER_TOKENS: Record<string, string> = {
 const TECHNICAL =
   /environment variable|[A-Z][A-Z0-9_]{2,}_(URL|KEY|SECRET|TOKEN|PEPPER)|api[_ -]?key|not configured|missing (required )?(secret|env|variable)|permission denied|row[- ]level security|violates .*constraint|duplicate key|_unique|unique constraint|is not unique|does not exist|foreign key|not-null|relation .*exists|\b(?:pg|pgrst)[ _-]|postgrest|syntax error|invalid json|unexpected token|cannot read|cannot destructure|is not a function|undefined is not|null is not|renegotiat|stack overflow|internal server error|\bhttp status \d{3}\b/i;
 
+/**
+ * The shortest honest rendering of a caught value's message. For `catch (err:
+ * unknown)` sites that used to read `err.message` off an `any` — same output,
+ * no `any`. Lives here (side-effect-free) rather than in `error-capture.ts`,
+ * whose module load patches `console.error` for the server error pipeline.
+ */
+export function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object" && "message" in err) {
+    return String((err as { message?: unknown }).message ?? "");
+  }
+  return "";
+}
+
 export function friendlyError(err: unknown, fallback: string = GENERIC): string {
   let msg = "";
   if (typeof err === "string") msg = err;

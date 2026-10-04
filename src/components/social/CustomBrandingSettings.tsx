@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Sparkles, Palette, Check, Lock, ShieldCheck, Eye } from "lucide-react";
+import { Palette, Check, Lock, Eye } from "lucide-react";
 import { useBranding, BRANDING_THEMES, type AuraThemeId } from "@/lib/branding-state";
+import { appConfig } from "@/lib/config";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
@@ -9,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 export function CustomBrandingSettings() {
-  const { currentPlan, isPlus, isPro } = usePlan();
+  const { isPlus, isPro } = usePlan();
   const { branding, activeTheme, updateBranding } = useBranding();
 
   const [taglineDraft, setTaglineDraft] = useState(branding.tagline);
@@ -99,7 +100,7 @@ export function CustomBrandingSettings() {
             </div>
             <p className="text-xs text-muted-foreground">@{currentUser.username}</p>
             <p className="text-xs font-medium text-foreground/90 italic pt-1">
-              "{branding.tagline || "Verified Creator on Spaces1"}"
+              {`"${branding.tagline || `Verified Creator on ${appConfig.brand.name}`}"`}
             </p>
           </div>
         </div>

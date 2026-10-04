@@ -24,6 +24,8 @@ import { WorkspaceBadge } from "@/components/social/WorkspaceBadge";
 import { WorkspaceMonetization } from "@/components/social/WorkspaceMonetization";
 import { EditWorkspaceModal, type EditableWorkspace } from "@/components/social/EditWorkspaceModal";
 import { getWorkspaceProfile, type WorkspaceProfile } from "@/lib/workspace.functions";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
+import { pagePreviewMeta, previewCardFor } from "@/lib/og-meta";
 import { useWorkspace } from "@/lib/workspace-state";
 import { getPosts, getWorkspaceReposts } from "@/lib/api-client";
 import { getWorkspaceEarnings } from "@/lib/payouts.functions";
@@ -62,15 +64,24 @@ export const Route = createFileRoute("/workspace/$id")({
     const ws = loaderData as WorkspaceProfile | null;
     if (!ws)
       return {
-        meta: [{ title: "Team unavailable — Spaces1" }, { name: "robots", content: "noindex" }],
+        meta: [{ title: brandedTitle("Team unavailable") }, ...NOINDEX_META],
       };
-    const title = `${ws.name} — Team on Spaces1`;
+    const title = `${ws.name} — Team on ${ORG_NAME}`;
+    const description = ws.bio || `${ws.name} on ${ORG_NAME}`;
     return {
       meta: [
         { title },
-        { name: "description", content: ws.bio || `${ws.name} on Spaces1` },
+        { name: "description", content: description },
         { property: "og:title", content: title },
-        { property: "og:description", content: ws.bio || `${ws.name} on Spaces1` },
+        { property: "og:description", content: description },
+        { name: "twitter:card", content: previewCardFor(ws.avatarUrl) },
+        // The team's logo, the same way a personal profile previews its avatar:
+        // an invite link should look like the team it opens.
+        ...pagePreviewMeta(ws.avatarUrl, `${ws.name} team logo`),
+        // Teams are addressed by an opaque uuid and reached by an invite, not by
+        // search. Preview meta stays (a shared team link should unfurl) but the
+        // page itself never belongs in an index or a sitemap.
+        ...NOINDEX_META,
       ],
     };
   },
@@ -142,7 +153,7 @@ function WorkspaceProfilePage() {
 
   useRealtime(
     (event) => {
-      if (event.type === "new_post" && event.post && (event.post as any).workspace_id === id) {
+      if (event.type === "new_post" && event.post && (event.post as Post).workspace_id === id) {
         setPosts((prev) =>
           prev.some((p) => p.id === event.post.id) ? prev : [event.post as Post, ...prev],
         );
@@ -170,10 +181,7 @@ function WorkspaceProfilePage() {
   }, [tab, id]);
 
   const media = useMemo(
-    () =>
-      posts.filter((p) =>
-        Boolean((p as any).image_gradient || (p as any).image_url || (p as any).media_url),
-      ),
+    () => posts.filter((p) => Boolean(p.image_gradient || p.image_url || p.media_url)),
     [posts],
   );
 
@@ -216,7 +224,7 @@ function WorkspaceProfilePage() {
   function handleShareProfile() {
     const url = `${window.location.origin}/workspace/${id}`;
     if (navigator.share) {
-      navigator.share({ title: `${ws!.name} on Spaces1`, text: ws!.bio, url }).catch(() => {});
+      navigator.share({ title: `${ws!.name} on ${ORG_NAME}`, text: ws!.bio, url }).catch(() => {});
     } else {
       navigator.clipboard
         .writeText(url)
@@ -402,8 +410,8 @@ function WorkspaceProfilePage() {
             </div>
             <p className="text-sm text-muted-foreground">
               A team of{" "}
-              <strong className="font-semibold text-foreground">{compact(memberCount)}</strong> on
-              Spaces1
+              <strong className="font-semibold text-foreground">{compact(memberCount)}</strong> on{" "}
+              {ORG_NAME}
               {isOwner && (
                 <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.65rem] font-extrabold text-amber-600 dark:text-amber-400">
                   <Check className="h-3 w-3" /> You own this team

@@ -62,8 +62,8 @@ export function bearerToken(request: Request): string | null {
 export async function resolveIdentity(token: string): Promise<Identity | null> {
   const authUserId = await verifySessionToken(token);
   if (!authUserId) return null;
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data } = await (supabaseAdmin as any)
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  const { data } = await adminDb()
     .from("profiles")
     .select("id")
     .eq("auth_user_id", authUserId)
@@ -90,8 +90,8 @@ export async function checkRateLimit(
   windowSeconds: number,
 ): Promise<boolean> {
   try {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data, error } = await (supabaseAdmin as any).rpc("check_rate_limit", {
+    const { adminDb } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await adminDb().rpc("check_rate_limit", {
       _bucket: bucket,
       _limit: limit,
       _window_seconds: windowSeconds,

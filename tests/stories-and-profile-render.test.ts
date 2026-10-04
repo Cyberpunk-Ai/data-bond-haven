@@ -226,7 +226,7 @@ describe("the viewer and the screens keep the promise those rules make", () => {
     // stacking context — otherwise the caption and the reply box hide behind it.
     expect(modal.match(/relative z-10/g)?.length).toBeGreaterThanOrEqual(3);
     expect(modal).toContain("holdClock");
-    expect(modal).toMatch(/if \(!isOpen[\s\S]{0,160}holdClock\) return;/);
+    expect(modal).toMatch(/if \(\s*!isOpen[\s\S]{0,300}?holdClock\s*\)\s*return;/);
   });
 
   it("shimmers a waiting name instead of printing a stand-in", () => {

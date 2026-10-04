@@ -105,8 +105,8 @@ export async function authenticateApiRequest(
   }
   let key: any;
   try {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const db = supabaseAdmin as any;
+    const { adminDb } = await import("@/integrations/supabase/client.server");
+    const db = adminDb();
     const { data } = await db
       .from("api_keys")
       .select("id,user_id,scopes,revoked,rate_limit_per_minute,call_count")
@@ -120,8 +120,8 @@ export async function authenticateApiRequest(
   }
   if (!key || key.revoked) return { error: json({ error: "invalid_api_key" }, 401, cors) };
 
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const db = supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  const db = adminDb();
   const limit = Number(key.rate_limit_per_minute) || 60;
   const path = new URL(request.url).pathname;
 
@@ -166,8 +166,8 @@ export async function authenticateApiRequest(
 
 /** Sends due webhook deliveries with HMAC signatures and exponential backoff. */
 export async function dispatchDueWebhooks(limit = 50) {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const db = supabaseAdmin as any;
+  const { adminDb } = await import("@/integrations/supabase/client.server");
+  const db = adminDb();
   const maxAttempts = Number(process.env["WEBHOOK_MAX_ATTEMPTS"] ?? 6);
   const { data: due, error: dueError } = await db
     .from("webhook_deliveries")

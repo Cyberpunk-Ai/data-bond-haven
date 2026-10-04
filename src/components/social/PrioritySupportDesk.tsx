@@ -1,19 +1,9 @@
 import { useState } from "react";
-import {
-  Headphones,
-  Crown,
-  ShieldCheck,
-  Clock,
-  Send,
-  Plus,
-  Lock,
-  MessageSquare,
-  Sparkles,
-} from "lucide-react";
+import { Headphones, Crown, ShieldCheck, Clock, Plus, Lock } from "lucide-react";
 import { useSupport, type SupportTicket } from "@/lib/support-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { Avatar } from "@/components/social/Avatar";
-import { cn } from "@/lib/utils";
+
 import { toast } from "sonner";
 
 export function PrioritySupportDesk() {
@@ -23,7 +13,7 @@ export function PrioritySupportDesk() {
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
   const [subject, setSubject] = useState("");
   const [category, setCategory] = useState<SupportTicket["category"]>("Creator Studio");
-  const [priority, setPriority] = useState<SupportTicket["priority"]>("Urgent (15 min SLA)");
+  const [priority] = useState<SupportTicket["priority"]>("Urgent (15 min SLA)");
   const [message, setMessage] = useState("");
 
   const handleCreateTicket = (e: React.FormEvent) => {

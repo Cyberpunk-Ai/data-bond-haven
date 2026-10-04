@@ -16,6 +16,8 @@
  *    the column shows the media rather than smearing every post in the list.
  */
 
+import { appConfig } from "@/lib/config";
+
 export interface SensitivityLike {
   is_sensitive?: boolean | null;
   /** Who decided it: 'community' or 'staff'. Only ever used for the wording. */
@@ -43,7 +45,7 @@ export function shouldBlurSensitive(opts: {
 export function sensitiveMediaNotice(source?: string | null): string {
   return source === "staff"
     ? "This media was marked sensitive by our moderators."
-    : "This media was flagged as sensitive by people on Spaces1.";
+    : `This media was flagged as sensitive by people on ${appConfig.brand.name}.`;
 }
 
 /** The two buttons the veil offers. Only one of them is the happy path. */

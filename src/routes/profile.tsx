@@ -1,4 +1,5 @@
 import { useCurrentUserId } from "@/hooks/useCurrentUserId";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState, useEffect, lazy, Suspense } from "react";
 import {
@@ -10,7 +11,6 @@ import {
   Grid3X3,
   Loader2,
   DollarSign,
-  Sparkles,
   MessageSquare,
   Plus,
   Check,
@@ -47,7 +47,7 @@ import { useRealtime } from "@/lib/realtime";
 import { useAuth } from "@/lib/auth-state";
 import { usePlan } from "@/lib/plan-state";
 import { useBranding } from "@/lib/branding-state";
-import { PLAN_DETAILS } from "@/lib/plans";
+
 import { useCreatorBalance } from "@/lib/monetization-state";
 import { cn, withTimeout, PAGE_REQUEST_TIMEOUT_MS } from "@/lib/utils";
 import { toast } from "sonner";
@@ -71,17 +71,22 @@ export const Route = createFileRoute("/profile")({
   }),
   head: () => ({
     meta: [
-      { title: "Profile — Spaces1" },
+      { title: brandedTitle("Profile") },
       {
         name: "description",
-        content:
-          "Creator profile on Spaces1: posts, replies, media and live audio rooms with follower stats and custom branding.",
+        content: `Creator profile on ${ORG_NAME}: posts, replies, media and live audio rooms with follower stats and custom branding.`,
       },
-      { property: "og:title", content: "Profile — Spaces1" },
+      { property: "og:title", content: brandedTitle("Profile") },
       {
         property: "og:description",
-        content: "Discover creator profiles, posts, and live audio rooms on Spaces1.",
+        content: `Discover creator profiles, posts, and live audio rooms on ${ORG_NAME}.`,
       },
+      // The app profile is a signed-in view keyed by `?user=`, so it is not the
+      // URL a search result should offer. `/u/<handle>` is — it server-renders the
+      // real title/description and is what the sitemap advertises. No `canonical`
+      // is declared here on purpose: pointing a `noindex` page at a different URL
+      // is a contradictory signal, and the two tags are meant to be used apart.
+      ...NOINDEX_META,
     ],
   }),
   component: ProfilePage,
@@ -121,7 +126,7 @@ function ProfilePage() {
   const search = Route.useSearch();
   const targetId = search.id || search.user;
 
-  const { currentPlan, isPlus, isPro } = usePlan();
+  const { isPlus } = usePlan();
   const { user: authUser, loading: authLoading } = useAuth();
   const { branding, activeTheme } = useBranding();
   const { pendingBalance, loading: balanceLoading } = useCreatorBalance();
@@ -419,7 +424,7 @@ function ProfilePage() {
     if (navigator.share) {
       navigator
         .share({
-          title: `${userProfile.display_name} on Spaces1`,
+          title: `${userProfile.display_name} on ${ORG_NAME}`,
           text: userProfile.bio,
           url: profileUrl,
         })
@@ -715,7 +720,7 @@ function ProfilePage() {
                 <strong className="font-semibold text-foreground">
                   {compact(userProfile.followers)}
                 </strong>{" "}
-                creators on Spaces1
+                creators on {ORG_NAME}
               </p>
             </Panel>
           </button>

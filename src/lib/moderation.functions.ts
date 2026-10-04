@@ -7,6 +7,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { appConfig } from "@/lib/config";
 
 /** Server-only feature-flag helpers, imported lazily so the service-role
  *  client behind them never reaches a bundle that ships to a browser. */
@@ -100,11 +101,10 @@ export const moderateUser = createServerFn({ method: "POST" })
     // server-side so they can't keep acting on a stale token.
     if (data.status !== undefined) {
       const messageByStatus: Record<string, string> = {
-        banned:
-          "Your account has been banned for violating the Spaces1 Community Guidelines. You can no longer post, comment or message.",
+        banned: `Your account has been banned for violating the ${appConfig.brand.name} Community Guidelines. You can no longer post, comment or message.`,
         suspended:
           "Your account has been temporarily suspended. Some actions are restricted until it is restored.",
-        active: "Your account has been restored to good standing. Welcome back to Spaces1.",
+        active: `Your account has been restored to good standing. Welcome back to ${appConfig.brand.name}.`,
         flagged:
           "Your account has been flagged for review. Please double-check the Community Guidelines.",
       };
@@ -170,8 +170,8 @@ export const moderateUser = createServerFn({ method: "POST" })
         type: "system",
         body:
           data.plan === "free"
-            ? "Your plan was changed to Free by the Spaces1 team."
-            : `Your account was upgraded to ${data.plan === "pro" ? "Pro" : "Plus"} by the Spaces1 team.`,
+            ? `Your plan was changed to Free by the ${appConfig.brand.name} team.`
+            : `Your account was upgraded to ${data.plan === "pro" ? "Pro" : "Plus"} by the ${appConfig.brand.name} team.`,
       });
       if (planNoticeError) console.error("plan-change notice not stored:", planNoticeError.message);
     }

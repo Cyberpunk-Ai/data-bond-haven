@@ -31,6 +31,13 @@ import {
 import { Avatar as UserAvatar } from "@/components/social/Avatar";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/lib/auth-state";
+import {
+  canonicalLink,
+  ogUrlMeta,
+  organizationJsonLd,
+  websiteJsonLd,
+  jsonLdBlock,
+} from "@/lib/seo";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
@@ -48,7 +55,16 @@ export const Route = createFileRoute("/")({
         content:
           "Share moments, join live audio rooms, and grow your audience on Spaces1 — the social home for creators and communities.",
       },
+      // Self-referencing canonical: the marketing root is a real URL with no
+      // params to collapse, so declaring it stops `?utm_…`/`?ref=…` variants of
+      // the homepage splitting their link equity across duplicates.
+      ogUrlMeta("/"),
+      // Sitelinks search box + the site entity. `script:ld+json` is the head
+      // entry the router renders as a real `<script>` tag inside `<head>`, which
+      // is where a crawler that does not run JavaScript will find it.
+      jsonLdBlock(websiteJsonLd(), organizationJsonLd()),
     ],
+    links: [canonicalLink("/")],
   }),
   component: Index,
 });

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Sparkles, X, Loader2, Wand2, Copy, Check, Lock, Zap } from "lucide-react";
 import { generateAIDraft } from "@/lib/api-client";
-import { friendlyError } from "@/lib/error-messages";
+import { errorMessage, friendlyError } from "@/lib/error-messages";
 import { usePlatform } from "@/lib/platform-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { cn } from "@/lib/utils";
@@ -99,8 +99,8 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
       const data = await generateAIDraft(promptToUse, currentDraft);
       setResult(data);
       recordAiDraftUsage();
-    } catch (err: any) {
-      const raw = String(err?.message ?? "");
+    } catch (err: unknown) {
+      const raw = errorMessage(err);
       // Plan-limit responses are written for users; everything else gets sanitized
       // so raw provider/technical text never renders in this panel.
       if (/upgrade|limit/i.test(raw)) {

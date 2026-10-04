@@ -19,6 +19,7 @@ import {
 import { useWorkspace, type Workspace, type WorkspaceRole } from "@/lib/workspace-state";
 import { usePlan, openUpgradeModal } from "@/lib/plan-state";
 import { Avatar } from "@/components/social/Avatar";
+import { LogoEmojiField } from "@/components/social/LogoEmojiField";
 import { uploadMedia } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -35,8 +36,6 @@ export function TeamWorkspaceManager() {
     updateMemberRole,
     canManage,
     updateWorkspaceProfile,
-    pendingInvites,
-    respondToInvite,
     createWorkspace,
   } = useWorkspace();
 
@@ -590,18 +589,13 @@ function WorkspaceCreator({
             )}
           </span>
         </label>
-        <div className="grid flex-1 gap-3 sm:grid-cols-[5rem_1fr]">
-          <div>
-            <label className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
-              Logo emoji
-            </label>
-            <input
-              value={emoji}
-              onChange={(e) => setEmoji(e.target.value)}
-              maxLength={2}
-              className="mt-1 h-10 w-full rounded-xl border border-border bg-muted/40 text-center text-xl outline-none focus:border-amber-500"
-            />
-          </div>
+        <div className="grid flex-1 gap-3 sm:grid-cols-[7rem_1fr]">
+          <LogoEmojiField
+            label="Logo emoji"
+            value={emoji}
+            onChange={setEmoji}
+            inputClassName="h-10 focus:border-amber-500"
+          />
           <div>
             <label className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
               Team name
@@ -743,18 +737,13 @@ function WorkspaceProfileEditor({
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-[4rem_1fr]">
-            <div>
-              <label className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
-                Logo
-              </label>
-              <input
-                value={logoEmoji}
-                onChange={(e) => setLogoEmoji(e.target.value)}
-                maxLength={2}
-                className="mt-1 h-10 w-full rounded-xl border border-border bg-muted/40 text-center text-xl outline-none focus:border-amber-500"
-              />
-            </div>
+          <div className="grid gap-3 sm:grid-cols-[7rem_1fr]">
+            <LogoEmojiField
+              label="Logo"
+              value={logoEmoji}
+              onChange={setLogoEmoji}
+              inputClassName="h-10 focus:border-amber-500"
+            />
             <div>
               <label className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
                 Display name

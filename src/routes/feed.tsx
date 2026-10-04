@@ -1,8 +1,9 @@
 import { useCurrentUserId } from "@/hooks/useCurrentUserId";
+import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import { useMounted } from "@/hooks/use-mounted";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
-import { Sparkles, RefreshCw, Loader2, Plus, Sparkle, ArrowUp, Compass } from "lucide-react";
+import { Sparkles, RefreshCw, Loader2, Plus, Sparkle, ArrowUp } from "lucide-react";
 import { AppShell, Panel } from "@/components/social/AppShell";
 import { Composer } from "@/components/social/Composer";
 import { PostCard } from "@/components/social/PostCard";
@@ -10,7 +11,7 @@ import { DefaultRail } from "@/components/social/RightRail";
 import { Avatar } from "@/components/social/Avatar";
 import { FeedSkeleton } from "@/components/social/PostSkeleton";
 import { getCachedFeedData, triggerFeedPreload } from "@/lib/feed-cache";
-import type { Post, Profile, Story } from "@/lib/types";
+import type { Post, Story } from "@/lib/types";
 import { currentUser, getProfile, isProfilePending, useProfiles } from "@/lib/profile-service";
 import { getPostsPage, getStories } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
@@ -40,17 +41,19 @@ export const Route = createFileRoute("/feed")({
   }),
   head: () => ({
     meta: [
-      { title: "Your Feed — Spaces1" },
+      { title: brandedTitle("Your Feed") },
       {
         name: "description",
-        content:
-          "Your Spaces1 home: share a moment, follow live Spaces, and see posts from the creators and communities you care about.",
+        content: `Your ${ORG_NAME} home: share a moment, follow live Spaces, and see posts from the creators and communities you care about.`,
       },
-      { property: "og:title", content: "Your Feed — Spaces1" },
+      { property: "og:title", content: brandedTitle("Your Feed") },
       {
         property: "og:description",
-        content: "Share moments, join live Spaces, and discover creators on Spaces1.",
+        content: `Share moments, join live Spaces, and discover creators on ${ORG_NAME}.`,
       },
+      // Personalised, signed-in timeline: it renders an empty shell to a crawler
+      // and somebody else's stream to anyone who bookmarks the URL.
+      ...NOINDEX_META,
     ],
   }),
   component: FeedPage,
@@ -603,7 +606,7 @@ function FeedPage() {
   return (
     <AppShell title="Home" right={<DefaultRail />}>
       <div className="mx-auto max-w-2xl space-y-5 relative">
-        <h1 className="sr-only">Your Spaces1 feed</h1>
+        <h1 className="sr-only">Your {ORG_NAME} feed</h1>
 
         {/* Tab switcher & Tuning control - Smart Scroll Behavior */}
         <div

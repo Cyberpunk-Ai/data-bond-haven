@@ -1,17 +1,5 @@
 import { useState, useEffect } from "react";
-import {
-  FileText,
-  Search,
-  Filter,
-  Download,
-  Shield,
-  Clock,
-  RefreshCw,
-  AlertTriangle,
-  CheckCircle2,
-  AlertCircle,
-  Terminal,
-} from "lucide-react";
+import { Search, Download, RefreshCw } from "lucide-react";
 import { getAdminAuditLogs } from "@/lib/api-client";
 import { useRealtime } from "@/lib/realtime";
 import type { AuditLog, UserRole } from "@/lib/types";
@@ -21,7 +9,7 @@ interface AdminAuditLogsTabProps {
   activeRole: UserRole;
 }
 
-export function AdminAuditLogsTab({ activeRole }: AdminAuditLogsTabProps) {
+export function AdminAuditLogsTab(_props: AdminAuditLogsTabProps) {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");

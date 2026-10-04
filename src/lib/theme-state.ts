@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
+import { toCssHex } from "@/lib/oklch";
 import {
   getPreferences,
   getPreferencesStatus,
@@ -181,6 +182,39 @@ export function applyThemeToDOM(settings: ThemeSettings) {
   } else {
     root.style.fontSize = "";
   }
+
+  // 5. The browser chrome: address bar, task switcher, PWA title bar.
+  syncThemeColor(settings.accent);
+}
+
+/**
+ * The `theme-color` for one accent, as a plain hex.
+ *
+ * Always the accent's *base* brand, never the `brandDark` variant: those lighter
+ * values exist so small brand-coloured text clears AA on a near-black canvas,
+ * and as a large fill they invert the browser's own label choice. The hex is
+ * derived from the oklch token rather than copied, so retinting the palette
+ * cannot leave the toolbar wearing the old brand.
+ */
+export function themeColorFor(accent: ThemeAccent = "violet"): string {
+  const palette = ACCENT_PALETTES[accent] ?? ACCENT_PALETTES.violet;
+  return toCssHex(palette.brand) ?? DEFAULT_THEME_COLOR;
+}
+
+/** What the server-rendered head declares, before any script has run. */
+export const DEFAULT_THEME_COLOR = "#7f22fe";
+
+function syncThemeColor(accent: ThemeAccent) {
+  if (typeof document === "undefined") return;
+  const hex = themeColorFor(accent);
+  // The tag is rendered by the root head; this only moves it off the default.
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.name = "theme-color";
+    document.head.appendChild(meta);
+  }
+  if (meta.getAttribute("content") !== hex) meta.setAttribute("content", hex);
 }
 
 export function useTheme() {

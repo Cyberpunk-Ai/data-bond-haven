@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   Shield,
   ShieldAlert,
-  Sparkles,
   UserCheck,
   Eye,
   Cpu,
@@ -10,7 +9,7 @@ import {
   Activity,
   RefreshCw,
 } from "lucide-react";
-import { Avatar } from "@/components/social/Avatar";
+
 import type { Profile, UserRole, AdminOverviewData } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -78,7 +77,6 @@ export const ROLE_DEFINITIONS: Record<
 };
 
 export function AdminHeader({
-  currentProfile,
   activeRole,
   onRoleChange,
   systemHealth,

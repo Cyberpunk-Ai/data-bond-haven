@@ -223,16 +223,18 @@ export const Route = createFileRoute("/api/uploads/")({
         // migrated yet — the bytes are already stored.
         try {
           const sha256 = createHash("sha256").update(buffer).digest("hex");
-          const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-          const { error: mediaErr } = await (supabaseAdmin as any).from("media_objects").insert({
-            path: key,
-            owner_profile_id: profileId,
-            folder,
-            visibility: visibilityForFolder(folder),
-            content_type: contentType,
-            bytes: buffer.byteLength,
-            sha256,
-          });
+          const { adminDb } = await import("@/integrations/supabase/client.server");
+          const { error: mediaErr } = await adminDb()
+            .from("media_objects")
+            .insert({
+              path: key,
+              owner_profile_id: profileId,
+              folder,
+              visibility: visibilityForFolder(folder),
+              content_type: contentType,
+              bytes: buffer.byteLength,
+              sha256,
+            });
           if (mediaErr) console.error("media_objects insert failed:", mediaErr);
         } catch (err) {
           console.error("media_objects record threw:", err);

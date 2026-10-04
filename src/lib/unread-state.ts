@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { getNotifications, getConversations } from "@/lib/api-client";
 import { currentUserId } from "@/lib/profile-service";
 import { useRealtime } from "@/lib/realtime";

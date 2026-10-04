@@ -500,7 +500,7 @@ export function CallModal({
       )}
     >
       <div
-        className="glass-panel relative flex flex-col justify-between h-[85dvh] max-h-[680px] w-full max-w-md overflow-hidden rounded-3xl p-5 shadow-2xl bg-gradient-to-b from-slate-900 via-slate-950 to-black text-white border border-white/10"
+        className="glass-panel relative flex flex-col justify-between h-[85dvh] max-h-[680px] w-full max-w-md overflow-hidden rounded-3xl p-4 sm:p-5 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl bg-gradient-to-b from-slate-900 via-slate-950 to-black text-white border border-white/10"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Reactions float over the call for both people */}
@@ -660,7 +660,7 @@ export function CallModal({
               autoPlay
               playsInline
               muted
-              className="h-64 w-full bg-black object-contain"
+              className="h-56 sm:h-64 w-full bg-black object-contain"
             />
             {/* On a video call whose lens is covered, the avatar sits *inside* the
                 frame instead of replacing it. The picture is already decoding
@@ -945,8 +945,9 @@ export function CallModal({
           ))}
         </div>
 
-        {/* Call Controls */}
-        <div className="z-20 flex items-center justify-center gap-2 border-t border-white/10 pt-3">
+        {/* Call Controls — wraps on narrow phones so seven buttons never
+            compress into an untappable row. */}
+        <div className="z-20 flex flex-wrap items-center justify-center gap-2 border-t border-white/10 pt-3">
           <ControlButton
             label={session.micOn ? "Mute microphone" : "Unmute microphone"}
             hint={session.micOn ? "Mute" : "Unmute"}

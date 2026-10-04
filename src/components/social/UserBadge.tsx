@@ -1,4 +1,3 @@
-import React from "react";
 import { type PlanTier } from "@/lib/plans";
 import { usePlan } from "@/lib/plan-state";
 import { cn } from "@/lib/utils";

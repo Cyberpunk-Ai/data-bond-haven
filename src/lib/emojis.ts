@@ -127,6 +127,7 @@ const RAW: Array<{ id: string; label: string; icon: string; items: RawEmoji[] }>
       ["💀", "skull", "dead die"],
       ["💩", "poop", "crap hate"],
       ["🤡", "clown", "joke silly"],
+      ["🤖", "robot", "ai bot machine"],
       ["👻", "ghost", "boo spooky"],
     ],
   },
@@ -239,6 +240,7 @@ const RAW: Array<{ id: string; label: string; icon: string; items: RawEmoji[] }>
       ["🌼", "blossom", "flower"],
       ["🍀", "four leaf clover", "luck"],
       ["🍃", "leaf wind", "fall nature"],
+      ["🌿", "herb", "leaf plant green"],
       ["🌍", "earth africa", "world globe"],
       ["🌙", "crescent moon", "night"],
       ["⭐", "star", "favorite"],
@@ -609,4 +611,107 @@ export function parseRecentEmojis(stored: string | null, cap = MAX_RECENT_EMOJI)
   } catch {
     return [];
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 caret-aware                               */
+/* -------------------------------------------------------------------------- */
+
+/** The part of a text field a picker has to know about to insert into it. */
+export interface CaretInsertOptions {
+  /** What is in the field right now. */
+  text: string;
+  /** The glyph to place. */
+  insert: string;
+  /**
+   * `selectionStart` as the browser reported it, or `null` when the field has
+   * never had focus — which means "put it at the end", the one case where
+   * appending really is what a person expects.
+   */
+  start?: number | null;
+  /** `selectionEnd`: a live selection is replaced, exactly as typing would. */
+  end?: number | null;
+  /**
+   * Ceiling on the result, counted in code points — the same unit Postgres
+   * `char_length()` and `messageLength()` use, so a picker cannot smuggle a
+   * draft past a cap the keyboard is held to.
+   */
+  maxLength?: number;
+}
+
+/** The new text and where the caret belongs afterwards. */
+export interface CaretInsertResult {
+  text: string;
+  caret: number;
+}
+
+/**
+ * Put a picked emoji where the caret is, not at the end of the line.
+ *
+ * Appending is the thing people notice: type "see you ", pick 🙏, then carry on
+ * with "at 8" and the glyph sits after "8". Every surface that lets you choose
+ * an emoji into a field goes through here so the behaviour is decided once — the
+ * message composer had this, the post composer and story replies did not.
+ *
+ * Returns `null` when nothing should happen: an empty glyph, or a result past
+ * `maxLength`. Refusing is deliberate — half an emoji is worse than none, and a
+ * field that is already over its limit shows its own counter.
+ */
+export function insertAtCaret(options: CaretInsertOptions): CaretInsertResult | null {
+  const text = String(options.text ?? "");
+  const insert = String(options.insert ?? "");
+  if (!insert) return null;
+
+  const limit = text.length;
+  // A stale ref or a hand-built selection can report anything, including an
+  // index past the text it describes, so both edges are clamped before use.
+  const rawStart = options.start == null ? limit : Math.trunc(Number(options.start));
+  const rawEnd = options.end == null ? rawStart : Math.trunc(Number(options.end));
+  let start = clampIndex(Number.isFinite(rawStart) ? rawStart : limit, limit);
+  let end = Math.max(start, clampIndex(Number.isFinite(rawEnd) ? rawEnd : start, limit));
+
+  // `selectionStart` counts UTF-16 units, and an emoji is usually two of them.
+  // Landing between a high surrogate and its low half would splice the pair and
+  // leave a replacement glyph in the middle of somebody's sentence.
+  if (isHighSurrogate(text.charCodeAt(start - 1)) && isLowSurrogate(text.charCodeAt(start))) {
+    start += 1;
+    // After the move, not before: a selection whose far edge sat at the same
+    // broken index would otherwise stay behind its near edge, and the slice
+    // would copy the low half of the glyph out twice.
+    end = Math.max(start, end);
+  }
+
+  const next = `${text.slice(0, start)}${insert}${text.slice(end)}`;
+  if (options.maxLength != null && Array.from(next).length > options.maxLength) return null;
+  return { text: next, caret: start + insert.length };
+}
+
+/**
+ * Put the caret back after a programmatic insert.
+ *
+ * Structural rather than an `HTMLElement`, because a React ref to an input and a
+ * fake in a test both satisfy it — and because setting `selectionRange` on a
+ * field that is not focused does nothing at all, which is the half of this bug
+ * that shows up as "the emoji went in but I lost my place".
+ */
+export function restoreCaret(
+  field: { focus: () => void; setSelectionRange: (start: number, end: number) => void } | null,
+  caret: number,
+): void {
+  if (!field) return;
+  field.focus();
+  field.setSelectionRange(caret, caret);
+}
+
+function clampIndex(value: number, limit: number): number {
+  if (!Number.isFinite(value)) return limit;
+  return Math.min(Math.max(value, 0), limit);
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
 }

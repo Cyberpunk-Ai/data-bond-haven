@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { canonicalLink, ogUrlMeta, brandedTitle } from "@/lib/seo";
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Radio,
@@ -10,7 +11,6 @@ import {
   Search,
   X,
   Loader2,
-  Sparkles,
   Check,
   Trash2,
 } from "lucide-react";
@@ -72,18 +72,22 @@ export const Route = createFileRoute("/spaces")({
   }),
   head: () => ({
     meta: [
-      { title: "Live Audio Rooms — Spaces1" },
+      { title: brandedTitle("Live Audio Rooms") },
       {
         name: "description",
         content:
           "Join live audio Spaces: design clinics, photography workshops, and creator conversations happening right now.",
       },
-      { property: "og:title", content: "Live Audio Rooms — Spaces1" },
+      { property: "og:title", content: brandedTitle("Live Audio Rooms") },
       {
         property: "og:description",
         content: "Live audio rooms for creators: join, listen, or host your own Space.",
       },
+      // The room directory is one indexable page; a deep-linked room id in the
+      // query string is the same directory, so it rolls up here.
+      ogUrlMeta("/spaces"),
     ],
+    links: [canonicalLink("/spaces")],
   }),
   component: SpacesPage,
 });
@@ -109,7 +113,6 @@ function SpaceCard({
   onRemind: (spaceId: string) => void;
   isReminded: boolean;
   onDeleteRecording: (space: Space) => void;
-  [key: string]: any;
 }) {
   const { profile: hostProfile } = useProfile(space.host_id);
   // Resolve the host's real name/avatar instead of showing the raw UUID that an
@@ -273,7 +276,7 @@ const tabs = ["Live now", "Upcoming", "Recorded"] as const;
 
 function SpacesPage() {
   const search = Route.useSearch();
-  const { currentPlan, planDetails, isPro, isUltra } = usePlan();
+  const { currentPlan, planDetails } = usePlan();
   // The console can switch the whole live-audio subsystem off; the database
   // refuses the writes, and these pages refuse to offer them.
   const { spacesEnabled } = usePlatform();
@@ -357,7 +360,7 @@ function SpacesPage() {
 
   // Keep the list in sync as rooms open, fill up and close
   useRealtime(
-    (event: any) => {
+    (event) => {
       if (event.type === "space:created" && event.space?.id) {
         setAllSpaces((prev) =>
           prev.some((s) => s.id === event.space.id) ? prev : [event.space, ...prev],
@@ -468,7 +471,7 @@ function SpacesPage() {
       setDeleteTarget(null);
       // The bytes come back to the host's budget the moment the replay goes.
       void refreshStorage();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't delete the recording. Please try again."));
     } finally {
       setDeletingRecording(false);
@@ -518,7 +521,7 @@ function SpacesPage() {
         toast.success("Space created! You are now live.");
         setActiveSpace(newSpace);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't start the Space. Please try again."));
     } finally {
       setCreating(false);

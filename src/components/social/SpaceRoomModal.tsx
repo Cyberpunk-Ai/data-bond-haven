@@ -8,14 +8,12 @@ import {
   X,
   Sparkles,
   Send,
-  Users,
   MessageSquare,
   Headphones,
   Volume2,
   VolumeX,
   Loader2,
   Shield,
-  Heart,
   DollarSign,
   Crown,
   UserPlus,
@@ -24,9 +22,7 @@ import {
   Disc3,
   Play,
   Pause,
-  Pin,
   AlertTriangle,
-  ShieldOff,
   LogOut,
   Circle,
   Trash2,
@@ -34,7 +30,7 @@ import {
 } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { TipModal } from "@/components/social/TipModal";
-import type { Space, Profile } from "@/lib/types";
+import type { Space } from "@/lib/types";
 import {
   currentUser,
   getProfile,
@@ -205,9 +201,6 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
   const [showEndConfirmation, setShowEndConfirmation] = useState(false);
   const [showDeleteRecording, setShowDeleteRecording] = useState(false);
   const [deletingRecording, setDeletingRecording] = useState(false);
-  const [pinnedTopic, setPinnedTopic] = useState<string>(
-    "Welcome to the Space! Feel free to ask questions in chat or raise your hand.",
-  );
 
   // Tipping state
   const [tipTargetUser, setTipTargetUser] = useState<{
@@ -706,7 +699,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
       toast.success("Recording deleted");
       setShowDeleteRecording(false);
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't delete the recording. Please try again."));
     } finally {
       setDeletingRecording(false);
@@ -916,7 +909,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
           toast.info("Recording stopped");
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't update the recording — try again."));
     } finally {
       setRecordingBusy(false);
@@ -932,7 +925,7 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
         messages.map((m) => m.body),
       );
       setSummary(res);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast.error(friendlyError(err, "Couldn't summarize this room right now."));
     } finally {
       setSummarizing(false);
