@@ -1,5 +1,5 @@
 import { LocationField } from "@/components/social/LocationField";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type CSSProperties } from "react";
 import {
   Image as ImageIcon,
   Smile,
@@ -104,6 +104,38 @@ export function Composer({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // The emoji toolbar row scrolls horizontally on narrow screens
+  // (`overflow-x-auto`), and a scroll box clips an absolutely-positioned panel
+  // — so the picker would open into nothing. Anchor it with `position: fixed`
+  // measured from the button instead, and re-measure as the page moves.
+  const emojiAnchorRef = useRef<HTMLDivElement>(null);
+  const [emojiStyle, setEmojiStyle] = useState<CSSProperties | null>(null);
+
+  useEffect(() => {
+    if (!showEmojiPicker) {
+      setEmojiStyle(null);
+      return;
+    }
+    const place = () => {
+      const el = emojiAnchorRef.current;
+      if (!el || typeof window === "undefined") return;
+      const rect = el.getBoundingClientRect();
+      const margin = 8;
+      const width = Math.min(304, window.innerWidth - margin * 2);
+      const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin));
+      const bottom = Math.max(margin, window.innerHeight - rect.top + margin);
+      const maxHeight = Math.max(160, rect.top - margin * 2);
+      setEmojiStyle({ position: "fixed", left, bottom, width, maxHeight, overflowY: "auto" });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [showEmojiPicker]);
 
   // Auto-focus and scroll to composer on trigger or URL param
   useEffect(() => {
@@ -720,7 +752,7 @@ export function Composer({
                     search, categories and a recents row — instead of the twelve
                     glyphs we used to decide were enough, and it floats above the
                     button rather than pushing the whole composer open. */}
-                <div className="relative flex shrink-0 items-center">
+                <div className="relative flex shrink-0 items-center" ref={emojiAnchorRef}>
                   <button
                     type="button"
                     title="Add emoji"
@@ -744,6 +776,7 @@ export function Composer({
                       multiple
                       label="Emoji"
                       className="bottom-full left-0 mb-2"
+                      style={emojiStyle ?? undefined}
                       onPick={insertDraftEmoji}
                       onClose={() => setShowEmojiPicker(false)}
                     />

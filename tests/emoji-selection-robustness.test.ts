@@ -36,7 +36,9 @@ const src = (rel: string) => read(`../src/${rel}`);
 const FIELDS = {
   composer: "components/social/Composer.tsx",
   storyReply: "components/social/StoryModal.tsx",
-  messages: "routes/messages.tsx",
+  // The DM composer was decomposed out of the messages route into its own
+  // component, so the emoji/cap contract now lives there.
+  messages: "components/messages/Composer.tsx",
 };
 
 describe("insertAtCaret places the glyph where the caret is", () => {

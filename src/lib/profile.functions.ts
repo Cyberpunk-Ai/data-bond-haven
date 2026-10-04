@@ -103,12 +103,12 @@ export const getProfileTabPosts = createServerFn({ method: "GET" })
         .eq("hidden", false)
         .order("created_at", { ascending: false })
         .limit(limit);
-      // Media is decided by the database, not by filtering the page afterwards:
-      // a plain photo post stores `image_url`, which the old in-memory filter
-      // ignored, and dropping rows after `limit` could hand back an empty page
-      // with no cursor even when the profile did have media older than it.
+      // Media is decided by the database, not by filtering the page afterwards.
+      // Uploaded attachments live only in `media_url`; the `posts` table has no
+      // `image_url` column, so referencing one made PostgREST reject the filter
+      // and the Media tab came back empty.
       if (tab === "media") {
-        q = q.or("media_url.not.is.null,image_url.not.is.null");
+        q = q.not("media_url", "is", null);
       }
       if (cursor) q = q.lt("created_at", cursor);
       const { data: rows, error } = await q;

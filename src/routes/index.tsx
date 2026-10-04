@@ -527,8 +527,8 @@ function Hero() {
             <span className="gradient-text">comes to life</span>
           </h1>
           <p className="max-w-lg text-xl text-muted-foreground">
-            Connect with friends, share moments, and discover a community that celebrates
-            creativity. Built for the way you actually live.
+            Connect with people, share ideas, and discover what interests you. Built for the way you
+            connect, create, and explore.
           </p>
           <div className="flex flex-wrap gap-4">
             <Link
@@ -640,7 +640,7 @@ function Features() {
               </div>
               <h3 className="mb-4 text-2xl font-bold">Communities</h3>
               <p className="text-muted-foreground">
-                Find your tribe. Join groups around your hobbies, interests, and passions.
+                Find your space. Join groups around your interests, ideas, and conversations.
               </p>
             </div>
           </Reveal>
@@ -679,8 +679,8 @@ function Features() {
             {
               icon: Globe,
               color: "text-blue-600 dark:text-blue-400",
-              title: "Global reach",
-              body: "Auto-translate and cross-cultural discovery connect you with creators anywhere.",
+              title: "Global",
+              body: "Discover new perspectives. Connect with people and ideas from anywhere in the world.",
             },
           ].map((f, i) => (
             <Reveal key={f.title} delay={i * 100}>

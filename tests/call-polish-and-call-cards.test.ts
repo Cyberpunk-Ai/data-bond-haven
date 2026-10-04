@@ -403,13 +403,14 @@ describe("the session earns the polish it claims", () => {
 
 describe("messages shows the call without a second copy of history", () => {
   const thread = read("../src/routes/messages.tsx");
+  const msgThread = read("../src/components/messages/MessageThread.tsx");
   const api = read("../src/lib/api-client.ts");
   const feed = read("../src/lib/realtime.ts");
 
   it("renders the merged timeline through the card component", () => {
-    expect(thread).toContain("buildThreadTimeline(thread, callCards)");
-    expect(thread).toContain("<CallCardChip");
-    expect(thread).toMatch(/if \(entry\.type === "call"\)/);
+    expect(thread).toContain("buildThreadTimeline(thread.messages, callCards)");
+    expect(msgThread).toContain("<CallCardChip");
+    expect(msgThread).toMatch(/if \(entry\.type === "call"\)/);
   });
 
   it("reads calls straight off the calls table, under its own RLS", () => {

@@ -12,13 +12,18 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AppleTouchIconDotpngRouteImport } from './routes/apple-touch-icon[.]png'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as BookmarksRouteImport } from './routes/bookmarks'
 import { Route as ContactRouteImport } from './routes/contact'
 import { Route as ExploreRouteImport } from './routes/explore'
+import { Route as FaviconDoticoRouteImport } from './routes/favicon[.]ico'
 import { Route as FeedRouteImport } from './routes/feed'
 import { Route as GuidelinesRouteImport } from './routes/guidelines'
 import { Route as HelpRouteImport } from './routes/help'
+import { Route as Icon192DotpngRouteImport } from './routes/icon-192[.]png'
+import { Route as Icon512DotpngRouteImport } from './routes/icon-512[.]png'
+import { Route as ManifestDotwebmanifestRouteImport } from './routes/manifest[.]webmanifest'
 import { Route as MessagesRouteImport } from './routes/messages'
 import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as PricingRouteImport } from './routes/pricing'
@@ -61,6 +66,11 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppleTouchIconDotpngRoute = AppleTouchIconDotpngRouteImport.update({
+  id: '/apple-touch-icon.png',
+  path: '/apple-touch-icon.png',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
   path: '/auth',
@@ -81,6 +91,11 @@ const ExploreRoute = ExploreRouteImport.update({
   path: '/explore',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FaviconDoticoRoute = FaviconDoticoRouteImport.update({
+  id: '/favicon.ico',
+  path: '/favicon.ico',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const FeedRoute = FeedRouteImport.update({
   id: '/feed',
   path: '/feed',
@@ -94,6 +109,21 @@ const GuidelinesRoute = GuidelinesRouteImport.update({
 const HelpRoute = HelpRouteImport.update({
   id: '/help',
   path: '/help',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Icon192DotpngRoute = Icon192DotpngRouteImport.update({
+  id: '/icon-192.png',
+  path: '/icon-192.png',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Icon512DotpngRoute = Icon512DotpngRouteImport.update({
+  id: '/icon-512.png',
+  path: '/icon-512.png',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ManifestDotwebmanifestRoute = ManifestDotwebmanifestRouteImport.update({
+  id: '/manifest.webmanifest',
+  path: '/manifest.webmanifest',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MessagesRoute = MessagesRouteImport.update({
@@ -233,13 +263,18 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/admin': typeof AdminRoute
+  '/apple-touch-icon.png': typeof AppleTouchIconDotpngRoute
   '/auth': typeof AuthRoute
   '/bookmarks': typeof BookmarksRoute
   '/contact': typeof ContactRoute
   '/explore': typeof ExploreRoute
+  '/favicon.ico': typeof FaviconDoticoRoute
   '/feed': typeof FeedRoute
   '/guidelines': typeof GuidelinesRoute
   '/help': typeof HelpRoute
+  '/icon-192.png': typeof Icon192DotpngRoute
+  '/icon-512.png': typeof Icon512DotpngRoute
+  '/manifest.webmanifest': typeof ManifestDotwebmanifestRoute
   '/messages': typeof MessagesRoute
   '/notifications': typeof NotificationsRoute
   '/pricing': typeof PricingRoute
@@ -271,13 +306,18 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/admin': typeof AdminRoute
+  '/apple-touch-icon.png': typeof AppleTouchIconDotpngRoute
   '/auth': typeof AuthRoute
   '/bookmarks': typeof BookmarksRoute
   '/contact': typeof ContactRoute
   '/explore': typeof ExploreRoute
+  '/favicon.ico': typeof FaviconDoticoRoute
   '/feed': typeof FeedRoute
   '/guidelines': typeof GuidelinesRoute
   '/help': typeof HelpRoute
+  '/icon-192.png': typeof Icon192DotpngRoute
+  '/icon-512.png': typeof Icon512DotpngRoute
+  '/manifest.webmanifest': typeof ManifestDotwebmanifestRoute
   '/messages': typeof MessagesRoute
   '/notifications': typeof NotificationsRoute
   '/pricing': typeof PricingRoute
@@ -310,13 +350,18 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/admin': typeof AdminRoute
+  '/apple-touch-icon.png': typeof AppleTouchIconDotpngRoute
   '/auth': typeof AuthRoute
   '/bookmarks': typeof BookmarksRoute
   '/contact': typeof ContactRoute
   '/explore': typeof ExploreRoute
+  '/favicon.ico': typeof FaviconDoticoRoute
   '/feed': typeof FeedRoute
   '/guidelines': typeof GuidelinesRoute
   '/help': typeof HelpRoute
+  '/icon-192.png': typeof Icon192DotpngRoute
+  '/icon-512.png': typeof Icon512DotpngRoute
+  '/manifest.webmanifest': typeof ManifestDotwebmanifestRoute
   '/messages': typeof MessagesRoute
   '/notifications': typeof NotificationsRoute
   '/pricing': typeof PricingRoute
@@ -350,13 +395,18 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/admin'
+    | '/apple-touch-icon.png'
     | '/auth'
     | '/bookmarks'
     | '/contact'
     | '/explore'
+    | '/favicon.ico'
     | '/feed'
     | '/guidelines'
     | '/help'
+    | '/icon-192.png'
+    | '/icon-512.png'
+    | '/manifest.webmanifest'
     | '/messages'
     | '/notifications'
     | '/pricing'
@@ -388,13 +438,18 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/admin'
+    | '/apple-touch-icon.png'
     | '/auth'
     | '/bookmarks'
     | '/contact'
     | '/explore'
+    | '/favicon.ico'
     | '/feed'
     | '/guidelines'
     | '/help'
+    | '/icon-192.png'
+    | '/icon-512.png'
+    | '/manifest.webmanifest'
     | '/messages'
     | '/notifications'
     | '/pricing'
@@ -426,13 +481,18 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/admin'
+    | '/apple-touch-icon.png'
     | '/auth'
     | '/bookmarks'
     | '/contact'
     | '/explore'
+    | '/favicon.ico'
     | '/feed'
     | '/guidelines'
     | '/help'
+    | '/icon-192.png'
+    | '/icon-512.png'
+    | '/manifest.webmanifest'
     | '/messages'
     | '/notifications'
     | '/pricing'
@@ -465,13 +525,18 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
   AdminRoute: typeof AdminRoute
+  AppleTouchIconDotpngRoute: typeof AppleTouchIconDotpngRoute
   AuthRoute: typeof AuthRoute
   BookmarksRoute: typeof BookmarksRoute
   ContactRoute: typeof ContactRoute
   ExploreRoute: typeof ExploreRoute
+  FaviconDoticoRoute: typeof FaviconDoticoRoute
   FeedRoute: typeof FeedRoute
   GuidelinesRoute: typeof GuidelinesRoute
   HelpRoute: typeof HelpRoute
+  Icon192DotpngRoute: typeof Icon192DotpngRoute
+  Icon512DotpngRoute: typeof Icon512DotpngRoute
+  ManifestDotwebmanifestRoute: typeof ManifestDotwebmanifestRoute
   MessagesRoute: typeof MessagesRoute
   NotificationsRoute: typeof NotificationsRoute
   PricingRoute: typeof PricingRoute
@@ -523,6 +588,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/apple-touch-icon.png': {
+      id: '/apple-touch-icon.png'
+      path: '/apple-touch-icon.png'
+      fullPath: '/apple-touch-icon.png'
+      preLoaderRoute: typeof AppleTouchIconDotpngRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth': {
       id: '/auth'
       path: '/auth'
@@ -551,6 +623,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ExploreRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/favicon.ico': {
+      id: '/favicon.ico'
+      path: '/favicon.ico'
+      fullPath: '/favicon.ico'
+      preLoaderRoute: typeof FaviconDoticoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/feed': {
       id: '/feed'
       path: '/feed'
@@ -570,6 +649,27 @@ declare module '@tanstack/react-router' {
       path: '/help'
       fullPath: '/help'
       preLoaderRoute: typeof HelpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/icon-192.png': {
+      id: '/icon-192.png'
+      path: '/icon-192.png'
+      fullPath: '/icon-192.png'
+      preLoaderRoute: typeof Icon192DotpngRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/icon-512.png': {
+      id: '/icon-512.png'
+      path: '/icon-512.png'
+      fullPath: '/icon-512.png'
+      preLoaderRoute: typeof Icon512DotpngRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/manifest.webmanifest': {
+      id: '/manifest.webmanifest'
+      path: '/manifest.webmanifest'
+      fullPath: '/manifest.webmanifest'
+      preLoaderRoute: typeof ManifestDotwebmanifestRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/messages': {
@@ -761,13 +861,18 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
   AdminRoute: AdminRoute,
+  AppleTouchIconDotpngRoute: AppleTouchIconDotpngRoute,
   AuthRoute: AuthRoute,
   BookmarksRoute: BookmarksRoute,
   ContactRoute: ContactRoute,
   ExploreRoute: ExploreRoute,
+  FaviconDoticoRoute: FaviconDoticoRoute,
   FeedRoute: FeedRoute,
   GuidelinesRoute: GuidelinesRoute,
   HelpRoute: HelpRoute,
+  Icon192DotpngRoute: Icon192DotpngRoute,
+  Icon512DotpngRoute: Icon512DotpngRoute,
+  ManifestDotwebmanifestRoute: ManifestDotwebmanifestRoute,
   MessagesRoute: MessagesRoute,
   NotificationsRoute: NotificationsRoute,
   PricingRoute: PricingRoute,

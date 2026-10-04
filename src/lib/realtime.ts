@@ -169,6 +169,15 @@ function ensureDbFeed() {
         dispatchLocal("call:resolved", { call: row, ...row });
       }
     })
+    // A call deleted (or hidden, which rewrites the row and reaches the reader
+    // through the read policy on the next refresh) must also drop out of the
+    // peer's thread. Deletions arrive as an OLD row only, so mirror the guard.
+    .on("postgres_changes", { event: "DELETE", schema: "public", table: "calls" }, (p: any) => {
+      const row = p.old;
+      if (row?.id && (row.caller_id === currentUserId || row.callee_id === currentUserId)) {
+        dispatchLocal("call:resolved", { call: row, ...row });
+      }
+    })
     .subscribe();
   // Rejoin with the user's token after sign-in so access rules apply.
   if (authHooked) return;

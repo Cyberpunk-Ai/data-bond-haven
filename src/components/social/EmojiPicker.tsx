@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import {
   EMOJI_CATEGORIES,
@@ -16,6 +16,12 @@ interface EmojiPickerProps {
   onClose: () => void;
   /** Positioning classes for the panel itself (it is absolutely positioned). */
   className?: string;
+  /**
+   * Optional inline style for the panel. Passing `position: "fixed"` with
+   * measured coordinates lets the caller hoist the panel out of a scrolling /
+   * clipping toolbar (an `overflow-x-auto` compose bar would otherwise cut it).
+   */
+  style?: CSSProperties;
   /** Keep the picker open after a pick — useful for building a message. */
   multiple?: boolean;
   label?: string;
@@ -60,6 +66,7 @@ export function EmojiPicker({
   onPick,
   onClose,
   className,
+  style,
   multiple = false,
   label = "Emoji",
 }: EmojiPickerProps) {
@@ -119,6 +126,7 @@ export function EmojiPicker({
       <div
         role="dialog"
         aria-label={label}
+        style={style}
         className={cn(
           "absolute z-40 w-[19rem] max-w-[calc(100vw-2rem)] rounded-2xl border border-border bg-card/98 p-2 shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2",
           className,

@@ -765,14 +765,15 @@ export async function getProfileTabPage(options: {
   if (tab === "posts" || tab === "media") {
     let query = db
       .from("posts")
-      // `image_url` used to be missing from the media filter, so a plain photo
-      // post appeared in Posts but not in Media.
       .select("*", { count: "exact" })
       .eq("user_id", profileId)
       .eq("hidden", false)
       .order("created_at", { ascending: false })
       .limit(limit);
-    if (tab === "media") query = query.or("media_url.not.is.null,image_url.not.is.null");
+    // Uploaded attachments live only in `media_url`; the `posts` table has no
+    // `image_url` column, and referencing one made PostgREST reject the whole
+    // filter so the Media tab came back empty even for profiles that have media.
+    if (tab === "media") query = query.not("media_url", "is", null);
     if (options.before) query = query.lt("created_at", options.before);
     const { data, error, count } = await query;
     if (error) console.warn("getProfileTabPage notice:", error.message);
@@ -2052,32 +2053,49 @@ export async function getConversations(): Promise<Conversation[]> {
   const userId = me();
   if (!isDbId(userId)) return [];
   try {
-    const { data } = await db
-      .from("conversations")
-      .select("*")
-      .or(`user_a.eq.${userId},user_b.eq.${userId}`)
-      .not("hidden_for", "cs", [userId])
-      .order("updated_at", { ascending: false });
-    const rows = (data ?? []) as any[];
+    // The `hidden_for` filter drops threads the viewer chose "Delete chat" on.
+    // If PostgREST hasn't got the column yet (schema-cache lag right after a
+    // migration) the query returns an error and `data` comes back null — which
+    // would silently empty the whole inbox. Build a fresh query per attempt (the
+    // supabase builder is mutable, so reusing one keeps the failed filter) and
+    // fall back to the unfiltered read so messaging never hard-depends on it.
+    const buildConv = (withHide: boolean) => {
+      const q = db
+        .from("conversations")
+        .select("*")
+        .or(`user_a.eq.${userId},user_b.eq.${userId}`)
+        .order("updated_at", { ascending: false });
+      return withHide ? q.not("hidden_for", "cs", [userId]) : q;
+    };
+    let res = await buildConv(true);
+    if (res.error) res = await buildConv(false);
+    const rows = (res.data ?? []) as any[];
     if (rows.length > 0) {
       // Hydrating the people behind each thread and tallying unread messages are
       // independent, so run them concurrently — this round-trip gates how fast
       // the conversation list paints on open.
-      const [, unreadRows] = await Promise.all([
-        hydrateAuthors(rows.flatMap((r) => [r.user_a, r.user_b])),
-        db
+      const buildUnread = (withHide: boolean) => {
+        const q = db
           .from("messages")
           .select("conversation_id")
           .is("read_at", null)
           .neq("sender_id", userId)
-          .not("hidden_for", "cs", [userId])
           .in(
             "conversation_id",
             rows.map((r) => r.id),
-          ),
+          );
+        return withHide ? q.not("hidden_for", "cs", [userId]) : q;
+      };
+      const runUnread = async () => {
+        const first = await buildUnread(true);
+        return first.error ? buildUnread(false) : first;
+      };
+      const [, unreadRes] = await Promise.all([
+        hydrateAuthors(rows.flatMap((r) => [r.user_a, r.user_b])),
+        runUnread(),
       ]);
       const unreadByConversation = new Map<string, number>();
-      for (const row of (unreadRows?.data ?? []) as any[]) {
+      for (const row of (unreadRes?.data ?? []) as any[]) {
         const key = String(row.conversation_id);
         unreadByConversation.set(key, (unreadByConversation.get(key) ?? 0) + 1);
       }
@@ -2096,52 +2114,100 @@ export async function getConversations(): Promise<Conversation[]> {
   return [];
 }
 
-export async function getMessages(conversationId: string): Promise<Message[]> {
+/**
+ * One page of a thread's history, oldest-last, plus whether more exist above it.
+ *
+ * Threads used to be read whole (every row, ascending) on open, which grows
+ * without bound for long conversations and gates first paint on the full
+ * download. We now ask for `limit + 1` newest rows: the extra one is only a
+ * sentinel that says "there is more above", so we drop it, reverse to ascending
+ * for rendering, and hand the caller `hasMore` to drive load-older. The same
+ * `hidden_for` resilience as getConversations keeps a schema-cache lag from
+ * silently emptying an existing thread (build fresh per attempt: the supabase
+ * builder is mutable, so reusing one would keep the failed filter).
+ */
+export async function getMessagesPage(
+  conversationId: string,
+  opts: { before?: string; limit?: number } = {},
+): Promise<{ messages: Message[]; hasMore: boolean }> {
+  const limit = Math.max(1, opts.limit ?? 60);
+  if (!isDbId(conversationId)) return { messages: [], hasMore: false };
+  const myId = me();
   try {
-    const myId = me();
-    let query = db
+    const build = (withHide: boolean) => {
+      let q = db
+        .from("messages")
+        .select("*")
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: false })
+        .limit(limit + 1);
+      if (opts.before) q = q.lt("created_at", opts.before);
+      return withHide && isDbId(myId) ? q.not("hidden_for", "cs", [myId]) : q;
+    };
+    let res = await build(true);
+    if (res.error) res = await build(false);
+    const rows = (res.data ?? []) as any[];
+    const hasMore = rows.length > limit;
+    const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
+    // Hydrate `is_edited` from the persisted `edited_at` column so the "(edited)"
+    // marker survives a reload.
+    const messages = page.map((row) => ({
+      ...row,
+      is_edited: !!row.edited_at,
+    })) as Message[];
+    return { messages, hasMore };
+  } catch (err) {
+    console.warn("getMessagesPage notice:", err);
+    return { messages: [], hasMore: false };
+  }
+}
+
+/**
+ * Record that the viewer has this thread's inbound messages. Idempotent: the
+ * `delivered_at` / `read_at` columns are only written where still null, so it is
+ * safe to call on open AND every time a new message lands while the thread is
+ * focused, advancing the sender's ticks live rather than on the next page load.
+ */
+export async function markThreadRead(conversationId: string): Promise<void> {
+  const myId = me();
+  if (!isDbId(myId) || !isDbId(conversationId)) return;
+  try {
+    // Opening the thread means the recipient's device has the messages — mark
+    // them delivered even before they are explicitly read.
+    const { data: deliveredNow } = await db
       .from("messages")
-      .select("*")
+      .update({ delivered_at: nowIso() })
       .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true });
-    // Skip rows the viewer chose "Delete for me" on — the server keeps them
-    // for the other side, but this reader shouldn't see them any more.
-    if (isDbId(myId)) query = query.not("hidden_for", "cs", [myId]);
-    const { data } = await query;
-    if (data && data.length > 0) {
-      // Opening the thread means the recipient's device has the messages —
-      // mark them delivered even before they are explicitly read.
-      const { data: deliveredNow } = await db
-        .from("messages")
-        .update({ delivered_at: nowIso() })
-        .eq("conversation_id", conversationId)
-        .neq("sender_id", myId)
-        .is("delivered_at", null)
-        .select("id");
-      if ((deliveredNow ?? []).length > 0) {
-        emitRealtime("message:delivered", { conversationId, at: nowIso() });
-      }
-      const { data: marked } = await db
-        .from("messages")
-        .update({ read_at: nowIso() })
-        .eq("conversation_id", conversationId)
-        .neq("sender_id", myId)
-        .is("read_at", null)
-        .select("id");
-      if ((marked ?? []).length > 0) {
-        emitRealtime("message:read", { conversationId, readerId: myId, at: nowIso() });
-      }
-      // Hydrate `is_edited` from the persisted `edited_at` column so the
-      // "(edited)" marker survives a reload.
-      return (data as any[]).map((row) => ({
-        ...row,
-        is_edited: !!row.edited_at,
-      })) as Message[];
+      .neq("sender_id", myId)
+      .is("delivered_at", null)
+      .select("id");
+    if ((deliveredNow ?? []).length > 0) {
+      emitRealtime("message:delivered", { conversationId, at: nowIso() });
+    }
+    const { data: marked } = await db
+      .from("messages")
+      .update({ read_at: nowIso() })
+      .eq("conversation_id", conversationId)
+      .neq("sender_id", myId)
+      .is("read_at", null)
+      .select("id");
+    if ((marked ?? []).length > 0) {
+      emitRealtime("message:read", { conversationId, readerId: myId, at: nowIso() });
     }
   } catch (err) {
-    console.warn("getMessages notice:", err);
+    console.warn("markThreadRead notice:", err);
   }
-  return [];
+}
+
+/**
+ * Legacy whole-thread read kept for existing callers/tests: the initial paint
+ * now uses `getMessagesPage` + `markThreadRead`, but this preserves the old
+ * "load everything, then mark seen" behaviour in one call.
+ */
+export async function getMessages(conversationId: string): Promise<Message[]> {
+  const { messages } = await getMessagesPage(conversationId, { limit: 1000 });
+  if (messages.length > 0) await markThreadRead(conversationId);
+  return messages;
 }
 
 /**
@@ -2176,6 +2242,37 @@ export async function getCallHistory(participantId: string): Promise<CallCard[]>
   } catch (err) {
     console.warn("getCallHistory notice:", err);
     return [];
+  }
+}
+
+/**
+ * Hide one finished call from *this* viewer's thread only. Goes through the
+ * `hide_call_for_me` RPC so the client can never rewrite a peer's history: the
+ * function only ever appends `auth.uid()`, and only to a call they belong to.
+ */
+export async function hideCallForMe(callId: string): Promise<void> {
+  const meId = me();
+  if (!isDbId(meId) || !isDbId(callId)) return;
+  const { error } = await db.rpc("hide_call_for_me", { p_call_id: callId });
+  if (error) {
+    console.warn("hideCallForMe notice:", error.message);
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Delete a call for everyone — the shared `calls` row is removed, so the card
+ * leaves both threads. The `calls participant delete` policy keeps this to the
+ * two people on the call; a peer's device sees the row drop through the realtime
+ * `calls` change feed and refreshes its own history.
+ */
+export async function deleteCallForEveryone(callId: string): Promise<void> {
+  const meId = me();
+  if (!isDbId(meId) || !isDbId(callId)) return;
+  const { error } = await db.from("calls").delete().eq("id", callId);
+  if (error) {
+    console.warn("deleteCallForEveryone notice:", error.message);
+    throw new Error(error.message);
   }
 }
 
