@@ -7,10 +7,14 @@ import {
   finalizePage,
   pageFromSnapshot,
   planFactor,
+  meritFactor,
+  MERIT_LIFT_MS,
   readFeedPrefs,
   hasMutedTag,
   normalizeTag,
   scoreFreshRow,
+  rotateRankedEntries,
+  applyDiversityCap,
 } from "@/lib/feed-rank-core";
 
 /**
@@ -47,14 +51,27 @@ const FRESH_SCAN_MAX = 50;
 // materializes the real timeline, without a heavy scan.
 const SEED_MAX = 60;
 
+/** A fresh 32-bit seed for a manual refresh's rotation — different every tap,
+ *  so the serve path can hand back a genuinely re-woven page without re-ranking. */
+function randomRotation() {
+  return (Math.random() * 0x100000000) >>> 0;
+}
+
 /**
  * Cold miss: no materialized timeline yet. Serve a cheap, current recency page
  * straight away (an indexed newest-first read that honors the viewer's mutes)
  * and let the background worker build the ranked list. The request NEVER runs
  * the ranker — that 2,000-row pool transfer + rescore is exactly what made the
  * first paint slow and tripped the old 9s budget. Returns score-0 entries so
- * the caller pages them chronologically (personalised=false), the same shape as
- * the client's recency fallback.
+ * the caller pages them by id (personalised=false), the same shape as the
+ * client's recency fallback.
+ *
+ * This is a new/guest viewer's PERSISTENT feed (the worker only materializes
+ * PERSONALIZED timelines), so the merit lift lives here too: impressions
+ * (view_count) and the author's follower count nudge valuable content a few
+ * hours earlier than pure recency — a gentle, near-chronological lift, never a
+ * full re-rank or the heavy pool fetch. A valuable free post can surface above a
+ * fresh low-signal one; the newest-first order still leads.
  */
 async function serveRecencySeed(
   supabase: any,
@@ -69,13 +86,34 @@ async function serveRecencySeed(
     const { mutedTags, mutedAuthors } = readFeedPrefs((prefRow as any)?.prefs);
     const { data: posts } = await supabase
       .from("posts")
-      .select("id,user_id,created_at,tags")
+      .select("id,user_id,created_at,tags,view_count")
       .eq("hidden", false)
       .order("created_at", { ascending: false })
       .limit(SEED_MAX);
-    return ((posts ?? []) as any[])
-      .filter((p) => !mutedAuthors.has(p.user_id) && !hasMutedTag(p.tags, mutedTags))
-      .map((row) => ({ row, score: 0 }));
+    const pool = ((posts ?? []) as any[]).filter(
+      (p) => !mutedAuthors.has(p.user_id) && !hasMutedTag(p.tags, mutedTags),
+    );
+    // One bounded profile read for just these authors' follower counts (the pool
+    // is <=SEED_MAX slim rows, so this is a small indexed lookup, not the 2,000
+    // candidate transfer the redesign deliberately keeps off the request path).
+    const authorIds = [...new Set(pool.map((p) => p.user_id).filter(Boolean))] as string[];
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id,followers")
+      .in("id", authorIds);
+    const followerMap = new Map<string, number>(
+      ((profiles ?? []) as any[]).map((r) => [r.id, Number(r.followers ?? 0)]),
+    );
+    const lifted = pool.map((row) => ({
+      row,
+      // recency timestamp, nudged forward by the merit lift (bounded, gentle).
+      at:
+        new Date(row.created_at).getTime() +
+        (meritFactor({ ...row, author_followers: followerMap.get(row.user_id) }) - 1) *
+          MERIT_LIFT_MS,
+    }));
+    lifted.sort((a, b) => b.at - a.at);
+    return lifted.map(({ row }) => ({ row, score: 0 }));
   } catch {
     return [];
   }
@@ -265,10 +303,32 @@ export const getForYouPosts = createServerFn({ method: "GET" })
       entries = await mergeFreshFollowedPosts(supabase, myId, entries);
     }
 
+    // Dynamic-but-stable ordering. A manual refresh must NOT hand back the
+    // identical page, yet a scroll (and a reload) must never reshuffle under the
+    // reader's fingers. We mint a `rotation` seed and re-order the stored list
+    // around it (a bounded ±3-slot shuffle that PRESERVES every entry's score),
+    // then re-honour the diversity cap the rotation may have broken:
+    //   • paging a session   -> reuse the seed carried in the cursor, so every
+    //     page reproduces the SAME arrangement (no mid-scroll reshuffle, and the
+    //     (score,id) cursor still resolves because scores never changed);
+    //   • refresh on the head -> a fresh random seed, so the feed visibly differs;
+    //   • cold head, no seed  -> the epoch bucket, stable within the 10-min epoch.
+    // A cold recency seed (guests / brand-new viewers) isn't rotated — recency IS
+    // its order — but it IS capped, so one author can't flood page one.
+    const decoded = decodeCursor(data.cursor);
+    const epochBucket = Math.floor(Date.now() / RANK_EPOCH_MS);
+    let rotation: number | undefined;
+    if (personalised) {
+      rotation = decoded?.rot ?? (data.refresh ? randomRotation() : epochBucket);
+      entries = rotateRankedEntries(entries, myId, rotation);
+    } else {
+      entries = applyDiversityCap(entries);
+    }
+
     // Keep the queue warm so the worker refreshes this viewer next epoch.
     void enqueueRankJob(supabase, myId);
 
-    const page = pageFromSnapshot(entries, personalised, data.cursor, data.limit);
+    const page = pageFromSnapshot(entries, personalised, data.cursor, data.limit, rotation);
     return finalizePage(supabase, page);
   });
 

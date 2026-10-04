@@ -92,8 +92,12 @@ describe("the client asks for tallies, never ballots", () => {
   it("the card refuses to display counts it does not have", () => {
     expect(CARD).toContain("const resultsUnknown = poll?.resultsUnavailable === true;");
     expect(CARD).toContain("Vote counts aren't loading right now.");
-    // Both the bar and the per-option percentage wait for real numbers.
-    expect(CARD).toContain("const showResults = Boolean(hasVotedInPoll) && !resultsUnknown;");
+    // Both the bar and the per-option percentage wait for real numbers. Gated on
+    // `!resultsUnknown`; also revealed once the poll has closed (a closed poll
+    // shows its result to everyone, not just to those who voted).
+    expect(CARD).toContain(
+      "const showResults = (hasVotedInPoll || poll.closed === true) && !resultsUnknown;",
+    );
     expect(CARD).toContain("{showResults && (");
   });
 

@@ -25,7 +25,11 @@ import { compact } from "@/lib/formatters";
 
 function SpacesSkeleton() {
   return (
-    <div className="grid gap-5">
+    <div
+      className="grid gap-5 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-300"
+      aria-busy="true"
+      aria-label="Loading spaces"
+    >
       {[1, 2, 3].map((i) => (
         <div key={i} className="glass-panel rounded-3xl p-6 shadow-soft space-y-4">
           <div className="flex items-center gap-2">

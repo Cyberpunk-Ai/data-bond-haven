@@ -28,7 +28,11 @@ import {
   hideCallForMe,
   deleteCallForEveryone,
 } from "@/lib/api-client";
-import { decrementUnreadMessages, setActiveMessagesConversation } from "@/lib/unread-state";
+import {
+  setActiveMessagesConversation,
+  setConversationUnread,
+  syncFromConversations,
+} from "@/lib/unread-state";
 import { useAuth } from "@/lib/auth-state";
 import { useRealtime } from "@/lib/realtime";
 import { cn } from "@/lib/utils";
@@ -189,9 +193,13 @@ function MessagesPage() {
     }
     setConvsLoading(true);
     setConvsError(false);
+    const fetchedAt = Date.now();
     getConversations()
       .then((data) => {
         if (data && data.length > 0) {
+          // Seed the shared badge from the freshest list, reconciled against any
+          // thread opened while this read was in flight.
+          syncFromConversations(data, fetchedAt);
           let targetConvId = activeId || data[0].id;
           if (targetUserParam) {
             const cleanTarget = targetUserParam.replace(/^@/, "");
@@ -216,7 +224,7 @@ function MessagesPage() {
             setMobileOpen(true);
           }
           const targetConv = data.find((c) => c.id === targetConvId);
-          if (targetConv && targetConv.unread > 0) decrementUnreadMessages(targetConv.unread);
+          if (targetConv && targetConv.unread > 0) setConversationUnread(targetConvId, 0);
           setConversations(data.map((c) => (c.id === targetConvId ? { ...c, unread: 0 } : c)));
           setActiveId(targetConvId);
         } else if (targetUserParam) {
@@ -256,8 +264,11 @@ function MessagesPage() {
 
   function selectConversation(id: string) {
     const conv = conversations.find((c) => c.id === id);
+    // Opening a thread is an explicit "I have read this": zero it in the shared
+    // badge regardless of what the optimistic row currently shows, so the nav
+    // count drops the instant you act and stays down (the touch is recorded).
+    setConversationUnread(id, 0);
     if (conv && conv.unread > 0) {
-      decrementUnreadMessages(conv.unread);
       setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
     }
     setActiveId(id);

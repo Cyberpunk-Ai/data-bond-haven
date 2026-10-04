@@ -294,7 +294,9 @@ describe("For-you candidate pool covers every post", () => {
     // Pagination is still the shared (score, id) helper, so a materialized list
     // and a freshly-computed one page byte-identically; each page hydrates via
     // finalizePage before returning.
-    expect(reader).toMatch(/pageFromSnapshot\(entries, personalised, data\.cursor, data\.limit\)/);
+    expect(reader).toMatch(
+      /pageFromSnapshot\(entries, personalised, data\.cursor, data\.limit, rotation\)/,
+    );
     expect(reader).toMatch(/return finalizePage\(supabase, page\);/);
     // The old snapshot cache machinery is fully retired.
     expect(reader).not.toMatch(/rememberSnapshot\(/);

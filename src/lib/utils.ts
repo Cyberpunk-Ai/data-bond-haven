@@ -45,6 +45,22 @@ export function getScrollContainer(): HTMLElement | null {
   return null;
 }
 
+/**
+ * The AppShell's persistent desktop scroll region, WITHOUT the overflow test
+ * that `getScrollContainer()` applies. A scroll listener has to be wired to the
+ * node that *will* scroll, not only one that happens to be overflowing at the
+ * moment we subscribe: on lg+ the feed is short (skeleton, or a restored one-
+ * page snapshot) when the reveal effect first runs, so gating on `scrollHeight >
+ * clientHeight` skipped the `<main>` binding entirely and left only `window` —
+ * which never scrolls on desktop. Result: the sticky tab/refresh header stopped
+ * revealing on scroll-up. Reading the offset still wants the overflow-aware
+ * `getScrollContainer()`; subscribing wants this stable element.
+ */
+function getScrollMain(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  return document.getElementById("app-main");
+}
+
 /** Current vertical scroll offset of the app's real scrolling element. */
 export function getScrollY(): number {
   const el = getScrollContainer();
@@ -65,7 +81,7 @@ export function scrollToTop(): void {
  */
 export function onAppScroll(handler: () => void): () => void {
   if (typeof window === "undefined") return () => {};
-  const el = getScrollContainer();
+  const el = getScrollMain();
   window.addEventListener("scroll", handler, { passive: true });
   el?.addEventListener("scroll", handler, { passive: true, capture: true });
   return () => {

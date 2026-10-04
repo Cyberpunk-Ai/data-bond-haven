@@ -53,14 +53,32 @@ export function normalizeTag(tag: unknown): string {
     .trim();
 }
 
-export function encodeCursor(rank: number, id: string) {
-  return Buffer.from(JSON.stringify({ rank, id })).toString("base64url");
+/**
+ * The cursor is `(rank, id)` plus an OPTIONAL `rot` (the refresh-rotation seed).
+ * `rot` lets a manual refresh serve a genuinely different arrangement of the
+ * SAME stored timeline while every page of that scroll reproduces it exactly:
+ * the rotation reorders entries but preserves each `(id, score)` pair, so the
+ * personalised `(score, id)` lookup in `pageFromSnapshot` still resolves.
+ * Guests/recency sessions omit `rot` (they page by id), so nothing about the
+ * existing two-field shape changes for them.
+ */
+export function encodeCursor(rank: number, id: string, rot?: number) {
+  const payload = rot === undefined ? { rank, id } : { rank, id, rot };
+  return Buffer.from(JSON.stringify(payload)).toString("base64url");
 }
-export function decodeCursor(cursor?: string | null): { rank: number; id: string } | null {
+export function decodeCursor(
+  cursor?: string | null,
+): { rank: number; id: string; rot?: number } | null {
   if (!cursor) return null;
   try {
     const obj = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-    if (typeof obj?.rank === "number" && typeof obj?.id === "string") return obj;
+    if (typeof obj?.rank === "number" && typeof obj?.id === "string") {
+      return {
+        rank: obj.rank,
+        id: obj.id,
+        rot: typeof obj.rot === "number" ? obj.rot : undefined,
+      };
+    }
   } catch {
     /* ignore malformed cursor */
   }
@@ -80,6 +98,7 @@ export function pageFromSnapshot(
   personalised: boolean,
   cursor: string | undefined,
   limit: number,
+  rot?: number,
 ) {
   const decoded = decodeCursor(cursor);
   let startIdx = 0;
@@ -97,10 +116,15 @@ export function pageFromSnapshot(
   }
   const page = entries.slice(startIdx, startIdx + limit);
   const last = page[page.length - 1];
+  // Carry the rotation forward so a refresh's fresh arrangement stays pinned
+  // for the whole scroll (only personalised sessions have one to carry).
+  const nextRot = decoded?.rot ?? rot;
   return {
     posts: page.map((e) => e.row),
     personalised,
-    nextCursor: last ? encodeCursor(personalised ? last.score : 0, last.row.id) : null,
+    nextCursor: last
+      ? encodeCursor(personalised ? last.score : 0, last.row.id, personalised ? nextRot : undefined)
+      : null,
   };
 }
 
@@ -203,6 +227,47 @@ export const planFactor = (plan?: string | null) =>
   plan === "pro" ? 1.55 : plan === "plus" ? 1.3 : 1;
 
 /**
+ * Organic-merit reach: impressions (post views) AND the author's audience
+ * (follower count) lift a post's reach on their OWN, independent of plan. This
+ * is the product idea that a free account making genuinely valuable content —
+ * lots of views, a real following — deserves the same kind of lift a paid plan
+ * buys, because the boost reflects the content's value, not the wallet behind
+ * it. Log-scaled and hard-capped at +0.3 (a 1.0→1.3x multiplier) so it is a
+ * gentle nudge that can never let a huge account swallow the feed on audience
+ * alone, and reads the pre-joined `view_count` / `author_followers` (absent = 0,
+ * which yields a neutral 1.0 — so it degrades gracefully before the migration).
+ */
+export const meritFactor = (row: any): number => {
+  const views = Math.max(0, Number(row?.view_count ?? 0));
+  const followers = Math.max(0, Number(row?.author_followers ?? 0));
+  const lift = Math.log1p(views) * 0.02 + Math.log1p(followers) * 0.03;
+  return 1 + Math.min(0.3, lift);
+};
+
+/** The plan that governs a post: a workspace post inherits its workspace/owner
+ *  plan (falling back to the author's personal plan), a personal post uses the
+ *  author's plan. Pre-joined by for_you_candidates, so no per-viewer lookup. */
+export const effectivePlan = (row: any): string | null | undefined =>
+  row?.workspace_id ? (row.workspace_plan ?? row.author_plan) : row?.author_plan;
+
+/**
+ * The full reach multiplier: paid plan (Pro/Plus/paid workspaces) TIMES organic
+ * merit (impressions + audience). They compose, so a Pro account with valuable
+ * content gets both, and a free account with valuable content still gets lifted
+ * purely on merit — reaching parity with a paid-but-low-value post.
+ */
+export const reachFactor = (row: any): number => planFactor(effectivePlan(row)) * meritFactor(row);
+
+/**
+ * How many milliseconds of recency a full merit lift is worth in the recency-led
+ * (non-personalised / cold-seed) feeds. meritFactor-1 caps at 0.3, so a
+ * maximum-merit post is pushed ~6h earlier than its true timestamp — enough for a
+ * day-old high-value post to edge out a fresh low-value one, small enough that
+ * the feed still reads near-chronologically (the user's "gentle lift" choice).
+ */
+export const MERIT_LIFT_MS = 20 * 3_600_000;
+
+/**
  * The signal-independent portion of the score (decay + engagement velocity +
  * plan reach) — the same math the full ranker uses, minus the affinity /
  * relationship / discovery terms that need the viewer's signal fan-in. Used by
@@ -218,9 +283,88 @@ export function scoreFreshRow(row: any, epoch: number): number {
   const velocity = rawEngagement / ageHours;
   const views = Math.max(1, row.view_count ?? 1);
   const quality = Math.log1p(velocity * 10) * (0.5 + Math.min(1, rawEngagement / views));
-  const effPlan = row.workspace_id ? (row.workspace_plan ?? row.author_plan) : row.author_plan;
-  const reachBoost = planFactor(effPlan);
+  const reachBoost = reachFactor(row);
   return (quality * (0.35 + decay) + decay * 2) * reachBoost;
+}
+
+/**
+ * Diversity cap: at most 2 posts per author inside any 10-post sliding window
+ * (a very prolific author still reaches deeper pages — unlike a hard global
+ * cap — but no one floods a screenful). A post that fails the window on this
+ * pass is DEFERRED to the next one, never dropped: a single-pass `continue`
+ * used to permanently hide an author's third-plus posts whenever the window kept
+ * refilling with other people's content, so the feed quietly swallowed part of
+ * the pool. Each pass re-evaluates against the (now longer) ranked tail, and the
+ * leftovers are appended in score order once no placement can honour the window.
+ *
+ * Exported so the SERVE path can re-honour it in the two places `rankForYou`
+ * never reaches: after a refresh rotation (which can pull two same-author posts
+ * adjacent) and after a cold recency seed (guests / brand-new viewers), so one
+ * account never floods the first screenful regardless of how the page was built.
+ */
+export function applyDiversityCap(input: Array<{ row: any; score: number }>) {
+  const ranked: Array<{ row: any; score: number }> = [];
+  let pending = input;
+  while (pending.length) {
+    const deferred: typeof pending = [];
+    const placed: typeof pending = [];
+    // The candidate tail is `ranked` followed by this pass's `placed`, so a
+    // window slot maps onto one or the other depending on its position.
+    const at = (i: number) => (i < ranked.length ? ranked[i] : placed[i - ranked.length]);
+    for (const item of pending) {
+      const total = ranked.length + placed.length;
+      let inWindow = 0;
+      for (let i = Math.max(0, total - 9); i < total; i++) {
+        if (at(i).row.user_id === item.row.user_id) inWindow++;
+      }
+      (inWindow >= 2 ? deferred : placed).push(item);
+    }
+    if (!placed.length) {
+      // Stall-break: the window is genuinely saturated for every leftover
+      // (more posts from one author than 10-slots can hold at 2 each).
+      // Place only the BEST deferred item, then re-evaluate the rest against
+      // the advanced tail — full coverage without ever flooding.
+      placed.push(pending[0]);
+      pending = pending.slice(1);
+    } else {
+      pending = deferred;
+    }
+    ranked.push(...placed);
+  }
+  return ranked;
+}
+
+/**
+ * How far (in ranks) a refresh rotation may move a post from its stored slot.
+ * Bounded and magnitude-free (measured in list positions, not raw scores) so a
+ * top-relevant post can never be flung to the bottom: it visibly re-weaves the
+ * feed while the personalization tiers stay recognisable. ±3 slots around the
+ * original rank is enough that two refreshes feel different, yet a reader still
+ * trusts that the most relevant things sit near the top.
+ */
+export const ROTATE_SPREAD = 6;
+
+/**
+ * Apply a bounded, deterministic re-order of an already-ranked list, then
+ * re-honour the diversity cap. The seed is a per-(viewer, post, rotation) hash,
+ * so: a given rotation is stable across every page of one scroll (the caller
+ * passes the SAME seed and the SAME stored entries and gets the SAME order), but
+ * a fresh rotation — which is what a manual refresh minted — rearranges the page.
+ * Scores are preserved on every entry, so the `(score, id)` pagination cursor
+ * still resolves against the rotated list.
+ */
+export function rotateRankedEntries(
+  entries: Array<{ row: any; score: number }>,
+  viewer: string,
+  rotation: number,
+) {
+  if (entries.length === 0) return entries;
+  const keyed = entries.map((e, i) => ({
+    e,
+    key: i + (jitter01(`${viewer}:${e.row.id}:${rotation}`) - 0.5) * ROTATE_SPREAD,
+  }));
+  keyed.sort((a, b) => a.key - b.key || (a.e.row.id < b.e.row.id ? -1 : 1));
+  return applyDiversityCap(keyed.map((k) => k.e));
 }
 
 /**
@@ -312,13 +456,21 @@ export async function rankForYou(
     // Brand-new viewer: still recency-led, but nudged ±6h by a per-user hash so
     // two fresh accounts don't stare at an identical feed, and everyone keeps
     // seeing mostly-new content. Deterministic within the 10-minute epoch, so
-    // pagination is stable.
+    // pagination is stable. A gentle merit lift (impressions + audience, worth up
+    // to ~6h) rides on top, so a valuable post from any account — free or paid —
+    // surfaces a little sooner without breaking the near-chronological feel.
     const newBucket = Math.floor(Date.now() / (10 * 60_000));
     const adjusted = (r: any) =>
       new Date(r.created_at).getTime() +
-      (jitter01(`${myId}:${r.id}:${newBucket}`) - 0.5) * 12 * 3_600_000;
+      (jitter01(`${myId}:${r.id}:${newBucket}`) - 0.5) * 12 * 3_600_000 +
+      (meritFactor(r) - 1) * MERIT_LIFT_MS;
     const sorted = rows.slice().sort((a: any, b: any) => adjusted(b) - adjusted(a));
-    return { entries: sorted.map((row: any) => ({ row, score: 0 })), personalised: false };
+    // Cap even the recency-led tail: a brand-new viewer should not stare at one
+    // author's backlog either. Deterministic in the epoch, so paging is stable.
+    return {
+      entries: applyDiversityCap(sorted.map((row: any) => ({ row, score: 0 }))),
+      personalised: false,
+    };
   }
 
   // Ranking epoch: bucket "now" to a 10-minute window so scores (and thus
@@ -371,11 +523,12 @@ export async function rankForYou(
     const discovery = outsideKnownWorld ? jitter01(`${myId}:${row.id}:${epoch}`) * 1.4 : 0;
 
     const base = authorScore + tagScore + relationship + quality + discovery;
-    // Reach boost from the plan pre-joined by for_you_candidates: a workspace
-    // post inherits its workspace (or the owner's) plan, falling back to the
-    // author's personal plan; a personal post uses the author's plan.
-    const effPlan = row.workspace_id ? (row.workspace_plan ?? row.author_plan) : row.author_plan;
-    const reachBoost = planFactor(effPlan);
+    // Reach boost composes the paid plan (Pro/Plus/paid workspaces) WITH organic
+    // merit (impressions + follower audience), both pre-joined by
+    // for_you_candidates: a workspace post inherits its workspace (or owner's)
+    // plan, a personal post uses the author's plan. A free account whose content
+    // earns views/followers gets lifted on merit alone — value, not wallet.
+    const reachBoost = reachFactor(row);
     const score = (base * (0.35 + decay) + decay * 2) * reachBoost + seenPenalty;
 
     return { row, score };
@@ -396,43 +549,10 @@ export async function rankForYou(
   );
   const queue = unseen.length >= data.limit ? unseen : [...unseen, ...replayed];
 
-  // Diversity cap: at most 2 posts per author inside any 10-post sliding
-  // window (a very prolific author still reaches deeper pages — unlike a hard
-  // global cap — but no one floods a screenful). A post that fails the window on
-  // this pass is DEFERRED to the next one, never dropped: a single-pass
-  // `continue` used to permanently hide an author's third-plus posts whenever
-  // the window kept refilling with other people's content, so the feed quietly
-  // swallowed part of the pool. Each pass re-evaluates against the (now longer)
-  // ranked tail, and the leftovers are appended in score order once no
-  // placement can honour the window.
-  const ranked: Array<{ row: any; score: number }> = [];
-  let pending = queue;
-  while (pending.length) {
-    const deferred: typeof pending = [];
-    const placed: typeof pending = [];
-    // The candidate tail is `ranked` followed by this pass's `placed`, so a
-    // window slot maps onto one or the other depending on its position.
-    const at = (i: number) => (i < ranked.length ? ranked[i] : placed[i - ranked.length]);
-    for (const item of pending) {
-      const total = ranked.length + placed.length;
-      let inWindow = 0;
-      for (let i = Math.max(0, total - 9); i < total; i++) {
-        if (at(i).row.user_id === item.row.user_id) inWindow++;
-      }
-      (inWindow >= 2 ? deferred : placed).push(item);
-    }
-    if (!placed.length) {
-      // Stall-break: the window is genuinely saturated for every leftover
-      // (more posts from one author than 10-slots can hold at 2 each).
-      // Place only the BEST deferred item, then re-evaluate the rest against
-      // the advanced tail — full coverage without ever flooding.
-      placed.push(pending[0]);
-      pending = pending.slice(1);
-    } else {
-      pending = deferred;
-    }
-    ranked.push(...placed);
-  }
+  // Diversity cap (≤ 2 per author in any 10-post window, deferred not dropped).
+  // Extracted to `applyDiversityCap` so the serve path can re-honour the same
+  // window after a refresh rotation and after a cold recency seed.
+  const ranked = applyDiversityCap(queue);
 
   return { entries: ranked, personalised: true };
 }

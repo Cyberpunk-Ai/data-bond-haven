@@ -10,7 +10,13 @@ import { PostCard } from "@/components/social/PostCard";
 import { DefaultRail } from "@/components/social/RightRail";
 import { Avatar } from "@/components/social/Avatar";
 import { FeedSkeleton } from "@/components/social/PostSkeleton";
-import { getCachedFeedData, triggerFeedPreload } from "@/lib/feed-cache";
+import {
+  getCachedFeedData,
+  triggerFeedPreload,
+  readFeedSnapshot,
+  writeFeedSnapshot,
+} from "@/lib/feed-cache";
+import type { FeedSnapshot } from "@/lib/feed-cache";
 import type { Post, Story } from "@/lib/types";
 import { currentUser, getProfile, isProfilePending, useProfiles } from "@/lib/profile-service";
 import { getPostsPage, getStories } from "@/lib/api-client";
@@ -19,6 +25,7 @@ import { useAuth } from "@/lib/auth-state";
 import {
   cn,
   getScrollY,
+  getScrollContainer,
   scrollToTop,
   onAppScroll,
   withTimeout,
@@ -67,6 +74,21 @@ const tabs = ["For you", "Following", "Latest"] as const;
 // step still staggers cards in so scrolling feels continuous with no fetch gap.
 const FEED_PRELOAD_COUNT = 15;
 const FEED_REVEAL_STEP = 8;
+
+/**
+ * Jump the app's real scrolling element back to a saved offset. Called after a
+ * snapshot has been painted, so it waits two frames for the restored cards to
+ * lay out (a container shorter than the offset simply can't scroll there yet).
+ */
+function restoreScrollTo(y: number) {
+  if (typeof window === "undefined" || y <= 4) return;
+  const apply = () => {
+    const el = getScrollContainer();
+    if (el) el.scrollTop = y;
+    else window.scrollTo(0, y);
+  };
+  requestAnimationFrame(() => requestAnimationFrame(apply));
+}
 
 // A page fetch (a serverless rank call or a PostgREST query) can stall on a cold
 // start or a flaky connection. Without a ceiling the await never settles, the
@@ -401,12 +423,46 @@ function FeedPage() {
       // Ignore responses from a superseded request (user switched tabs).
       if (reqId !== feedReqId.current) return;
       if (Array.isArray(page.posts)) {
-        setPosts(page.posts);
-        setPendingIncomingPosts([]);
-        cursorRef.current = page.nextCursor;
-        setHasMore(Boolean(page.nextCursor));
         setLoadMoreError(false);
-        setVisibleCount(FEED_REVEAL_STEP);
+        // A silent background reconcile (the post-reload / warm-cache refresh)
+        // must NOT reshuffle what the reader is already looking at — that jump
+        // is the whole feeling of "the feed isn't stable when new content
+        // arrives". So merge in place: update the rows we already hold, and
+        // route genuinely-new posts through the pill (or the top only when the
+        // reader is already at the top). A non-silent load still replaces.
+        const canMerge = silent && posts.length > 0;
+        if (!canMerge) {
+          setPosts(page.posts);
+          setPendingIncomingPosts([]);
+          cursorRef.current = page.nextCursor;
+          setHasMore(Boolean(page.nextCursor));
+          setVisibleCount(FEED_REVEAL_STEP);
+          return;
+        }
+        // Keep the current order and cursor (a restored deep scroll shouldn't be
+        // yanked back to the head page); only adopt a cursor if we have none —
+        // the warm memory bundle ships posts but no pagination cursor.
+        if (!cursorRef.current) {
+          cursorRef.current = page.nextCursor;
+          setHasMore(Boolean(page.nextCursor));
+        }
+        const freshById = new Map(page.posts.map((p) => [p.id, p]));
+        const kept = posts.map((p) =>
+          freshById.has(p.id) ? { ...p, ...freshById.get(p.id)! } : p,
+        );
+        const keptIds = new Set(posts.map((p) => p.id));
+        const arrivals = page.posts.filter((p) => !keptIds.has(p.id));
+        if (arrivals.length === 0) {
+          setPosts(kept);
+        } else if (getScrollY() < 200) {
+          setPosts([...arrivals, ...kept]);
+        } else {
+          setPosts(kept);
+          setPendingIncomingPosts((pill) => {
+            const pillIds = new Set(pill.map((x) => x.id));
+            return [...arrivals.filter((a) => !pillIds.has(a.id)), ...pill];
+          });
+        }
       }
     } catch (err) {
       if (reqId !== feedReqId.current) return;
@@ -503,25 +559,99 @@ function FeedPage() {
   // Reload when the signed-in user becomes known so likes/saves/follows show correctly after refresh.
   const viewerId = useCurrentUserId();
   useEffect(() => {
+    // A personalised For-you list is only stable once we know who the viewer is:
+    // fetching first serves a guest chronological page, then reshuffles to the
+    // ranked list the moment the id lands — the visible "feed reordered on
+    // load". Wait for the id (the feed is a signed-in surface anyway).
+    if (!viewerId) return;
     const isFirstRun = !didInitialLoad.current;
     didInitialLoad.current = true;
-    // Warm first paint: posts/stories are already hydrated from the fresh
-    // bundle, so skip the duplicate network fetch. Only the default tab is
-    // covered — anything else (a tab switch, or the viewer resolving after
-    // login) falls through and refetches personalised data.
-    if (isFirstRun && initialCache.isFresh && initialCache.hasData && tab === "For you") {
-      // Cached posts already painted (no skeleton), but the memory bundle stores
-      // posts WITHOUT a pagination cursor — so `loadMorePosts()` would bail on
-      // `!cursorRef.current` and the feed would stall after the cached page:
-      // the reported "infinite scroll not working / never shows all caught up".
-      // Refresh silently (keeps the current paint, no flash) to populate the
-      // cursor and `hasMore`, so the sentinel can page past the cached batch.
-      void fetchFeed(true);
-      return;
+
+    if (isFirstRun && tab === "For you") {
+      // (a) Warm in-memory bundle (an SPA navigation): posts are already painted,
+      // so skip the duplicate fetch and only pull a pagination cursor silently.
+      if (initialCache.isFresh && initialCache.hasData) {
+        void fetchFeed(true);
+        return;
+      }
+      // (b) Hard reload: the memory cache is gone, but sessionStorage still holds
+      // the exact previous view. Restore it (identical order + cursor + scroll),
+      // then reconcile quietly — so reloading never reshuffles the feed.
+      const snap = readFeedSnapshot(viewerId);
+      if (snap && snap.foryou.length > 0) {
+        setPosts(snap.foryou);
+        if (snap.stories && snap.stories.length > 0) setStories(snap.stories);
+        cursorRef.current = snap.cursor ?? null;
+        setHasMore(Boolean(snap.hasMore));
+        setVisibleCount(snap.visibleCount > 0 ? snap.visibleCount : FEED_REVEAL_STEP);
+        setLoading(false);
+        restoreScrollTo(snap.scrollY || 0);
+        void fetchFeed(true);
+        return;
+      }
     }
     fetchFeed();
     fetchStories();
   }, [tab, viewerId]);
+
+  // Persist the exact rendered view so a reload restores it instead of starting
+  // over. Debounced on content changes (paging, a new post) and flushed again on
+  // pagehide to capture the final scroll offset even if the reader only scrolled.
+  useEffect(() => {
+    if (!viewerId || tab !== "For you" || posts.length === 0) return;
+    const snapshot: FeedSnapshot = {
+      viewerId,
+      foryou: posts,
+      stories,
+      cursor: cursorRef.current,
+      hasMore,
+      visibleCount,
+      scrollY: getScrollY(),
+      savedAt: Date.now(),
+    };
+    const t = setTimeout(() => writeFeedSnapshot(snapshot), 400);
+    return () => clearTimeout(t);
+  }, [viewerId, tab, posts, stories, hasMore, visibleCount]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const flush = () => {
+      if (!viewerId || tab !== "For you" || posts.length === 0) return;
+      writeFeedSnapshot({
+        viewerId,
+        foryou: posts,
+        stories,
+        cursor: cursorRef.current,
+        hasMore,
+        visibleCount,
+        scrollY: getScrollY(),
+        savedAt: Date.now(),
+      });
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [viewerId, tab, posts, stories, hasMore, visibleCount]);
+
+  // Tapping the Home nav while already on the feed used to be a dead link (the
+  // router no-ops a navigation to the current route). Treat it like X/Twitter:
+  // glide back to the top and silently re-pull the head of the timeline. Silent
+  // (not the loading skeleton) + merge-in-place keeps the scroll smooth and
+  // never reshuffles what's on screen; anything genuinely new lands at the top
+  // (we're scrolling there) or via the new-posts pill.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onHomeTapped = () => {
+      scrollToTop();
+      void fetchFeed(true, true);
+      void fetchStories();
+    };
+    window.addEventListener("spaces:home-tapped", onHomeTapped);
+    return () => window.removeEventListener("spaces:home-tapped", onHomeTapped);
+    // fetchFeed/fetchStories are hoisted per render and only read `tab` here (a
+    // silent refresh replaces/merges from the fetched page, not stale `posts`),
+    // so resubscribing on the tab is enough to keep the handler current.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   // Realtime hook for incoming posts and story events
   useRealtime(

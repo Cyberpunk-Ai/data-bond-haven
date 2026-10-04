@@ -96,7 +96,12 @@ describe("the serve path is a read, not a re-rank", () => {
   });
 
   it("keeps the client's (score, id) pagination + page hydration intact", () => {
-    expect(reader).toMatch(/pageFromSnapshot\(entries, personalised, data\.cursor, data\.limit\)/);
+    // The trailing `rotation` arg is the refresh seed echoed into the cursor so a
+    // paged scroll reproduces the same arrangement; the 4 positional args are the
+    // established contract.
+    expect(reader).toMatch(
+      /pageFromSnapshot\(entries, personalised, data\.cursor, data\.limit, rotation\)/,
+    );
     expect(reader).toMatch(/return finalizePage\(supabase, page\);/);
   });
 

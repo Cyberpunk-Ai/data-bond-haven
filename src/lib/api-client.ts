@@ -998,10 +998,11 @@ export async function votePoll(postId: string, optionId: string) {
 }
 
 export async function recordPostImpression(postId: string) {
-  // One id through the batch path: same guards, same round-trips, one
-  // implementation to keep correct.
-  const { views } = await recordPostImpressions([postId]);
-  return { viewCount: views[postId] ?? 0 };
+  // Routed through the shared impression queue so a feed scroll costs ONE
+  // batched POST per flush window, not one per card that intersects the
+  // viewport. The updated tally comes back on the `post_view_updated` realtime
+  // event the flush emits, so nothing here needs to await the write.
+  queuePostImpression(postId);
 }
 
 /* ---------------------------------------------------------------- stories */
@@ -3385,6 +3386,74 @@ export async function recordPostImpressions(
     emitRealtime("post_view_updated", { postId: row.id, viewCount: row.view_count });
   }
   return { ok: true, views };
+}
+
+// ---------------------------------------------------------------------------
+// Impression batching queue
+//
+// A feed scroll makes a dozen cards intersect the viewport almost at once, and
+// each used to fire its own POST → its own server round-trip (a profile lookup,
+// an existence check, the upsert and a read-back). That fan-out is the single
+// biggest slice of Supabase write traffic in the app, and it scales with
+// concurrent viewers like a self-inflicted DDoS. `recordImpressions` already
+// accepts a batch, so we collect ids client-side and flush them as ONE call.
+//
+// Views are best-effort telemetry: collapsing N POSTs into one, delayed by a
+// short window, is invisible to the reader — the card's tally still updates,
+// driven by the `post_view_updated` realtime event the flush emits. So ingestion
+// volume shrinks by an order of magnitude with no perceived performance cost.
+// ---------------------------------------------------------------------------
+const IMPRESSION_FLUSH_MS = 2000;
+const IMPRESSION_BATCH_MAX = 40;
+const pendingImpressions = new Set<string>();
+let impressionTimer: ReturnType<typeof setTimeout> | null = null;
+let impressionFlushHooked = false;
+
+async function flushImpressions() {
+  if (impressionTimer) {
+    clearTimeout(impressionTimer);
+    impressionTimer = null;
+  }
+  if (pendingImpressions.size === 0) return;
+  const ids = Array.from(pendingImpressions);
+  pendingImpressions.clear();
+  // Fire-and-forget: a slow or failed telemetry write must never surface to the
+  // reader. recordPostImpressions already no-ops for guests and swallows 403s.
+  try {
+    await recordPostImpressions(ids);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Queue one post view for the next batched flush. De-duped against the pending
+ * set (and, upstream, the card's own session set), so a card that re-enters the
+ * viewport never re-sends. Flushes on a short timer, immediately at the batch
+ * ceiling, and on navigation-away so nothing queued is lost.
+ */
+export function queuePostImpression(postId: string) {
+  if (!isDbId(postId) || pendingImpressions.has(postId)) return;
+  pendingImpressions.add(postId);
+  // Hook the navigation-away flush once, so a reader who hides the tab or closes
+  // the page mid-window still ships what they saw.
+  if (!impressionFlushHooked && typeof window !== "undefined") {
+    impressionFlushHooked = true;
+    window.addEventListener("pagehide", () => void flushImpressions());
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") void flushImpressions();
+    });
+  }
+  // Hit the ceiling: ship now rather than wait out the timer.
+  if (pendingImpressions.size >= IMPRESSION_BATCH_MAX) {
+    void flushImpressions();
+    return;
+  }
+  if (impressionTimer) return;
+  impressionTimer = setTimeout(() => {
+    impressionTimer = null;
+    void flushImpressions();
+  }, IMPRESSION_FLUSH_MS);
 }
 
 // ---------------------------------------------------------------------------

@@ -62,7 +62,11 @@ export function PostSkeleton({ className, hasMedia = false }: PostSkeletonProps)
 
 export function FeedSkeleton() {
   return (
-    <div className="space-y-5">
+    <div
+      className="space-y-5 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-300"
+      aria-busy="true"
+      aria-label="Loading posts"
+    >
       <PostSkeleton />
       <PostSkeleton hasMedia />
       <PostSkeleton />

@@ -260,6 +260,25 @@ function BrandProfileLink({
   );
 }
 
+/**
+ * Integer percentages that sum to exactly 100 (largest-remainder), so a three-
+ * way tie reads 34/33/33 rather than 33/33/33 (= 99%) and the result bars line
+ * up with their labels. No votes yet -> all zeros, so the bars stay flat.
+ */
+function pollPercents(votes: number[], total: number): number[] {
+  if (total <= 0) return votes.map(() => 0);
+  const exact = votes.map((v) => (v / total) * 100);
+  const out = exact.map((x) => Math.floor(x));
+  let remainder = 100 - out.reduce((s, x) => s + x, 0);
+  const byFrac = exact
+    .map((x, i) => ({ i, frac: x - Math.floor(x) }))
+    .sort((a, b) => b.frac - a.frac);
+  for (let k = 0; k < byFrac.length && remainder > 0; k++, remainder--) {
+    out[byFrac[k].i] += 1;
+  }
+  return out;
+}
+
 function PostCardBase({
   post,
   index = 0,
@@ -340,13 +359,10 @@ function PostCardBase({
     observerCallbacks.set(el, () => {
       if (recordedImpressions.has(post.id)) return;
       recordedImpressions.add(post.id);
-      recordPostImpression(post.id)
-        .then((res) => {
-          if (res && typeof res.viewCount === "number") {
-            setState((s) => ({ ...s, views: res.viewCount }));
-          }
-        })
-        .catch(() => {});
+      // Enqueue for a batched flush (one POST per window, not one per card).
+      // No await: the refreshed tally arrives on the `post_view_updated`
+      // realtime event the flush emits, handled by the subscription below.
+      recordPostImpression(post.id);
     });
 
     observer.observe(el);
@@ -595,7 +611,7 @@ function PostCardBase({
   }, [post.poll]);
 
   async function handleVote(optionId: string) {
-    if (!poll || hasVotedInPoll) return;
+    if (!poll || hasVotedInPoll || poll.closed) return;
     const before = poll;
     setPoll((prev) => {
       if (!prev) return prev;
@@ -1482,57 +1498,84 @@ function PostCardBase({
           {poll.question && (
             <p className="text-sm font-bold text-foreground mb-3">{poll.question}</p>
           )}
-          <div className="space-y-2">
-            {poll.options.map((opt) => {
-              const pct = poll.totalVotes > 0 ? Math.round((opt.votes / poll.totalVotes) * 100) : 0;
-              const isSelected = opt.votedByMe;
-              // Results only mean something when the counts actually arrived.
-              const showResults = Boolean(hasVotedInPoll) && !resultsUnknown;
-
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  disabled={hasVotedInPoll}
-                  onClick={() => handleVote(opt.id)}
-                  className={cn(
-                    "group relative w-full overflow-hidden rounded-xl border p-3 text-left transition-all",
-                    hasVotedInPoll
-                      ? "cursor-default border-border/60 bg-foreground/5"
-                      : "cursor-pointer border-border hover:border-brand/60 hover:bg-brand/5 active:scale-[0.99]",
-                    isSelected && "border-brand bg-brand/10 ring-1 ring-brand",
-                  )}
-                >
-                  {/* Animated Fill Bar */}
-                  {showResults && (
-                    <div
-                      style={{ width: `${pct}%` }}
+          {(() => {
+            const total = poll.totalVotes || 0;
+            // Results mean something only once the counts actually arrived, and
+            // once the reader has voted OR the poll has closed. Until then the
+            // options stay blank so a poll can't steer anyone with a lead.
+            const showResults = (hasVotedInPoll || poll.closed === true) && !resultsUnknown;
+            const percents = pollPercents(
+              poll.options.map((o) => o.votes),
+              total,
+            );
+            const leaderVotes = poll.options.reduce((m, o) => Math.max(m, o.votes), 0);
+            const voted = hasVotedInPoll || poll.closed === true;
+            return (
+              <div className="space-y-2">
+                {poll.options.map((opt, i) => {
+                  const pct = percents[i];
+                  const isSelected = opt.votedByMe;
+                  // The front-runner gets a subtly heavier bar + bold label so the
+                  // winner reads at a glance, without shouting over your own pick.
+                  const isLeader = showResults && total > 0 && opt.votes === leaderVotes;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      disabled={voted}
+                      onClick={() => handleVote(opt.id)}
                       className={cn(
-                        "absolute inset-y-0 left-0 transition-all duration-700 ease-out",
-                        isSelected
-                          ? "bg-gradient-to-r from-brand/25 to-brand-pink/25"
-                          : "bg-foreground/10",
+                        "group relative w-full overflow-hidden rounded-xl border p-3 text-left transition-all",
+                        voted
+                          ? "cursor-default border-border/60 bg-foreground/5"
+                          : "cursor-pointer border-border hover:border-brand/60 hover:bg-brand/5 active:scale-[0.99]",
+                        isSelected && "border-brand bg-brand/10 ring-1 ring-brand",
                       )}
-                    />
-                  )}
+                    >
+                      {/* Animated Fill Bar */}
+                      {showResults && (
+                        <div
+                          style={{ width: `${pct}%` }}
+                          className={cn(
+                            "absolute inset-y-0 left-0 transition-all duration-700 ease-out",
+                            isSelected
+                              ? "bg-gradient-to-r from-brand/25 to-brand-pink/25"
+                              : isLeader
+                                ? "bg-foreground/[0.16]"
+                                : "bg-foreground/10",
+                          )}
+                        />
+                      )}
 
-                  <div className="relative flex items-center justify-between gap-2 text-xs font-semibold">
-                    <span className="flex items-center gap-1.5 truncate">
-                      {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-brand shrink-0" />}
-                      <span className={cn(isSelected ? "text-brand font-bold" : "text-foreground")}>
-                        {opt.text}
-                      </span>
-                    </span>
-                    {showResults && (
-                      <span className="tabular-nums shrink-0 font-bold text-muted-foreground">
-                        {pct}% ({compact(opt.votes)})
-                      </span>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                      <div className="relative flex items-center justify-between gap-2 text-xs font-semibold">
+                        <span className="flex items-center gap-1.5 truncate">
+                          {isSelected && (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-brand shrink-0" />
+                          )}
+                          <span
+                            className={cn(
+                              isSelected
+                                ? "text-brand font-bold"
+                                : isLeader
+                                  ? "text-foreground font-bold"
+                                  : "text-foreground",
+                            )}
+                          >
+                            {opt.text}
+                          </span>
+                        </span>
+                        {showResults && (
+                          <span className="tabular-nums shrink-0 font-bold text-muted-foreground">
+                            {pct}% ({compact(opt.votes)})
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
           <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 px-1">
             {resultsUnknown ? (
@@ -1542,7 +1585,13 @@ function PostCardBase({
             ) : (
               <>
                 <span>{compact(poll.totalVotes)} total votes</span>
-                <span>{hasVotedInPoll ? "Final results" : "Click an option to vote"}</span>
+                <span>
+                  {poll.closed === true
+                    ? "Final results"
+                    : hasVotedInPoll
+                      ? "Results update live"
+                      : "Tap an option to vote"}
+                </span>
               </>
             )}
           </div>

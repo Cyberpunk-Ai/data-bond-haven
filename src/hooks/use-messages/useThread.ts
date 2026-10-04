@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "@/lib/types";
 import { getMessagesPage, markThreadRead } from "@/lib/api-client";
-import { scheduleUnreadResync } from "@/lib/unread-state";
+import { scheduleUnreadResync, setConversationUnread } from "@/lib/unread-state";
 import { NEW_PAGE_LIMIT } from "@/lib/message-constants";
 
 /** How close to the bottom (px) counts as "already following the conversation". */
@@ -75,7 +75,14 @@ export function useThread(args: { conversationId: string; currentUserId: string 
         requestAnimationFrame(() => {
           if (alive) scrollToLatest("auto");
         });
-        if (page.length > 0) void markThreadRead(conversationId).then(scheduleUnreadResync);
+        // Zero this exact conversation the instant the read commits — the badge
+        // is a per-thread map, so opening a thread visibly clears just its share
+        // now rather than waiting on a debounced re-count of the whole inbox.
+        if (page.length > 0)
+          void markThreadRead(conversationId).then(() => {
+            setConversationUnread(conversationId, 0);
+            scheduleUnreadResync();
+          });
       })
       .catch((err) => {
         console.warn("Thread load:", err);
@@ -170,7 +177,10 @@ export function useThread(args: { conversationId: string; currentUserId: string 
         typeof document !== "undefined" &&
         document.visibilityState === "visible"
       ) {
-        void markThreadRead(conversationId).then(scheduleUnreadResync);
+        void markThreadRead(conversationId).then(() => {
+          setConversationUnread(conversationId, 0);
+          scheduleUnreadResync();
+        });
       }
     },
     [conversationId, currentUserId],

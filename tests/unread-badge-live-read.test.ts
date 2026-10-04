@@ -1,19 +1,28 @@
 // @vitest-environment node
 /**
- * The Messages badge used to keep a number after you had already read the
- * thread: an inbound message in the conversation you are *looking at* is marked
- * seen the instant it lands (useThread.ingest → markThreadRead), yet the global
- * unread store incremented its own counter for it unconditionally, and nothing
- * ever decremented that live arrival — so the bubble only cleared on a full
- * reload.
+ * The Messages badge used to be a SINGLE global number that was both nudged
+ * optimistically (open a thread → subtract) and overwritten wholesale by a
+ * database re-count on every AppShell mount. The two models fought, and the
+ * bubble looked broken:
+ *   • it didn't drop the instant you read a thread ("not responsive") because a
+ *     lone integer can only guess a subtraction and wait for a debounced re-read;
+ *   • a slow re-count that started *before* you read a thread could resolve
+ *     *after* the read and put the number back ("doesn't reset").
  *
- * The contract that fixes it:
- *   • unread-state knows which conversation is open and refuses to raise the
- *     badge for a message that belongs to it;
- *   • the messages route publishes that "open conversation" id (and clears it
- *     on unmount) so the store's rule has something to compare against;
- *   • the premise still holds — useThread really does mark the active thread
- *     read on arrival, which is why skipping the increment is safe.
+ * The contract that fixes it — the badge is owned PER CONVERSATION:
+ *   • the store keeps a `conversationId -> unread` map, so reading a thread
+ *     zeroes exactly that entry the moment you act (setConversationUnread), and
+ *     the visible total is just the sum of the map;
+ *   • every database re-count carries a sequence number and only the newest one
+ *     may apply its result (refreshSeq) — a stale read resolving last can never
+ *     clobber a fresher value;
+ *   • a re-count is reconciled against a local-touch overlay (syncFromConversations):
+ *     a thread you touched after the read BEGAN keeps its local value, so a
+ *     snapshot taken before you read it cannot resurrect a cleared badge;
+ *   • an inbound message in the conversation you are *looking at* is marked seen
+ *     the instant it lands (useThread.ingest → markThreadRead), so the store
+ *     refuses to raise the badge for it; the messages route publishes that open
+ *     id (and clears it on unmount) for the rule to compare against.
  *
  * Store/JSX/realtime code a node test cannot stand up is read out of source,
  * matching the rest of this suite.
@@ -34,7 +43,71 @@ function between(source: string, from: string, to: string): string {
   return source.slice(start, end);
 }
 
-describe("the unread store does not count a message you are already reading", () => {
+describe("the badge is a per-conversation map, not one global number", () => {
+  const store = src("lib/unread-state.ts");
+
+  it("owns a conversationId -> unread map and derives the total from it", () => {
+    expect(store).toContain("const unreadByConversation = new Map<string, number>();");
+    expect(store).toContain("function recomputeMessagesTotal()");
+    // The visible Messages count is the sum of the map, so zeroing one thread
+    // drops exactly its share instead of guessing at a single subtraction.
+    expect(
+      between(store, "function recomputeMessagesTotal()", "globalUnread.notifications"),
+    ).toContain("globalUnread.messages = sum");
+  });
+
+  it("exposes the moves the app needs and drops the old single-number setters", () => {
+    expect(store).toContain(
+      "export function setConversationUnread(conversationId: string, count: number)",
+    );
+    expect(store).toContain(
+      "export function bumpConversationUnread(conversationId: string, delta = 1)",
+    );
+    expect(store).toContain("export function syncFromConversations(");
+    // The whole inbox can no longer be overwritten with one optimistic integer.
+    expect(store).not.toMatch(/export function (setUnreadMessagesCount|decrementUnreadMessages)\b/);
+  });
+
+  it("zeroes exactly the thread you read, and stamps a local touch so it stays down", () => {
+    const setter = between(
+      store,
+      "export function setConversationUnread(conversationId: string, count: number)",
+      "export function bumpConversationUnread",
+    );
+    expect(setter).toContain("if (n === 0) unreadByConversation.delete(conversationId);");
+    expect(setter).toContain("localTouch.set(conversationId, Date.now());");
+  });
+});
+
+describe("a stale database re-count can never resurrect a cleared badge", () => {
+  const store = src("lib/unread-state.ts");
+
+  it("only trusts the newest refresh (sequence guard)", () => {
+    expect(store).toContain("let refreshSeq = 0;");
+    const refresh = between(
+      store,
+      "export async function refreshUnreadCounts()",
+      "export function useUnreadCounts",
+    );
+    expect(refresh).toContain("const seq = ++refreshSeq;");
+    expect(refresh).toContain("if (seq !== refreshSeq) return;");
+  });
+
+  it("keeps a locally touched thread over a snapshot taken before the touch", () => {
+    const sync = between(store, "export function syncFromConversations(", "let refreshSeq = 0;");
+    // `fetchedAt` is when the read BEGAN; anything touched after that keeps its
+    // (already lower) local value rather than adopting the older snapshot.
+    expect(sync).toContain("(localTouch.get(id) ?? 0) > fetchedAt");
+    const refresh = between(
+      store,
+      "export async function refreshUnreadCounts()",
+      "export function useUnreadCounts",
+    );
+    expect(refresh).toContain("syncFromConversations(convs, fetchedAt)");
+  });
+});
+
+describe("the store does not count a message you are already reading", () => {
   const store = src("lib/unread-state.ts");
 
   it("exposes a setter for the currently open conversation", () => {
@@ -43,11 +116,11 @@ describe("the unread store does not count a message you are already reading", ()
     expect(store).toContain('activeConversationId = id || "";');
   });
 
-  it("skips the badge increment when the message is in the open thread", () => {
+  it("attributes an inbound message to its own conversation, after the guards", () => {
     const branch = between(
       store,
       'event.type === "message" ||',
-      "setUnreadMessagesCount((prev) => prev + 1)",
+      "bumpConversationUnread(convId, 1)",
     );
     // Still ignores our own echo first, then the open-thread guard.
     expect(branch).toContain("if (senderId && senderId === currentUserId) return;");
@@ -58,15 +131,33 @@ describe("the unread store does not count a message you are already reading", ()
   });
 });
 
-describe("the messages route publishes which thread is open", () => {
+describe("the messages route drives the per-conversation badge", () => {
   const route = src("routes/messages.tsx");
 
-  it("imports the setter", () => {
+  it("imports the map setters, not a global count", () => {
+    expect(route).toContain("setConversationUnread");
+    expect(route).toContain("syncFromConversations");
     expect(route).toContain("setActiveMessagesConversation");
     expect(route).toMatch(/from "@\/lib\/unread-state"/);
+    expect(route).not.toMatch(/setUnreadMessagesCount|decrementUnreadMessages/);
   });
 
-  it("sets it from activeId and clears it on unmount", () => {
+  it("stamps fetch time and reconciles + zeroes the open thread on load", () => {
+    const load = between(route, "const fetchedAt = Date.now();", "} else if (targetUserParam) {");
+    expect(load).toContain("syncFromConversations(data, fetchedAt)");
+    expect(load).toContain("setConversationUnread(targetConvId, 0)");
+  });
+
+  it("zeroes the conversation the moment you select it", () => {
+    const select = between(
+      route,
+      "function selectConversation(id: string)",
+      "// Tell the global badge",
+    );
+    expect(select).toContain("setConversationUnread(id, 0);");
+  });
+
+  it("publishes the open id and clears it on unmount", () => {
     const effect = between(route, "setActiveMessagesConversation(activeId", "}, [activeId]);");
     // A placeholder (`c_…`) thread is not a real conversation, so it must not
     // suppress the badge for a genuine inbound message.
@@ -75,25 +166,27 @@ describe("the messages route publishes which thread is open", () => {
   });
 });
 
-describe("the premise: an inbound message in the open thread is marked read live", () => {
+describe("the premise: reading a thread zeroes it immediately, not after a re-read", () => {
   const thread = src("hooks/use-messages/useThread.ts");
-  const ingest = between(thread, "const ingest = useCallback(", "const applyEdit = useCallback(");
 
-  it("calls markThreadRead only for a visible inbound message in this thread", () => {
+  it("imports the per-conversation setter", () => {
+    expect(thread).toContain(
+      'import { scheduleUnreadResync, setConversationUnread } from "@/lib/unread-state"',
+    );
+  });
+
+  it("zeroes the conversation the instant a live arrival is marked read", () => {
+    const ingest = between(thread, "const ingest = useCallback(", "const applyEdit = useCallback(");
     expect(ingest).toContain("msg.sender_id !== currentUserId");
     expect(ingest).toContain("msg.conversation_id === conversationId");
     expect(ingest).toContain('document.visibilityState === "visible"');
-    // The resync chained on the write is what makes the badge *persist*: the DB
-    // is re-read only after `read_at` actually committed, so navigating away
-    // (AppShell re-counts on mount) cannot resurrect a count already read.
-    expect(ingest).toContain("void markThreadRead(conversationId).then(scheduleUnreadResync);");
+    expect(ingest).toContain("void markThreadRead(conversationId).then(() => {");
+    expect(ingest).toContain("setConversationUnread(conversationId, 0);");
   });
 
-  it("re-syncs the global badge after the write of every read path, not just live arrivals", () => {
-    // Opening a thread marks it read too — that write must reconcile the badge
-    // as well, or the resurrected count survives until the next coincidence.
+  it("zeroes it on the open/load path too, so the count never survives a navigation", () => {
     const load = between(thread, "Load the newest page whenever", "const onScroll = useCallback(");
-    expect(load).toContain("void markThreadRead(conversationId).then(scheduleUnreadResync);");
-    expect(thread).toContain('import { scheduleUnreadResync } from "@/lib/unread-state"');
+    expect(load).toContain("void markThreadRead(conversationId).then(() => {");
+    expect(load).toContain("setConversationUnread(conversationId, 0);");
   });
 });

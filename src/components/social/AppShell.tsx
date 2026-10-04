@@ -1,9 +1,12 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useState, useEffect, useRef, memo, type ReactNode } from "react";
 import { toast } from "sonner";
-// useMounted() gates auth-derived UI: SSR sees a guest, the client may already
-// have a session, so anything that differs renders only after the first paint.
-import { useMounted } from "@/hooks/use-mounted";
+// useMountedStable() gates auth-derived chrome in the persistent shell: the
+// first client paint sees `false` (SSR/hydration safety), and because the shell
+// remounts on every SPA navigation the module latch keeps it `true` afterwards,
+// so nav slots (avatars, plan callout) stop re-painting their placeholder on
+// each page swap.
+import { useMountedStable } from "@/hooks/use-mounted";
 import {
   Home,
   Compass,
@@ -37,7 +40,7 @@ import { useUnreadCounts } from "@/lib/unread-state";
 import { useTheme, ACCENT_PALETTES, type ThemeAccent } from "@/lib/theme-state";
 import { appConfig } from "@/lib/config";
 import { UpgradeModal } from "@/components/social/UpgradeModal";
-import { cn, getScrollY, onAppScroll } from "@/lib/utils";
+import { cn, getScrollY, getScrollContainer, onAppScroll } from "@/lib/utils";
 
 // The admin console is reached only by going to /admin directly, and access is
 // decided there by the account's real assigned role on the server.
@@ -49,6 +52,28 @@ type NavItem = {
   badge?: string | number | null;
 };
 
+// A nav link to the route you're ALREADY on is a dead tap (the router
+// no-ops). Home is the one that should feel like a control: tapping it from the
+// feed scrolls back to the top and re-pulls, the way X/Twitter behaves. We
+// signal that intent with a window event the feed listens for rather than
+// reaching into the route from here.
+const HOME_TAP_EVENT = "spaces:home-tapped";
+
+function maybeHomeTap(to: string, active: boolean): boolean {
+  if (active && to === "/feed" && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(HOME_TAP_EVENT));
+    return true;
+  }
+  return false;
+}
+
+// Remember each route's desktop scroll offset (#app-main is the lg+ scroller,
+// which the router's window-only scrollRestoration can't reach). Written from
+// the shell's scroll handler, read back when a route mounts so back/forward and
+// revisits resume where the reader left off. /feed is skipped: it restores a
+// richer snapshot (list + cursor + offset) itself.
+const lastScrollByPath = new Map<string, number>();
+
 function NavLink({ item, onClick }: { item: NavItem; onClick?: (() => void) | undefined }) {
   const { pathname } = useLocation();
   const active = pathname === item.to;
@@ -56,7 +81,12 @@ function NavLink({ item, onClick }: { item: NavItem; onClick?: (() => void) | un
   return (
     <Link
       to={item.to}
-      onClick={onClick}
+      onClick={(e) => {
+        // When Home is already the current page there is nothing to navigate to,
+        // so stop the (no-op) navigation and hand the feed a scroll-top signal.
+        if (maybeHomeTap(item.to, active)) e.preventDefault();
+        onClick?.();
+      }}
       className={cn(
         "group relative flex items-center gap-3 rounded-2xl px-4 py-3 text-[0.95rem] font-semibold transition-all duration-300",
         active
@@ -86,7 +116,7 @@ function NavLink({ item, onClick }: { item: NavItem; onClick?: (() => void) | un
   );
 }
 
-function Sidebar({
+const Sidebar = memo(function Sidebar({
   onNavigate,
   unreadMessages = 0,
   unreadNotifications = 0,
@@ -97,7 +127,7 @@ function Sidebar({
   unreadNotifications?: number;
   showThemeToggle?: boolean;
 }) {
-  const mounted = useMounted();
+  const mounted = useMountedStable();
   const { currentPlan, isPlus, isPro } = usePlan();
   const { user, signOut } = useAuth();
   const { isDark, toggleTheme, accent: currentAccent, setAccent } = useTheme();
@@ -307,9 +337,13 @@ function Sidebar({
       </div>
     </div>
   );
-}
+});
 
-function WorkspaceSwitcher({ mounted = true }: { mounted?: boolean }) {
+const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
+  mounted = true,
+}: {
+  mounted?: boolean;
+}) {
   const { workspaces, activeWsId, isPersonal, setActiveWsId } = useWorkspace();
   if (!workspaces.length) return null;
   const activeWs = isPersonal ? undefined : workspaces.find((w) => w.id === activeWsId);
@@ -355,7 +389,7 @@ function WorkspaceSwitcher({ mounted = true }: { mounted?: boolean }) {
       )}
     </div>
   );
-}
+});
 
 export function AppShell({
   children,
@@ -366,7 +400,7 @@ export function AppShell({
   title: string;
 }) {
   const [open, setOpen] = useState(false);
-  const mounted = useMounted();
+  const mounted = useMountedStable();
   const { user } = useAuth();
   const activeUser = user || currentUser;
   const { notifications: unreadNotifications, messages: unreadMessages } = useUnreadCounts();
@@ -381,10 +415,16 @@ export function AppShell({
   // Smart floating compose button visibility on scroll
   const [isFabVisible, setIsFabVisible] = useState(true);
   const lastScrollY = useRef(0);
+  // The scroll handler is a stable [] effect, so it reads the live route from a
+  // ref rather than closing over a stale pathname.
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
 
   useEffect(() => {
     const handleScroll = () => {
       const currentY = getScrollY();
+      // Persist this route's offset as we scroll, so leaving it later restores.
+      if (pathnameRef.current && currentY > 0) lastScrollByPath.set(pathnameRef.current, currentY);
       if (currentY < 100) {
         setIsFabVisible(true);
       } else if (currentY > lastScrollY.current + 12) {
@@ -397,6 +437,27 @@ export function AppShell({
 
     return onAppScroll(handleScroll);
   }, []);
+
+  // Resume the previous offset when re-entering a route (back/forward, or
+  // Home→Explore→Home). #app-main is the lg+ scroller the router can't restore;
+  // two frames so the page has laid out tall enough to hold the position. /feed
+  // owns a richer snapshot restore, so it is skipped here.
+  useEffect(() => {
+    if (typeof window === "undefined" || pathname === "/feed") return;
+    const saved = lastScrollByPath.get(pathname) ?? 0;
+    if (saved <= 0) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        const el = getScrollContainer();
+        if (el) el.scrollTop = saved;
+      });
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      if (second) cancelAnimationFrame(second);
+    };
+  }, [pathname]);
 
   const mobileItems: NavItem[] = [
     { label: "Home", to: "/feed", icon: Home },
@@ -522,7 +583,11 @@ export function AppShell({
         >
           <MaintenanceBanner />
           <AnnouncementBanner />
-          {children}
+          {/* Keyed by route so a remount runs the .route-enter fade on every page
+              swap; the banners sit outside the key so they never re-animate. */}
+          <div key={pathname} className="route-enter">
+            {children}
+          </div>
         </main>
 
         {right && (
@@ -578,6 +643,9 @@ function MobileTab({ item }: { item: NavItem }) {
   return (
     <Link
       to={item.to}
+      onClick={(e) => {
+        if (maybeHomeTap(item.to, active)) e.preventDefault();
+      }}
       className={cn(
         "relative flex min-h-[44px] min-w-[48px] flex-col items-center justify-center gap-1 rounded-xl px-2.5 py-1 text-[0.65rem] font-semibold transition-colors touch-manipulation",
         active ? "text-brand" : "text-muted-foreground",

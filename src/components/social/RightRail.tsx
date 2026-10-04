@@ -1,6 +1,6 @@
 import { useCurrentUserId } from "@/hooks/useCurrentUserId";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, memo } from "react";
 import { Search, TrendingUp, Radio, Plus, Check } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { UserBadge } from "@/components/social/UserBadge";
@@ -373,7 +373,11 @@ export function RailFooter() {
   );
 }
 
-export function DefaultRail() {
+// Memoized with no props: a route re-rendering its <AppShell right={<DefaultRail />}>
+// hands a fresh element of the same type with empty props, so memo short-circuits
+// the whole rail (search, trending, live spaces, suggestions) instead of refetching
+// and repainting it on every parent tick.
+export const DefaultRail = memo(function DefaultRail() {
   return (
     <div className="space-y-5">
       <SearchBox />
@@ -383,4 +387,4 @@ export function DefaultRail() {
       <RailFooter />
     </div>
   );
-}
+});
