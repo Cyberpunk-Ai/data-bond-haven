@@ -1481,19 +1481,25 @@ function PostCardBase({
           document.body,
         )}
 
-      {post.image_gradient && !mediaSrc && (
-        <div className="mt-4 overflow-hidden rounded-2xl">
-          <div
-            className={cn(
-              "aspect-[16/10] w-full bg-gradient-to-br transition-transform duration-700 ease-out hover:scale-[1.03]",
-              post.image_gradient,
-            )}
-          />
-        </div>
-      )}
+      {post.image_gradient &&
+        !mediaSrc &&
+        // A gradient class string that has no Tailwind color stop (`from-*` /
+        // `via-*` / `to-*`) still triggers `bg-gradient-to-br`, which paints
+        // transparent-to-transparent. That is the floating rectangle a stale
+        // row (or a preset we removed from Composer) leaves in the feed.
+        /\b(?:from|via|to)-/.test(post.image_gradient) && (
+          <div className="mt-4 overflow-hidden rounded-2xl">
+            <div
+              className={cn(
+                "aspect-[16/10] w-full bg-gradient-to-br transition-transform duration-700 ease-out hover:scale-[1.03]",
+                post.image_gradient,
+              )}
+            />
+          </div>
+        )}
 
       {/* Interactive Poll */}
-      {poll && (
+      {poll && poll.options && poll.options.length > 0 && (
         <div className="mt-4 rounded-2xl border border-border/80 bg-foreground/[0.03] p-4 space-y-2.5">
           {poll.question && (
             <p className="text-sm font-bold text-foreground mb-3">{poll.question}</p>

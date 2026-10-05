@@ -962,9 +962,9 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-2 sm:p-4 animate-in fade-in duration-200">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-lg p-2 sm:p-4 animate-in fade-in duration-300">
         <div
-          className="glass-panel relative flex flex-col h-[95dvh] sm:h-[90dvh] max-h-[750px] w-full max-w-2xl overflow-hidden rounded-2xl sm:rounded-3xl border border-border/80 bg-card/95 shadow-2xl"
+          className="glass-panel relative flex flex-col h-[95dvh] sm:h-[90dvh] max-h-[750px] w-full max-w-2xl overflow-hidden rounded-2xl sm:rounded-3xl border border-brand/25 bg-card/95 shadow-[0_0_60px_-15px_rgba(168,85,247,0.45),0_25px_50px_-12px_rgba(0,0,0,0.65)] animate-in fade-in zoom-in-95 duration-300"
           onClick={(e) => e.stopPropagation()}
         >
           {/*
@@ -1494,34 +1494,6 @@ function SpaceRoomModalContent({ space, onClose }: { space: Space; onClose: () =
               </div>
             )}
           </div>
-
-          {/* Storage honesty, for the host who is about to be offered a Record
-              button: a live broadcast writes no bytes at all — only a replay
-              they choose to keep costs storage, and that has a plan budget. */}
-          {!isReplay && isCurrentUserHost && (
-            <div className="mx-3 sm:mx-4 mt-2 flex items-center justify-between gap-2 rounded-xl bg-foreground/5 px-3 py-2 text-[11px] font-semibold text-muted-foreground">
-              <span className="flex min-w-0 items-center gap-1.5">
-                <Disc3
-                  className={cn(
-                    "h-3.5 w-3.5 shrink-0",
-                    isRecordingSpace ? "text-red-500" : "opacity-60",
-                  )}
-                />
-                <span className="truncate">
-                  {isRecordingSpace
-                    ? `${formatBytes(audio.recordingBytes)} of ${formatBytes(recordingCapBytes)} this take`
-                    : "Live only — broadcasting stores nothing"}
-                </span>
-              </span>
-              {canRecordSpace && storage ? (
-                <span className="shrink-0">
-                  {storage.replays} {storage.replays === 1 ? "replay" : "replays"} ·{" "}
-                  {formatBytes(storage.usedBytes)} of {formatBytes(storage.quotaBytes)}
-                </span>
-              ) : null}
-              {!canRecordSpace && <span className="shrink-0">Replays need an upgrade</span>}
-            </div>
-          )}
 
           {/* The mesh's audience budget, said out loud. A speaker's browser pays
               one live encoder and one uplink *per listener*, so a room can grow

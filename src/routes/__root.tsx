@@ -12,7 +12,7 @@ import { Toaster } from "@/components/ui/sonner";
 
 import appCss from "../styles.css?url";
 import { reportError } from "../lib/error-reporting";
-import { bootstrapTheme, themeColorFor } from "../lib/theme-state";
+import { bootstrapTheme, getThemeBootstrapScript, themeColorFor } from "../lib/theme-state";
 import { appConfig } from "../lib/config";
 import { OG_IMAGE_META } from "../lib/og-meta";
 import { ICON_LINKS } from "../lib/seo";
@@ -179,6 +179,12 @@ function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
+        {/* Runs before the stylesheet paints, so the first frame already
+            carries the accent stored on this device — not the violet that
+            <html> falls back to when the tokens are missing. Without it a
+            reload of an amber/emerald/rose choice flashes violet for one
+            frame until useTheme's effect re-runs. */}
+        <script dangerouslySetInnerHTML={{ __html: getThemeBootstrapScript() }} />
         <HeadContent />
       </head>
       <body>

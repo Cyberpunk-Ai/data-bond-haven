@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback } from "react";
 
 import { toCssHex } from "@/lib/oklch";
 import {
@@ -7,6 +7,7 @@ import {
   savePreferences,
   subscribePreferences,
 } from "@/lib/preferences-state";
+import { signedInProfileId } from "@/lib/remote-store";
 
 export type ThemeMode = "light" | "dark" | "system";
 export type ThemeAccent = "violet" | "amber" | "emerald" | "rose" | "indigo";
@@ -222,16 +223,30 @@ export function useTheme() {
   // then adopt the saved choice right after hydration.
   const [settings, setSettings] = useState<ThemeSettings>(() => ({ ...inMemoryTheme }));
 
-  useEffect(() => {
+  // Layout effect (not a plain effect): the ring around the selected accent
+  // and every other React-driven reflection of `settings` must be correct on
+  // the browser's FIRST painted frame. A plain useEffect runs after paint, so
+  // the picker would render at the DEFAULT (violet), then visibly jump to the
+  // user's stored accent. useLayoutEffect commits synchronously after mount
+  // and before paint, which is the entire point of this file. It cannot run
+  // on the server (no DOM), so fall back to useEffect there to keep SSR quiet.
+  const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
+  useIsomorphicLayoutEffect(() => {
     setSettings(getStoredThemeSettings());
   }, []);
 
   // The signed-in account's saved look wins over whatever this device cached,
-  // so the same person sees their theme on every device.
-  useEffect(() => {
+  // so the same person sees their theme on every device. Signed-out guests
+  // have no account copy to defer to — hydratePreferences marks them `ready`
+  // with the DEFAULTS, so without this guard the very first tick would
+  // overwrite this device's localStorage and reset their chosen accent/mode
+  // back to violet+light on every reload.
+  useIsomorphicLayoutEffect(() => {
     const adopt = () => {
       const { status } = getPreferencesStatus();
       if (status !== "ready") return;
+      if (!signedInProfileId()) return;
       const prefs = getPreferences();
       const next: ThemeSettings = {
         mode:
@@ -361,4 +376,53 @@ export function bootstrapTheme() {
   } catch (e) {
     console.error("Theme initial apply error:", e);
   }
+}
+
+/**
+ * A tiny, synchronous bootstrap script that runs in the <head>, before the
+ * stylesheet paints — so the first frame already wears the accent stored on
+ * this device, instead of the shipped violet default. Without it, a reload
+ * shows a beat of the wrong brand (violet) before `useTheme`'s effect writes
+ * the saved oklch tokens onto <html>. The palette table and the hex
+ * `theme-color` are inlined as JSON literals because this script must execute
+ * before any bundle is parsed; the single source of truth is still
+ * `ACCENT_PALETTES` above — the server reads it once at request time.
+ */
+export function getThemeBootstrapScript(): string {
+  const palettes: Record<string, Record<string, string>> = {};
+  const hexByAccent: Record<string, string> = {};
+  for (const key of Object.keys(ACCENT_PALETTES) as ThemeAccent[]) {
+    const p = ACCENT_PALETTES[key];
+    palettes[key] = {
+      brand: p.brand,
+      brandPink: p.brandPink,
+      brandOrange: p.brandOrange,
+      brandDark: p.brandDark,
+      brandPinkDark: p.brandPinkDark,
+      brandOrangeDark: p.brandOrangeDark,
+    };
+    hexByAccent[key] = toCssHex(p.brand) ?? DEFAULT_THEME_COLOR;
+  }
+  return [
+    "(function(){try{",
+    `var P=${JSON.stringify(palettes)};`,
+    `var H=${JSON.stringify(hexByAccent)};`,
+    `var k=${JSON.stringify(THEME_STORAGE_KEY)};`,
+    "var r=document.documentElement;",
+    "var raw;try{raw=localStorage.getItem(k);}catch(e){}",
+    "var p=raw?JSON.parse(raw):null;",
+    "p=p||{};",
+    "var dark=p.mode==='dark'||(p.mode==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);",
+    "if(dark){r.classList.add('dark');}else{r.classList.remove('dark');}",
+    "if(p.reduceMotion){r.classList.add('reduce-motion');}",
+    "if(p.largerText){r.style.fontSize='17.5px';}",
+    "var a=(p.accent&&P[p.accent])?p.accent:'violet';",
+    "var pal=P[a]||P.violet;",
+    "r.style.setProperty('--brand',dark?pal.brandDark:pal.brand);",
+    "r.style.setProperty('--brand-pink',dark?pal.brandPinkDark:pal.brandPink);",
+    "r.style.setProperty('--brand-orange',dark?pal.brandOrangeDark:pal.brandOrange);",
+    "var m=document.querySelector('meta[name=\\\"theme-color\\\"]');",
+    "if(m&&H[a])m.setAttribute('content',H[a]);",
+    "}catch(e){}})();",
+  ].join("");
 }

@@ -168,8 +168,10 @@ describe("every layer enforces the same tier numbers", () => {
     expect(modal).toContain("spaceRecordingAllowed(currentPlan)");
     expect(modal).toContain("canRecordSpace ? (");
     expect(modal).toContain("perRecordingCapBytes(currentPlan, appConfig.realtime.recordingMaxMb)");
-    // And it says the quiet part: broadcasting is not what costs storage.
-    expect(modal).toContain("Live only — broadcasting stores nothing");
+    // And the room stays quiet about it — no persistent "Live only — broadcasting
+    // stores nothing" or "Replays need an upgrade" caption under the header.
+    expect(modal).not.toContain("Live only — broadcasting stores nothing");
+    expect(modal).not.toContain("Replays need an upgrade");
     // The record control must be describable even when its label is hidden on a
     // narrow screen — and that label only shows at all if `xs` exists.
     expect(modal).toContain('aria-label="Upgrade to record Spaces and keep them as replays"');
