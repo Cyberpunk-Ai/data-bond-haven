@@ -12,7 +12,6 @@ import {
   terminateSpace,
 } from "@/lib/moderation.functions";
 import { cacheProfiles, currentUser, currentUserId, rowToProfile } from "@/lib/profile-service";
-import { deleteMyMedia } from "@/lib/media.functions";
 import { sanitizeReactionEmoji } from "@/lib/emojis";
 import { tipAnnouncement } from "@/lib/space-reactions";
 import { MAX_SPACE_CHAT_CHARS, lengthError, messageLengthError } from "@/lib/message-length";
@@ -445,21 +444,21 @@ export async function getPostById(id: string): Promise<Post | null> {
 }
 
 export async function deletePost(id: string) {
-  // Capture the media URL before the row goes away, so the bytes can be
-  // reclaimed too (plan §4.5) — otherwise a deleted post's image is retrievable
-  // forever.
-  const { data: existing } = await db.from("posts").select("media_url").eq("id", id).maybeSingle();
+  // The media URL is not read first any more: since 20261006000001 the
+  // durability contract is that uploaded bytes are never erased by a row
+  // delete, so there is nothing to reclaim here. The `media_objects` ledger
+  // keeps its ownership row so the bytes still resolve to a real owner if
+  // they are ever listed for moderation.
   const { error } = await db.from("posts").delete().eq("id", id);
   if (error) {
     // Surface the failure (e.g. RLS denial for a non-owner) instead of
     // reporting a delete that never happened.
     throw new Error(error.message || "Could not delete that post");
   }
-  // Best-effort storage cleanup; a failure here is reclaimed later by the
-  // nightly media GC, so it must not roll back the user's delete.
-  if (existing?.media_url) {
-    void deleteMyMedia({ data: { urls: [existing.media_url] } }).catch(() => {});
-  }
+  // Durability contract (see 20261006000001): deleting a post does NOT erase
+  // the underlying bytes. Any embed, saved link, or archive that still points
+  // at the media URL continues to resolve, and authenticated users cannot
+  // issue a storage DELETE at all (the RLS policy no longer grants it).
   emitRealtime("post:deleted", { id });
   return { ok: true };
 }
@@ -1117,16 +1116,13 @@ export async function createStory(input: {
 }
 
 export async function deleteStory(id: string) {
-  const { data: existing } = await db
-    .from("stories")
-    .select("media_url")
-    .eq("id", id)
-    .maybeSingle();
+  // Same durability contract as posts: the story row disappears, the bytes
+  // it referenced do not. `media-private` keeps the object owner-scoped so
+  // the retired media is unreadable by anyone but its uploader, and future
+  // moderation / reclaim flows can act on the ledger deliberately instead
+  // of an implicit erase on user action.
   const { error } = await db.from("stories").delete().eq("id", id);
   if (error) throw error;
-  if (existing?.media_url) {
-    void deleteMyMedia({ data: { urls: [existing.media_url] } }).catch(() => {});
-  }
   emitRealtime("story:deleted", { id });
   return { ok: true };
 }
@@ -1947,34 +1943,26 @@ export async function finalizeSpaceRecording(spaceId: string, recordingUrl: stri
   if (!recordingUrl || !recordingUrl.startsWith("/api/public/media/")) {
     throw new Error("The recording was not stored. Please try recording again.");
   }
-  // A room can be recorded more than once. The previous take stays referenced
-  // until the new URL is written, then its object is reclaimed: left alone it
-  // would keep counting against the host's replay budget in `media_objects`
-  // while nothing any longer points at it.
-  const { data: existing } = await db
-    .from("spaces")
-    .select("recording_url")
-    .eq("id", spaceId)
-    .eq("host_id", me())
-    .maybeSingle();
-  const previous = existing?.recording_url;
+  // A room can be recorded more than once. The previous take's bytes STAY in
+  // storage (durability contract, 20261006000001); only `spaces.recording_url`
+  // re-points. Nothing is reclaimed here, and authenticated users no longer
+  // hold a storage.objects DELETE policy for any bucket, so a client cannot
+  // erase the older object even if it wanted to.
   const { error } = await db
     .from("spaces")
     .update({ is_recording: false, recorded: true, recording_url: recordingUrl })
     .eq("id", spaceId)
     .eq("host_id", me());
   if (error) throw error;
-  if (previous && previous !== recordingUrl) {
-    void deleteMyMedia({ data: { urls: [previous] } }).catch(() => {});
-  }
   emitRealtime("space:recording", { spaceId, recording: false, recordingUrl });
   return { ok: true };
 }
 
-/** Host-only: delete a saved replay. The row is read first (host-scoped) so we
- * know which object to reclaim before clearing it; `deleteMyMedia` verifies the
- * storage object's `media_objects` ownership row against the caller, and a
- * failure there is non-fatal — the nightly media GC sweeps the orphan. */
+/** Host-only: drop the `recording_url` link. The bytes stay in the bucket by
+ * durability contract (20261006000001): authenticated users hold no DELETE
+ * policy on storage.objects, so a client cannot erase them, and any archive
+ * or saved link that still resolves the old URL continues to work. The plan
+ * budget is freed by resetting `recording_bytes` on the row. */
 export async function deleteSpaceRecording(spaceId: string) {
   const { data: existing, error: readErr } = await db
     .from("spaces")
@@ -1991,17 +1979,14 @@ export async function deleteSpaceRecording(spaceId: string) {
       recorded: false,
       is_recording: false,
       replay_count: 0,
-      // ...and give the bytes back. The plan's replay budget is counted against
-      // `recording_bytes` in the database, so a cleared replay that kept its
-      // figure would charge the host for audio nobody can any longer play.
+      // ...and free the plan budget. The bytes are not erased, but the
+      // accounting figure that gates the next recording is reset, so a
+      // host who deletes their replay can immediately record another.
       recording_bytes: 0,
     })
     .eq("id", spaceId)
     .eq("host_id", me());
   if (error) throw error;
-  if (existing.recording_url) {
-    void deleteMyMedia({ data: { urls: [existing.recording_url] } }).catch(() => {});
-  }
   emitRealtime("space:recording-deleted", { spaceId });
   return { ok: true };
 }
@@ -2060,21 +2045,18 @@ export async function getConversations(): Promise<Conversation[]> {
   if (!isDbId(userId)) return [];
   try {
     // The `hidden_for` filter drops threads the viewer chose "Delete chat" on.
-    // If PostgREST hasn't got the column yet (schema-cache lag right after a
-    // migration) the query returns an error and `data` comes back null — which
-    // would silently empty the whole inbox. Build a fresh query per attempt (the
-    // supabase builder is mutable, so reusing one keeps the failed filter) and
-    // fall back to the unfiltered read so messaging never hard-depends on it.
-    const buildConv = (withHide: boolean) => {
-      const q = db
-        .from("conversations")
-        .select("*")
-        .or(`user_a.eq.${userId},user_b.eq.${userId}`)
-        .order("updated_at", { ascending: false });
-      return withHide ? q.not("hidden_for", "cs", [userId]) : q;
-    };
-    let res = await buildConv(true);
-    if (res.error) res = await buildConv(false);
+    // Since 20261006000001 the exclusion lives in the RLS SELECT policy for
+    // `conversations`, so the wire query no longer carries a `not.cs.<uuid>`
+    // filter (which supabase-js encoded without the `{}` array wrapper and
+    // PostgREST rejected with a 400). The client-side `.filter(...)` below is
+    // the belt for a schema-cache-lag read that predates the migration.
+    const { data: convData, error: convErr } = await db
+      .from("conversations")
+      .select("*")
+      .or(`user_a.eq.${userId},user_b.eq.${userId}`)
+      .order("updated_at", { ascending: false });
+    if (convErr) throw convErr;
+    const res = { data: convData };
     // Whether the filtered or the no-filter fallback read served the list, drop any
     // thread the viewer hid. A hidden chat must never light the badge; the
     // fallback path (schema-cache lag) otherwise returns hidden rows and their
@@ -2084,11 +2066,14 @@ export async function getConversations(): Promise<Conversation[]> {
       (r) => !Array.isArray(r.hidden_for) || !r.hidden_for.includes(userId),
     );
     if (rows.length > 0) {
-      // Hydrating the people behind each thread and tallying unread messages are
-      // independent, so run them concurrently — this round-trip gates how fast
-      // the conversation list paints on open.
-      const buildUnread = (withHide: boolean) => {
-        const q = db
+      // Hydrating the people behind each thread, tallying unread messages, and
+      // reading last-call metadata are independent, so run them concurrently —
+      // this round-trip gates how fast the conversation list paints on open.
+      // `messages.hidden_for` is excluded by the SELECT policy added in
+      // 20261006000001, so the unread tally is RLS-scoped, not query-scoped.
+      const [, unreadRes, callsRes] = await Promise.all([
+        hydrateAuthors(rows.flatMap((r) => [r.user_a, r.user_b])),
+        db
           .from("messages")
           .select("conversation_id")
           .is("read_at", null)
@@ -2096,16 +2081,7 @@ export async function getConversations(): Promise<Conversation[]> {
           .in(
             "conversation_id",
             rows.map((r) => r.id),
-          );
-        return withHide ? q.not("hidden_for", "cs", [userId]) : q;
-      };
-      const runUnread = async () => {
-        const first = await buildUnread(true);
-        return first.error ? buildUnread(false) : first;
-      };
-      const [, unreadRes, callsRes] = await Promise.all([
-        hydrateAuthors(rows.flatMap((r) => [r.user_a, r.user_b])),
-        runUnread(),
+          ),
         // Last finished call per relationship — the inbox rail shows a phone
         // glyph when a call beat the last message. Calls live in `calls`, never
         // in `messages`, so the conversation row cannot stamp them itself. RLS
@@ -2183,18 +2159,18 @@ export async function getMessagesPage(
   if (!isDbId(conversationId)) return { messages: [], hasMore: false };
   const myId = me();
   try {
-    const build = (withHide: boolean) => {
-      let q = db
-        .from("messages")
-        .select("*")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: false })
-        .limit(limit + 1);
-      if (opts.before) q = q.lt("created_at", opts.before);
-      return withHide && isDbId(myId) ? q.not("hidden_for", "cs", [myId]) : q;
-    };
-    let res = await build(true);
-    if (res.error) res = await build(false);
+    // RLS (`messages participant read`, see 20261006000001) now excludes both
+    // a per-message tombstone AND any thread the viewer hid, so no `not.cs`
+    // filter needs to leave the browser — that filter is what used to 400
+    // on every thread open.
+    let q = db
+      .from("messages")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: false })
+      .limit(limit + 1);
+    if (opts.before) q = q.lt("created_at", opts.before);
+    const res = await q;
     const rows = (res.data ?? []) as any[];
     const hasMore = rows.length > limit;
     const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
@@ -2532,9 +2508,9 @@ export async function deleteMessage(messageId: string, scope: "me" | "everyone" 
   if (!withinEditWindow(existing.created_at)) throw new Error("Delete window closed");
   const { error } = await db.from("messages").delete().eq("id", messageId).eq("sender_id", myId);
   if (error) throw error;
-  if (existing?.media_url) {
-    void deleteMyMedia({ data: { urls: [existing.media_url] } }).catch(() => {});
-  }
+  // Durability contract (20261006000001): the attachment's bytes are NOT
+  // erased. A recipient who saved or embedded the URL keeps working access,
+  // and no authenticated user holds a storage.objects DELETE policy at all.
   emitRealtime("message:deleted", { id: messageId });
   return { id: messageId, scope: "everyone" as const };
 }

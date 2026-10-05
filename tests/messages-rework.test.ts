@@ -201,8 +201,15 @@ describe("getMessagesPage pages a thread newest-first and returns ascending", ()
     expect(fn).toContain('q.lt("created_at", opts.before)');
   });
 
-  it("keeps the hidden_for resilience by rebuilding without the filter", () => {
-    expect(fn).toContain("if (res.error) res = await build(false);");
+  it("no longer sends a client-side hidden_for filter — the exclusion is in RLS", () => {
+    // 20261006000001 moved the check into `messages participant read`. The
+    // old `q.not("hidden_for", "cs", [myId])` was the 400 (supabase-js
+    // stringifies a single-element array without the `{}` wrapper PostgREST
+    // needs), and the `build(true)/build(false)` retry was only papering
+    // over that failure — every thread open paid a bad request first.
+    expect(fn).not.toMatch(/\.not\(\s*"hidden_for"\s*,\s*"cs"\s*,\s*\[/);
+    expect(fn).not.toContain("build(false)");
+    expect(fn).not.toContain("build(true)");
   });
 });
 
