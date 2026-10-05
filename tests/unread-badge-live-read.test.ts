@@ -74,8 +74,11 @@ describe("the badge is a per-conversation map, not one global number", () => {
       "export function setConversationUnread(conversationId: string, count: number)",
       "export function bumpConversationUnread",
     );
-    expect(setter).toContain("if (n === 0) unreadByConversation.delete(conversationId);");
+    expect(setter).toContain("unreadByConversation.delete(conversationId);");
+    expect(setter).toContain("readClearedAt.set(conversationId, Date.now());");
     expect(setter).toContain("localTouch.set(conversationId, Date.now());");
+    // A genuine positive count clears the "already read" latch so new mail counts.
+    expect(setter).toContain("readClearedAt.delete(conversationId);");
   });
 });
 
@@ -119,6 +122,19 @@ describe("a stale database re-count can never resurrect a cleared badge", () => 
     const adoptFromSnapshot = between(sync, "for (const c of conversations ?? [])", "Re-apply");
     expect(adoptFromSnapshot).toContain("> fetchedAt) continue;");
     expect(adoptFromSnapshot).not.toContain("next.delete");
+  });
+
+  it("a re-count cannot regenerate a cleared badge unless the thread really got new mail", () => {
+    // The `localTouch` guard only protects snapshots that BEGAN before the read.
+    // A later re-count of stale data (replication / in-flight lag) slips past it,
+    // so a thread read this session is ALSO latched in `readClearedAt`: a nonzero
+    // is adopted only when the conversation's `updated_at` — which advances on an
+    // inbound insert but NOT on a read UPDATE — is newer than the clear moment.
+    const store2 = src("lib/unread-state.ts");
+    expect(store2).toContain("const readClearedAt = new Map<string, number>();");
+    const sync = between(store2, "export function syncFromConversations(", "let refreshSeq = 0;");
+    expect(sync).toContain("const clearedAt = readClearedAt.get(id);");
+    expect(sync).toContain("new Date(c.updated_at).getTime() > clearedAt");
   });
 
   it("the reconcile publishes — the badge can't lag the map it just rebuilt", () => {

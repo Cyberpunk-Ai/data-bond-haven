@@ -37,6 +37,16 @@ const unreadByConversation = new Map<string, number>();
 // so a database snapshot taken before that moment can never overwrite it back.
 const localTouch = new Map<string, number>();
 
+// The moment (ms) the viewer explicitly READ a conversation this session, i.e.
+// its local count was driven to 0. A conversation's inbox `updated_at` advances
+// ONLY when a new message arrives (the after-insert trigger stamps the row; a
+// read-receipt UPDATE never moves it). So while a thread is latched here, a
+// re-count that still reports unread for it WITHOUT a newer `updated_at` is a
+// stale snapshot of messages already read — the "counter regenerates after I
+// read them" bug — and must be ignored. A real inbound bump (a positive set)
+// clears the latch, and a full reload starts fresh from the database truth.
+const readClearedAt = new Map<string, number>();
+
 // The conversation whose thread is open on screen right now. While it is set,
 // an incoming message in it is marked read the moment it lands (useThread's
 // ingest calls markThreadRead), so the badge must not count it — otherwise a
@@ -90,8 +100,14 @@ export function clearAllUnreadNotifications() {
 export function setConversationUnread(conversationId: string, count: number) {
   if (!conversationId) return;
   const n = Math.max(0, count);
-  if (n === 0) unreadByConversation.delete(conversationId);
-  else unreadByConversation.set(conversationId, n);
+  if (n === 0) {
+    unreadByConversation.delete(conversationId);
+    readClearedAt.set(conversationId, Date.now());
+  } else {
+    unreadByConversation.set(conversationId, n);
+    // A genuine count (an inbound bump) supersedes the "already read" latch.
+    readClearedAt.delete(conversationId);
+  }
   localTouch.set(conversationId, Date.now());
   recomputeMessagesTotal();
   notify();
@@ -116,18 +132,29 @@ export function bumpConversationUnread(conversationId: string, delta = 1) {
  * put its unread back — the "still shows 4 after I read them all" bug.
  */
 export function syncFromConversations(
-  conversations: Array<{ id: string; unread?: number | null }>,
+  conversations: Array<{ id: string; unread?: number | null; updated_at?: string }>,
   fetchedAt = 0,
 ) {
   const next = new Map<string, number>();
   for (const c of conversations ?? []) {
     const id = String(c.id);
     const u = c.unread || 0;
+    if (u <= 0) continue;
     // Touched after the snapshot began → already correct locally (zeroed on read,
     // or bumped by a live arrival). Ignore this stale row; the loop below re-adds
     // it only if the local value is a positive count still held in the map.
     if ((localTouch.get(id) ?? 0) > fetchedAt) continue;
-    if (u > 0) next.set(id, u);
+    // Read this session: only a NEWER conversation activity (an actual inbound
+    // message, which is the sole thing that advances `updated_at`) may bring the
+    // badge back — otherwise this unread is a stale snapshot of what we cleared.
+    const clearedAt = readClearedAt.get(id);
+    if (
+      clearedAt !== undefined &&
+      !(c.updated_at && new Date(c.updated_at).getTime() > clearedAt)
+    ) {
+      continue;
+    }
+    next.set(id, u);
   }
   // Re-apply any locally-touched thread the snapshot did not carry at all (a
   // brand-new inbound bump) as long as its local count is still positive.
