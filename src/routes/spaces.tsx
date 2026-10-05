@@ -118,7 +118,7 @@ function SpaceCard({
   isReminded: boolean;
   onDeleteRecording: (space: Space) => void;
 }) {
-  const { profile: hostProfile } = useProfile(space.host_id);
+  const { profile: hostProfile, loading: hostLoading } = useProfile(space.host_id);
   // Resolve the host's real name/avatar instead of showing the raw UUID that an
   // uncached getProfile() fallback returns for a fresh visitor.
   const host = hostProfile ?? getProfile(space.host_id);
@@ -180,26 +180,45 @@ function SpaceCard({
         <h3 className="mt-4 text-xl font-bold leading-snug">{space.title}</h3>
 
         <div className="mt-4 flex items-center gap-3">
-          <Link
-            to="/profile"
-            search={{ id: host.id, user: host.username }}
-            className="shrink-0 transition-transform hover:scale-105 active:scale-95"
-          >
-            <Avatar name={host.display_name} src={host.avatar_url} className="h-10 w-10 text-xs" />
-          </Link>
-          <div className="min-w-0">
-            <div className="flex items-center gap-1 truncate">
+          {hostLoading && !hostProfile ? (
+            // A host we have not met yet: paint a calm skeleton rather than the
+            // raw-UUID pending profile, so scrolling between many different
+            // people's rooms settles in instead of flashing ids then swapping.
+            <>
+              <Skeleton className="h-10 w-10 shrink-0 rounded-full" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <Skeleton className="h-3.5 w-32 rounded-md" />
+                <Skeleton className="h-3 w-12 rounded-md" />
+              </div>
+            </>
+          ) : (
+            <>
               <Link
                 to="/profile"
                 search={{ id: host.id, user: host.username }}
-                className="truncate text-sm font-bold hover:text-brand hover:underline transition-colors"
+                className="shrink-0 transition-transform hover:scale-105 active:scale-95"
               >
-                {host.display_name}
+                <Avatar
+                  name={host.display_name}
+                  src={host.avatar_url}
+                  className="h-10 w-10 text-xs"
+                />
               </Link>
-              <UserBadge plan={host.plan} verified={host.verified} size="xs" />
-            </div>
-            <p className="text-xs text-muted-foreground">Host</p>
-          </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1 truncate">
+                  <Link
+                    to="/profile"
+                    search={{ id: host.id, user: host.username }}
+                    className="truncate text-sm font-bold hover:text-brand hover:underline transition-colors"
+                  >
+                    {host.display_name}
+                  </Link>
+                  <UserBadge plan={host.plan} verified={host.verified} size="xs" />
+                </div>
+                <p className="text-xs text-muted-foreground">Host</p>
+              </div>
+            </>
+          )}
           <div className="ml-auto flex -space-x-2">
             {guests.map((g, idx) => (
               <Link

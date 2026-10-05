@@ -127,6 +127,11 @@ function ExplorePage() {
     return cached;
   });
   const [topicList, setTopicList] = useState<Topic[]>([]);
+  // Topics/creators arrive asynchronously; these drive a calm skeleton so
+  // shifting between the tabs (and the users behind them) settles in rather
+  // than flashing an empty grid before the fetch lands.
+  const [topicsLoading, setTopicsLoading] = useState(true);
+  const [peopleLoading, setPeopleLoading] = useState(true);
   // Topics paging: how many exist in total and whether the next page is loading.
   const [topicsTotal, setTopicsTotal] = useState(0);
   const [loadingMoreTopics, setLoadingMoreTopics] = useState(false);
@@ -162,6 +167,7 @@ function ExplorePage() {
   // load ONE chunk; "Load more creators" walks the directory from here.
   function loadPeople(isActive?: () => boolean) {
     const ok = () => !isActive || isActive();
+    setPeopleLoading(true);
     const apply = (profiles: Profile[]) => {
       if (!ok()) return;
       setMatchedPeople(profiles.filter((p) => p.id && p.id !== currentUser.id));
@@ -169,21 +175,32 @@ function ExplorePage() {
       setPeopleExhausted(false);
       peopleWalkRef.current = 0;
     };
-    const fallback = () =>
-      getCreatorsPage({ limit: EXPLORE_PEOPLE_CHUNK * 2 })
-        .then((profiles) => profiles.length > 0 && apply(profiles))
-        .catch(() => {});
-    if (currentUser.id && currentUser.id !== "guest") {
-      getWhoToFollow({ data: { limit: EXPLORE_PEOPLE_CHUNK * 2 } })
-        .then((res) => {
-          const list = ((res?.profiles ?? []) as Profile[]).filter((p) => p?.id);
-          if (list.length) apply(list);
-          else fallback();
-        })
-        .catch(fallback);
-      return;
-    }
-    fallback();
+    const clear = () => {
+      if (ok()) setPeopleLoading(false);
+    };
+    const fromDirectory = () =>
+      getCreatorsPage({ limit: EXPLORE_PEOPLE_CHUNK * 2 }).then((profiles) => {
+        if (ok() && profiles.length > 0) apply(profiles);
+      });
+    // Personalised ranker for signed-in visitors, directory for guests; either
+    // way the terminal `finally` clears the skeleton, so a failure can never
+    // strand a loading state.
+    const chain =
+      currentUser.id && currentUser.id !== "guest"
+        ? getWhoToFollow({ data: { limit: EXPLORE_PEOPLE_CHUNK * 2 } })
+            .then((res) => {
+              const list = ((res?.profiles ?? []) as Profile[]).filter((p) => p?.id);
+              if (list.length) {
+                if (ok()) apply(list);
+                return;
+              }
+              return fromDirectory();
+            })
+            .catch(fromDirectory)
+        : fromDirectory();
+    Promise.resolve(chain)
+      .catch(() => {})
+      .finally(clear);
   }
 
   // Walks the directory one small page at a time, skipping rows already in the
@@ -233,7 +250,8 @@ function ExplorePage() {
           setTopicsTotal(res.total ?? res.topics.length);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setTopicsLoading(false));
   }, []);
 
   // Reveal the next page of topics and append it, deduping by name in case the
@@ -526,31 +544,37 @@ function ExplorePage() {
             </div>
 
             <div className="grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-              {(filter === "Top" ? topicList.slice(0, 3) : topicList).map((t, i) => (
-                <button
-                  key={t.name}
-                  onClick={() => handleSelectTopic(t.name)}
-                  style={{ animationDelay: `${i * 50}ms` }}
-                  className="group animate-in fade-in slide-in-from-bottom-3 relative overflow-hidden rounded-3xl p-5 text-left shadow-soft duration-700 fill-mode-both transition-all hover:-translate-y-1 hover:shadow-lift cursor-pointer"
-                >
-                  <span
-                    className={cn(
-                      "absolute inset-0 bg-gradient-to-br transition-transform duration-700 group-hover:scale-110",
-                      t.gradient || "from-violet-600 to-indigo-800",
-                    )}
-                  />
-                  <span className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
-                  <span className="relative block">
-                    <span className="flex items-center justify-between">
-                      <span className="text-lg font-bold text-white tracking-tight">{t.name}</span>
-                      <ArrowUpRight className="h-4 w-4 text-white/70 group-hover:text-white group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                    </span>
-                    <span className="block text-xs font-medium text-white/80 mt-1">
-                      {t.posts} active posts
-                    </span>
-                  </span>
-                </button>
-              ))}
+              {topicsLoading && topicList.length === 0
+                ? [1, 2, 3].map((n) => (
+                    <div key={n} className="animate-pulse rounded-3xl bg-foreground/10 h-[104px]" />
+                  ))
+                : (filter === "Top" ? topicList.slice(0, 3) : topicList).map((t, i) => (
+                    <button
+                      key={t.name}
+                      onClick={() => handleSelectTopic(t.name)}
+                      style={{ animationDelay: `${i * 50}ms` }}
+                      className="group animate-in fade-in slide-in-from-bottom-3 relative overflow-hidden rounded-3xl p-5 text-left shadow-soft duration-700 fill-mode-both transition-all hover:-translate-y-1 hover:shadow-lift cursor-pointer"
+                    >
+                      <span
+                        className={cn(
+                          "absolute inset-0 bg-gradient-to-br transition-transform duration-700 group-hover:scale-110",
+                          t.gradient || "from-violet-600 to-indigo-800",
+                        )}
+                      />
+                      <span className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
+                      <span className="relative block">
+                        <span className="flex items-center justify-between">
+                          <span className="text-lg font-bold text-white tracking-tight">
+                            {t.name}
+                          </span>
+                          <ArrowUpRight className="h-4 w-4 text-white/70 group-hover:text-white group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                        </span>
+                        <span className="block text-xs font-medium text-white/80 mt-1">
+                          {t.posts} active posts
+                        </span>
+                      </span>
+                    </button>
+                  ))}
             </div>
 
             {/* Topics tab pages through the trending set; Top keeps the 3-preview. */}
@@ -594,7 +618,7 @@ function ExplorePage() {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              {loading && filteredCreators.length === 0 ? (
+              {(loading || peopleLoading) && filteredCreators.length === 0 ? (
                 [1, 2, 3, 4].map((n) => (
                   <div key={n} className="glass-panel animate-pulse rounded-3xl p-5 h-36" />
                 ))

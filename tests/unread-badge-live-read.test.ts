@@ -106,6 +106,21 @@ describe("a stale database re-count can never resurrect a cleared badge", () => 
     expect(refresh).toContain("syncFromConversations(convs, fetchedAt)");
   });
 
+  it("guards the just-read thread in the SNAPSHOT loop, not a map walk", () => {
+    // Reading a thread DELETES it from the map (a zero is stored as an absence),
+    // so protection cannot live in a loop over `unreadByConversation` — it would
+    // skip the absent id and the older snapshot would put its unread back
+    // ("still shows 4 after I read them all"). The guard must `continue` inside
+    // the snapshot-adoption loop, consulting `localTouch` directly.
+    const sync = between(store, "export function syncFromConversations(", "let refreshSeq = 0;");
+    expect(sync).toContain("if ((localTouch.get(id) ?? 0) > fetchedAt) continue;");
+    // The map walk that remained only re-applies positive local counts, so it
+    // can never resurrect a zeroed (absent) thread.
+    const adoptFromSnapshot = between(sync, "for (const c of conversations ?? [])", "Re-apply");
+    expect(adoptFromSnapshot).toContain("> fetchedAt) continue;");
+    expect(adoptFromSnapshot).not.toContain("next.delete");
+  });
+
   it("the reconcile publishes — the badge can't lag the map it just rebuilt", () => {
     // The messages route calls syncFromConversations() directly and only follows
     // it with setConversationUnread (which notifies) when the opened thread had

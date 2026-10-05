@@ -109,8 +109,11 @@ export function bumpConversationUnread(conversationId: string, delta = 1) {
  * `fetchedAt` is the moment the read BEGAN. Any conversation touched locally
  * after that instant is already at its true (lower) value — the snapshot we just
  * received was taken before you opened/read it, so trusting the snapshot would
- * resurrect a badge you had already cleared. Those threads keep their local
- * count; everything else adopts the database number.
+ * resurrect a badge you had already cleared. The guard consults `localTouch`
+ * directly while adopting the snapshot, NOT by walking the map: reading a thread
+ * DELETES it from `unreadByConversation` (a zero count is stored as an absence),
+ * so a map walk would skip the just-read id entirely and let the older snapshot
+ * put its unread back — the "still shows 4 after I read them all" bug.
  */
 export function syncFromConversations(
   conversations: Array<{ id: string; unread?: number | null }>,
@@ -120,13 +123,16 @@ export function syncFromConversations(
   for (const c of conversations ?? []) {
     const id = String(c.id);
     const u = c.unread || 0;
+    // Touched after the snapshot began → already correct locally (zeroed on read,
+    // or bumped by a live arrival). Ignore this stale row; the loop below re-adds
+    // it only if the local value is a positive count still held in the map.
+    if ((localTouch.get(id) ?? 0) > fetchedAt) continue;
     if (u > 0) next.set(id, u);
   }
+  // Re-apply any locally-touched thread the snapshot did not carry at all (a
+  // brand-new inbound bump) as long as its local count is still positive.
   for (const [id, localCount] of unreadByConversation) {
-    if ((localTouch.get(id) ?? 0) > fetchedAt) {
-      if (localCount > 0) next.set(id, localCount);
-      else next.delete(id);
-    }
+    if ((localTouch.get(id) ?? 0) > fetchedAt && localCount > 0) next.set(id, localCount);
   }
   unreadByConversation.clear();
   for (const [id, u] of next) unreadByConversation.set(id, u);
