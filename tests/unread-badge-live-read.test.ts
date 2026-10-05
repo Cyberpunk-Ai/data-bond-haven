@@ -146,6 +146,43 @@ describe("a stale database re-count can never resurrect a cleared badge", () => 
     expect(sync).toContain("recomputeMessagesTotal();");
     expect(sync).toContain("notify();");
   });
+
+  it("publishes the map as a subscribable snapshot so the rail shares one truth", () => {
+    // The inbox rail rendered its OWN copy of getConversations().unread, which a
+    // reload re-adopted and regenerated the badge on a thread you had already
+    // read (the nav was safe because it reads the latched map). The fix exposes
+    // that same map for subscription: notify() re-publishes it, and a hook hands
+    // React a stable snapshot reference that only changes when contents change.
+    expect(store).toContain("export function useConversationUnread(): ReadonlyMap<string, number>");
+    expect(store).toContain("useSyncExternalStore(");
+    const publish = between(store, "function publishConversationUnread()", "function notify()");
+    expect(publish).toContain("conversationSnapshot = new Map(unreadByConversation);");
+    // Reference is kept when nothing moved, so a notification-only bump is a no-op.
+    expect(publish).toContain("if (same) return;");
+    expect(between(store, "function notify()", "function recomputeMessagesTotal")).toContain(
+      "publishConversationUnread();",
+    );
+  });
+});
+
+describe("the inbox rail reads the authoritative map, not its own re-adopted count", () => {
+  const route = src("routes/messages.tsx");
+
+  it("subscribes to the per-conversation snapshot", () => {
+    expect(route).toContain("useConversationUnread");
+    expect(route).toMatch(/useConversationUnread\(\)/);
+  });
+
+  it("overlays the store count onto every real rail row before rendering", () => {
+    const overlay = between(route, "const railConversations = useMemo(", "const isTyping");
+    expect(overlay).toContain("railUnread.get(c.id) ?? 0");
+    // Only brand-new local `c_` drafts keep their own value; every persisted
+    // conversation takes the latched store number.
+    expect(overlay).toContain('c.id.startsWith("c_") ? c');
+    // And the rail is handed the overlaid list, not the raw local state.
+    expect(route).toContain("conversations={railConversations}");
+    expect(route).not.toContain("conversations={conversations}");
+  });
 });
 
 describe("the store does not count a message you are already reading", () => {

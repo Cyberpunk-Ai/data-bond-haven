@@ -32,6 +32,7 @@ import {
   setActiveMessagesConversation,
   setConversationUnread,
   syncFromConversations,
+  useConversationUnread,
 } from "@/lib/unread-state";
 import { useAuth } from "@/lib/auth-state";
 import { useRealtime } from "@/lib/realtime";
@@ -723,6 +724,21 @@ function MessagesPage() {
       .sort((a, b) => (a.display_name || "").localeCompare(b.display_name || ""));
   }, [conversations, forwardQuery]);
 
+  // The rail's per-row badge must be the SAME latched count the nav uses. The
+  // local `conversations` copy still drives order/preview/presence, but its
+  // `unread` is a raw getConversations number that every reload re-adopts — which
+  // regenerated the badge on a thread you had already read. Overlay the
+  // authoritative store map (real conversation ids only; brand-new `c_` drafts
+  // are the viewer's own and have no inbound unread to preserve).
+  const railUnread = useConversationUnread();
+  const railConversations = useMemo(
+    () =>
+      conversations.map((c) =>
+        c.id.startsWith("c_") ? c : { ...c, unread: railUnread.get(c.id) ?? 0 },
+      ),
+    [conversations, railUnread],
+  );
+
   const isTyping = !!activeId && !!typing.typingIn[activeId];
 
   return (
@@ -730,7 +746,7 @@ function MessagesPage() {
       <div className="glass-panel grid h-[calc(100dvh-8.5rem)] grid-cols-1 overflow-hidden rounded-3xl shadow-soft lg:h-[calc(100dvh-3rem)] lg:grid-cols-[20rem_1fr]">
         <ConversationList
           className={cn("flex-col", mobileOpen ? "hidden lg:flex" : "flex")}
-          conversations={conversations}
+          conversations={railConversations}
           profiles={profiles}
           presence={presence}
           activeId={activeId}
