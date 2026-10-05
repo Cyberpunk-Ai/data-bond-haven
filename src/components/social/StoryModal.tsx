@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "@tanstack/react-router";
 import {
   X,
@@ -268,6 +269,9 @@ export function StoryModal({
   }, [isOpen, currentIndex, stories.length, replyEmojiOpen]);
 
   if (!isOpen || !currentStory || !author) return null;
+  // SSR: there is no <body> to portal into on the server, and the viewer is a
+  // client-only surface anyway (it opens on a click).
+  if (typeof document === "undefined") return null;
 
   function handleNext() {
     if (currentIndex < stories.length - 1) {
@@ -347,7 +351,7 @@ export function StoryModal({
 
   const gradientClass = currentStory.gradient || "from-purple-950 via-indigo-900 to-slate-900";
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-2 sm:p-4 animate-in fade-in duration-200">
       {/* Prev / Next desktop chevron arrows */}
       {currentIndex > 0 && (
@@ -682,6 +686,7 @@ export function StoryModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
