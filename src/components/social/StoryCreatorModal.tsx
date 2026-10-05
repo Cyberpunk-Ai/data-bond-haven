@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   Sparkles,
@@ -109,6 +110,7 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
+  if (typeof document === "undefined") return null;
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -187,7 +189,7 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
     }
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto animate-in fade-in duration-200">
       <div className="relative flex flex-col md:flex-row w-full max-w-4xl max-h-[95dvh] md:max-h-[90dvh] overflow-hidden rounded-2xl sm:rounded-3xl bg-card border border-border shadow-lift">
         {/* Left Side: Story Controls & Customizer */}
@@ -719,6 +721,7 @@ export function StoryCreatorModal({ isOpen, onClose, onStoryCreated }: StoryCrea
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

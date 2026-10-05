@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Search, X } from "lucide-react";
 import { AppShell } from "@/components/social/AppShell";
 import { Avatar } from "@/components/social/Avatar";
@@ -991,38 +992,40 @@ function MessagesPage() {
       )}
 
       {/* Full-resolution attachment lightbox. */}
-      {lightboxImage && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4 backdrop-blur-md motion-safe:animate-in motion-safe:fade-in"
-          onClick={() => setLightboxImage(null)}
-        >
-          <div className="relative flex max-h-[90dvh] max-w-4xl flex-col items-center">
-            <button
-              type="button"
-              onClick={() => setLightboxImage(null)}
-              aria-label="Close"
-              className="absolute -top-12 right-0 cursor-pointer rounded-full bg-white/10 p-2 text-white transition-colors hover:bg-white/20"
-            >
-              <X className="h-6 w-6" />
-            </button>
-            <AuthorizedImg
-              src={lightboxImage}
-              alt="Full Preview"
-              className="max-h-[80dvh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            />
-            <div className="mt-4 flex items-center gap-3">
-              <MediaDownloadButton
-                url={lightboxImage}
-                name={fileNameFromUrl(lightboxImage) ?? "photo.jpg"}
-                label="Download Full Resolution"
-                title="Download full resolution"
-                className="rounded-full bg-white/20 px-5 py-2 text-xs text-white hover:bg-white/30 sm:text-sm"
+      {lightboxImage &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4 backdrop-blur-md motion-safe:animate-in motion-safe:fade-in"
+            onClick={() => setLightboxImage(null)}
+          >
+            <div className="relative flex max-h-[90dvh] max-w-4xl flex-col items-center">
+              <button
+                type="button"
+                onClick={() => setLightboxImage(null)}
+                aria-label="Close"
+                className="absolute -top-12 right-0 cursor-pointer rounded-full bg-white/10 p-2 text-white transition-colors hover:bg-white/20"
+              >
+                <X className="h-6 w-6" />
+              </button>
+              <AuthorizedImg
+                src={lightboxImage}
+                alt="Full Preview"
+                className="max-h-[80dvh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
               />
+              <div className="mt-4 flex items-center gap-3">
+                <MediaDownloadButton
+                  url={lightboxImage}
+                  name={fileNameFromUrl(lightboxImage) ?? "photo.jpg"}
+                  label="Download Full Resolution"
+                  title="Download full resolution"
+                  className="rounded-full bg-white/20 px-5 py-2 text-xs text-white hover:bg-white/30 sm:text-sm"
+                />
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </AppShell>
   );
 }

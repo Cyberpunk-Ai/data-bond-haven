@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 
 import {
   EMOJI_CATEGORIES,
@@ -113,7 +114,15 @@ export function EmojiPicker({
   // category grid here would put fifty unrelated faces under "No emoji matches".
   const grid = searching ? results : (category?.emojis ?? []);
 
-  return (
+  // A `position: fixed` panel with viewport coordinates is only positioned
+  // against the viewport when nothing between it and `<body>` establishes a
+  // containing block. The composer sits inside a `backdrop-filter` glass panel
+  // and a transformed route wrapper, both of which trap `fixed` — the picker
+  // would open at the wrong place (or nowhere). So when the caller hands us
+  // fixed coordinates, hoist the panel and its click-away catcher into a body
+  // portal. Callers that anchor the panel in local flow (`relative` /
+  // `absolute` with no coordinates) keep rendering in place.
+  const panel = (
     <>
       {/* A transparent catcher: the first tap outside closes the panel instead of
           landing on whatever is underneath and being lost. */}
@@ -216,4 +225,9 @@ export function EmojiPicker({
       </div>
     </>
   );
+
+  if (style?.position === "fixed" && typeof document !== "undefined") {
+    return createPortal(panel, document.body);
+  }
+  return panel;
 }

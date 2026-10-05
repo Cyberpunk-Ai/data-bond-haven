@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { createPortal } from "react-dom";
 import { useModalA11y } from "@/hooks/use-messages/useModalA11y";
 
 /**
@@ -28,8 +29,9 @@ export function DialogShell({
 }) {
   const panelRef = useModalA11y<HTMLDivElement>({ open, onClose });
   if (!open) return null;
+  if (typeof document === "undefined") return null;
 
-  return (
+  return createPortal(
     <div
       className={cn(
         "fixed inset-0 z-50 flex bg-black/60 backdrop-blur-xs motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150",
@@ -56,6 +58,7 @@ export function DialogShell({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

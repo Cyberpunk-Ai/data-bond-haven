@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { Sparkles, X, Loader2, Wand2, Copy, Check, Lock, Zap } from "lucide-react";
 import { generateAIDraft } from "@/lib/api-client";
 import { errorMessage, friendlyError } from "@/lib/error-messages";
@@ -67,6 +68,7 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
   const [copied, setCopied] = useState(false);
 
   if (!isOpen) return null;
+  if (typeof document === "undefined") return null;
 
   const maxDrafts = planDetails.limits.aiDraftsPerDay;
   const usedToday = usage.aiDraftsToday || 0;
@@ -127,7 +129,7 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
     setTimeout(() => setCopied(false), 2000);
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div
         className="glass-panel relative w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-3xl p-6 shadow-2xl border border-border/80 bg-card/95 custom-scrollbar"
@@ -335,6 +337,7 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
