@@ -23,6 +23,7 @@ import {
 } from "@/lib/call-cards";
 import { emitRealtime } from "@/lib/realtime";
 import { errorMessage } from "@/lib/error-messages";
+import { firstMedia } from "@/lib/media-list";
 import { appConfig } from "@/lib/config";
 import type {
   AdminCharts,
@@ -1015,7 +1016,7 @@ function rowToStory(row: any): Story {
     media_url: row.media_url ?? undefined,
     // media_url may hold several comma-joined attachments; single-URL
     // consumers (image_url) must never receive the joined string.
-    image_url: (row.media_url ?? "").split(",")[0]?.trim() || undefined,
+    image_url: firstMedia(row.media_url) ?? undefined,
     text: row.text ?? undefined,
     caption: row.caption ?? undefined,
     created_at: row.created_at ?? nowIso(),

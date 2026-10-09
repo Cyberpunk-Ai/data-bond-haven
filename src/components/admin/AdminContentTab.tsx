@@ -31,6 +31,7 @@ import { useRealtime } from "@/lib/realtime";
 import { useProfiles } from "@/lib/profile-service";
 import type { Post, Space, Story, UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { firstMedia, splitMediaList } from "@/lib/media-list";
 import { useAuthorizedMediaUrl } from "@/lib/media-access";
 import { Avatar } from "@/components/social/Avatar";
 import { toast } from "sonner";
@@ -616,7 +617,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
 
 /** Story images are follow-network private media — mint the signed URL. */
 function StoryPreviewImage({ url, contain = false }: { url: string; contain?: boolean }) {
-  const first = url.split(",")[0]?.trim();
+  const first = firstMedia(url);
   const { src } = useAuthorizedMediaUrl(first);
   if (!src) return null;
   return (
@@ -678,10 +679,7 @@ function PostPreviewModal({
   onDelete?: () => void;
   onHide?: () => void;
 }) {
-  const mediaUrls = (post.media_url || post.image_url || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const mediaUrls = splitMediaList(post.media_url || post.image_url || "");
   return (
     <ModalShell onClose={onClose}>
       <div className="flex items-start justify-between gap-3">

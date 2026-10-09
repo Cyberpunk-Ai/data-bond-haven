@@ -12,6 +12,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { splitMediaList } from "@/lib/media-list";
 
 // Server-only modules are imported lazily inside handlers: this file is
 // reachable from the client bundle, so top-level `.server.ts` imports are not
@@ -50,8 +51,8 @@ export const deleteMyMedia = createServerFn({ method: "POST" })
     const keys = Array.from(
       new Set(
         urls
-          .flatMap((u) => (u ?? "").split(","))
-          .map((u) => mediaKeyFromUrl(u.trim() || undefined))
+          .flatMap((u) => splitMediaList(u))
+          .map((u) => mediaKeyFromUrl(u || undefined))
           .filter((k): k is string => Boolean(k)),
       ),
     );

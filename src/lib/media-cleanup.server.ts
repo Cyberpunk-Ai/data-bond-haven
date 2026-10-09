@@ -14,6 +14,7 @@
  */
 
 import { getStorageProvider, mediaKeyFromUrl } from "@/lib/storage/index.server";
+import { splitMediaList } from "@/lib/media-list";
 
 /** The `/api/public/media/<key>` URL the app stores in referencing columns. */
 function mediaUrlForPath(path: string): string {
@@ -29,11 +30,9 @@ function mediaUrlForPath(path: string): string {
  * post, and an owner deleting their post left those bytes behind instead.
  */
 function splitMediaRefs(value: unknown): string[] {
-  if (typeof value !== "string" || !value) return [];
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
+  // The shared, data-URL-aware splitter: a base64 fallback keeps its own comma
+  // instead of being mistaken for two references.
+  return splitMediaList(value);
 }
 
 /**

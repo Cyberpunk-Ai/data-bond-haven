@@ -4,6 +4,8 @@
  * so the rest of the app never talks to a specific storage backend directly.
  */
 
+import { firstMedia } from "@/lib/media-list";
+
 export interface StoragePutResult {
   /** Storage key/path the object was written to. */
   key: string;
@@ -90,11 +92,15 @@ export interface StorageProvider {
 export function mediaKeyFromUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   // A stored media column can hold several comma-joined urls (a multi-image
-  // post). Callers are meant to split first; cutting at the first comma here
-  // keeps a value that skipped splitting from producing a key that names two
-  // objects at once (which matches nothing, so nothing ever gets reclaimed).
-  const single = url.split(",")[0]?.trim();
+  // post). Callers are meant to split first; taking the FIRST one here (through
+  // the data-URL-aware splitter, so a `data:` attachment is not cut at its own
+  // comma) keeps a value that skipped splitting from producing a key that names
+  // two objects at once (which matches nothing, so nothing ever gets reclaimed).
+  const single = firstMedia(url);
   if (!single) return null;
+  // An inline `data:` blob is self-contained bytes, not a pointer to a stored
+  // object — it names nothing in the bucket, so there is no key to reclaim.
+  if (/^data:/i.test(single)) return null;
   const marker = "/api/public/media/";
   const idx = single.indexOf(marker);
   if (idx !== -1) return decodeURIComponent(single.slice(idx + marker.length).split("?")[0]);

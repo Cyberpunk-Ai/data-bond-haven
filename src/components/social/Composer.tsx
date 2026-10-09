@@ -28,6 +28,7 @@ import { appConfig } from "@/lib/config";
 import { usePlatform } from "@/lib/platform-state";
 import { useWorkspace } from "@/lib/workspace-state";
 import { cn } from "@/lib/utils";
+import { joinMediaList } from "@/lib/media-list";
 
 // Env-tunable (VITE_MAX_POST_LENGTH) and always below the server's hard ceiling.
 const LIMIT = appConfig.limits.postLength;
@@ -274,7 +275,7 @@ export function Composer({
       const created = await createPost({
         content: contentWithLocation,
         image_gradient: selectedGradient || undefined,
-        media_url: attachedMedia.length > 0 ? attachedMedia.join(",") : undefined,
+        media_url: attachedMedia.length > 0 ? joinMediaList(attachedMedia) : undefined,
         tags: customTags,
         poll: pollData,
         workspaceId: postAsBrand ? activeWorkspace!.id : null,

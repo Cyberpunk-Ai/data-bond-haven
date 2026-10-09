@@ -18,6 +18,7 @@ import { useAuthorizedMediaUrl } from "@/lib/media-access";
 import { Avatar } from "@/components/social/Avatar";
 import type { ModerationReport, Post, Profile, Space, Story } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { splitMediaList } from "@/lib/media-list";
 
 interface ReportTargetModalProps {
   report: ModerationReport;
@@ -222,10 +223,7 @@ function PreviewMedia({ url, label }: { url: string; label: string }) {
 }
 
 function splitMedia(csv: string | null | undefined): string[] {
-  return (csv || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return splitMediaList(csv);
 }
 
 function PostBody({ post }: { post: Post }) {

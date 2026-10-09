@@ -14,6 +14,8 @@
  *  - whether the timer may advance, or must wait for the media it is showing.
  */
 
+import { splitMediaList } from "@/lib/media-list";
+
 export interface StoryLike {
   id: string;
   type?: string;
@@ -40,12 +42,9 @@ export const TEXT_LAYER: StoryLayer = { kind: "text", src: null };
  */
 export function storyMediaList(story: StoryLike | undefined | null): string[] {
   if (!story?.media_url) return [];
-  const seen = new Set<string>();
-  for (const part of String(story.media_url).split(",")) {
-    const url = part.trim();
-    if (url) seen.add(url);
-  }
-  return [...seen];
+  // De-dup through the shared, data-URL-aware splitter so a base64 story is not
+  // shattered into a header and an orphaned payload.
+  return [...new Set(splitMediaList(story.media_url))];
 }
 
 /** Does this stored path play as video? Extension first, then the row's own type. */

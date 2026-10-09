@@ -1,5 +1,6 @@
 import { appConfig } from "@/lib/config";
 import { isVideoUrl } from "@/lib/utils";
+import { splitMediaList } from "@/lib/media-list";
 
 /**
  * Link-preview (open graph) metadata, as pure rules.
@@ -154,11 +155,13 @@ export const PREVIEWABLE_MEDIA_FOLDERS: readonly string[] = PUBLIC_MEDIA_FOLDERS
  *   stored poster frame to offer instead).
  */
 export function previewImageUrl(raw: string | null | undefined): string | null {
-  const first = String(raw ?? "")
-    .split(",")[0]
-    ?.trim();
-  if (!first || first.toLowerCase().startsWith("data:")) return null;
-  if (isVideoUrl(first)) return null;
+  // Walk every attachment (data-URL-aware, so a base64 fallback is not mistaken
+  // for two urls) and use the first one a previewer can actually fetch — a plain
+  // image. Bail to null only when none of them qualifies.
+  const first = splitMediaList(raw).find(
+    (url) => url && !url.toLowerCase().startsWith("data:") && !isVideoUrl(url),
+  );
+  if (!first) return null;
 
   // Anywhere in the value, not just after the marker: an absolute copy of a
   // private url is just as private as the relative form.

@@ -1,6 +1,7 @@
 import { preloadFeedBundle, PreloadBundleResponse } from "./api-client";
 import type { Post, Story, TrendingTag } from "./types";
 import { optimizeImageUrl } from "./utils";
+import { splitMediaList } from "./media-list";
 
 interface MemoryFeedCache {
   bundle: PreloadBundleResponse | null;
@@ -171,15 +172,8 @@ export async function triggerFeedPreload(force = false): Promise<PreloadBundleRe
       // Story media is follow-network private now: a raw prewarm would just
       // 404 (and cache nothing), so only public post media is warmed here.
       const imagesToWarm: (string | null | undefined)[] = [];
-      const splitUrls = (value?: string | null) =>
-        value
-          ? value
-              .split(",")
-              .map((s) => s.trim())
-              .filter(Boolean)
-          : [];
       bundle.foryou.forEach((p) => {
-        imagesToWarm.push(...splitUrls(p.media_url));
+        imagesToWarm.push(...splitMediaList(p.media_url));
       });
       prewarmImages(imagesToWarm);
 

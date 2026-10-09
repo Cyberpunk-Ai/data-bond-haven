@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, memo, lazy, Suspense } from "react";
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
@@ -67,6 +67,7 @@ import {
   sensitiveRevealLabel,
 } from "@/lib/content-filter";
 import { cn, optimizeImageUrl, isVideoUrl } from "@/lib/utils";
+import { splitMediaList, firstMedia } from "@/lib/media-list";
 import { ClampText } from "@/components/social/ClampText";
 
 const TipModal = lazy(() =>
@@ -490,6 +491,19 @@ function PostCardBase({
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [previewMediaUrl, setPreviewMediaUrl] = useState<string | null>(null);
   const [imageError, setImageError] = useState(false);
+  // A genuinely missing object (reclaimed bytes, a dead external link) should
+  // collapse just ITS tile — not paint the browser's broken-image glyph beside
+  // the attachments that are fine, and not blank the whole post the way the
+  // single-image `imageError` switch would.
+  const [failedMedia, setFailedMedia] = useState<Set<string>>(() => new Set());
+  const markMediaFailed = useCallback((url: string) => {
+    setFailedMedia((prev) => {
+      if (prev.has(url)) return prev;
+      const next = new Set(prev);
+      next.add(url);
+      return next;
+    });
+  }, []);
   const [isTipModalOpen, setIsTipModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -1323,17 +1337,17 @@ function PostCardBase({
               if (Array.isArray(src)) {
                 candidateUrls.push(...src.filter((s) => typeof s === "string"));
               } else if (typeof src === "string") {
-                if (src.includes(",")) {
-                  candidateUrls.push(...src.split(",").map((s) => s.trim()));
-                } else {
-                  candidateUrls.push(src.trim());
-                }
+                // One canonical splitter, so a `data:` attachment keeps the comma
+                // inside its own header instead of shattering into a broken tile
+                // (the feed used to split on every comma and paint N broken glyphs
+                // for a multi-attachment post whose upload fell back to base64).
+                candidateUrls.push(...splitMediaList(src));
               }
             }
 
             const allMedia = Array.from(
               new Set(candidateUrls.filter((u) => typeof u === "string" && u.trim() !== "")),
-            );
+            ).filter((url) => !failedMedia.has(url));
 
             if (allMedia.length === 0 || imageError) return null;
 
@@ -1376,6 +1390,7 @@ function PostCardBase({
                             src={optimizeImageUrl(url, 800)}
                             alt={`Attachment ${idx + 1}`}
                             loading="lazy"
+                            onError={() => markMediaFailed(url)}
                             className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
                           />
                         )}
@@ -1465,11 +1480,25 @@ function PostCardBase({
               className="relative max-w-5xl max-h-[92dvh] overflow-hidden rounded-3xl"
               onClick={(e) => e.stopPropagation()}
             >
-              <img
-                src={previewMediaUrl || mediaSrc || ""}
-                alt="Full preview"
-                className="max-h-[85dvh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
-              />
+              {(() => {
+                // One attachment, resolved through the data-URL-aware first-media
+                // helper (never the raw comma-joined column, which would hand an
+                // `<img>` the whole "a,b,c" string). A video opens in the player,
+                // not a broken image glyph.
+                const full = previewMediaUrl || firstMedia(mediaSrc) || "";
+                return isVideoUrl(full) ? (
+                  <ModernVideoPlayer
+                    src={full}
+                    className="max-h-[85dvh] w-auto max-w-full rounded-2xl"
+                  />
+                ) : (
+                  <img
+                    src={full}
+                    alt="Full preview"
+                    className="max-h-[85dvh] w-auto max-w-full rounded-2xl object-contain shadow-2xl"
+                  />
+                );
+              })()}
               <button
                 onClick={() => setShowImagePreview(false)}
                 className="absolute top-4 right-4 rounded-full bg-black/70 p-2 text-white hover:bg-black/90 transition-colors cursor-pointer"

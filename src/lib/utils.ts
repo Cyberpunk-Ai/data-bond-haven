@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { firstMedia } from "@/lib/media-list";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -144,9 +145,7 @@ export function isVideoUrl(url?: string | null): boolean {
  * and link cards all want "the first one", so it is decided here.
  */
 export function firstMediaUrl(raw?: string | null): string | null {
-  for (const part of String(raw ?? "").split(",")) {
-    const url = part.trim();
-    if (url) return url;
-  }
-  return null;
+  // The canonical splitter, so a `data:` attachment (whose own comma would make a
+  // bare `.split(",")[0]` return a header with no base64 body) comes back whole.
+  return firstMedia(raw);
 }
