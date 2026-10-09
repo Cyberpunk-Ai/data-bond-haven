@@ -2,12 +2,15 @@
  * Media reclamation (M3 — plan §4.5).
  *
  * Two complementary mechanisms live here:
- *   * `deleteStoredMedia` — eager deletion wired into the post/story/message
- *     delete paths, so the common cases reclaim bytes immediately.
+ *   * `deleteStoredMedia` — eager deletion the story-expiry and message
+ *     paths call to reclaim bytes immediately. (Post deletion deliberately does
+ *     NOT erase bytes — see migration 20261006000001 — so a feed post's media
+ *     outlives the row and stays resolvable for old embeds and links.)
  *   * `runMediaGarbageCollection` — a nightly safety net that deletes any
  *     tracked object whose referencing row no longer exists. This catches the
  *     paths eager deletion cannot (a crashed client, an abandoned upload, and,
  *     once it ships, account erasure) — "media_objects rows with no referent".
+ *     Permanent feed media (see PERMANENT_MEDIA_FOLDERS) is exempt from this.
  *
  * Storage deletion is a service-role concern (the browser can't delete arbitrary
  * objects), so everything here runs server-side via the admin client + provider.
@@ -15,6 +18,7 @@
 
 import { getStorageProvider, mediaKeyFromUrl } from "@/lib/storage/index.server";
 import { splitMediaList } from "@/lib/media-list";
+import { folderOfPath } from "@/lib/media-folders.server";
 
 /** The `/api/public/media/<key>` URL the app stores in referencing columns. */
 function mediaUrlForPath(path: string): string {
@@ -84,6 +88,25 @@ const REFERENCING_COLUMNS: Array<{ table: string; column: string }> = [
 
 /** Rows per read while paging a column. Bounds one request, not the table. */
 const GC_PAGE = 1000;
+
+/**
+ * Folders whose objects are PERMANENT: the garbage collector may never reclaim
+ * them, no matter what its reference scan concludes. This is the product
+ * contract for public feed media — a post's images and videos stay up for
+ * decades. Nothing automated erases them: the nightly GC skips these folders
+ * entirely, and even deleting the post deliberately leaves the bytes in place
+ * (see migration 20261006000001), so an embed or link minted years ago still
+ * resolves. Feed media is therefore immortal on every current code path; the
+ * only thing that could remove it is a future explicit admin media-purge.
+ *
+ * Exempting by folder (not by the scan) is deliberate: it makes the GC
+ * structurally incapable of touching feed media, so the guarantee survives even
+ * a future bug that gets the "what is in use" picture wrong again. The legacy
+ * `media` folder is included because pre-split post attachments live there.
+ * Avatars, stories, DM attachments and Space replays stay reclaimable — they
+ * are replaceable or genuinely expiring, not permanent feed content.
+ */
+const PERMANENT_MEDIA_FOLDERS: ReadonlySet<string> = new Set(["posts", "media"]);
 
 interface ReferenceScan {
   /** Storage keys extracted from every live reference (matched against media_objects.path). */
@@ -176,17 +199,27 @@ export async function runMediaGarbageCollection(graceSeconds = 3600): Promise<Me
   const rows = (objects ?? []) as Array<{ path: string }>;
   if (rows.length === 0) return { scanned: 0, deleted: 0, errors: 0 };
 
-  const refs = await collectReferences(db);
-  if (!refs.complete) {
-    // Fail closed: if we could not read the full picture of what is in use, we
-    // are not allowed to delete — reclaiming a live attachment is far worse
-    // than leaving a true orphan on the store for one more night.
-    console.error("GC: reference scan incomplete — skipping reclaim this run");
-    return { scanned: rows.length, deleted: 0, errors: 1 };
-  }
-  const orphans = rows
+  // Strip permanent feed media BEFORE anything else: it is never a deletion
+  // candidate, so even a wrong or incomplete reference scan below cannot reach
+  // a post's images/videos. Only replaceable/expiring folders are reclaimable.
+  const reclaimable = rows
     .map((r) => r.path)
-    .filter((path) => !refs.keys.has(path) && !refs.raws.has(mediaUrlForPath(path)));
+    .filter((path) => !PERMANENT_MEDIA_FOLDERS.has(folderOfPath(path)));
+
+  let orphans: string[] = [];
+  if (reclaimable.length > 0) {
+    const refs = await collectReferences(db);
+    if (!refs.complete) {
+      // Fail closed: if we could not read the full picture of what is in use, we
+      // are not allowed to delete — reclaiming a live attachment is far worse
+      // than leaving a true orphan on the store for one more night.
+      console.error("GC: reference scan incomplete — skipping reclaim this run");
+      return { scanned: rows.length, deleted: 0, errors: 1 };
+    }
+    orphans = reclaimable.filter(
+      (path) => !refs.keys.has(path) && !refs.raws.has(mediaUrlForPath(path)),
+    );
+  }
 
   let deleted = 0;
   let errors = 0;

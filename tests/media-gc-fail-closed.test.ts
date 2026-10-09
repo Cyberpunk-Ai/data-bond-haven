@@ -2,16 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The nightly media GC is the only automated thing that deletes stored bytes,
- * so a bug here silently destroys live photos/videos. These tests pin the three
+ * so a bug here silently destroys live photos/videos. These tests pin the
  * guarantees that stop "media that used to work is now gone":
  *
- *   1. Fail CLOSED — an incomplete reference scan (any read error) must reclaim
- *      nothing, because a single blip on the `posts` read used to make every
- *      post's media look orphaned and delete it.
- *   2. PAGED — references beyond the first page must still count as live, so a
- *      growing table can no longer have its older rows treated as unreferenced.
- *   3. Matched by storage KEY (and by the raw cell), and it must understand
- *      every media column — including workspace logos.
+ *   1. PERMANENT feed media (posts/ and the legacy media/ folder) is NEVER
+ *      reclaimed by the GC — even when it looks unreferenced — so a post's
+ *      images/videos survive for decades regardless of the scan.
+ *   2. Fail CLOSED — an incomplete reference scan (any read error) reclaims
+ *      nothing, so a transient blip can't wipe a table's media.
+ *   3. PAGED — references beyond the first page still count as live, so a
+ *      growing table can't have its older rows treated as unreferenced.
+ *   4. Replaceable/expiring folders (avatars, stories, messages) DO get
+ *      reclaimed when genuinely orphaned — permanence is scoped to the feed.
  */
 
 // A storage key is the tail of the /api/public/media/<key> url the app stores.
@@ -80,13 +82,46 @@ afterEach(() => {
   vi.doUnmock("@/integrations/supabase/client.server");
 });
 
-describe("media GC fails closed on an incomplete reference scan", () => {
-  it("reclaims NOTHING when a media column read errors, protecting live media", async () => {
+describe("permanent feed media is never reclaimed", () => {
+  it("skips posts/ and legacy media/ even when nothing references them, but still reclaims an orphaned avatar", async () => {
     const { result, removed } = await loadGc(
-      [{ path: "posts/p1/live.jpg" }],
-      // posts DOES reference it, but the read is forced to fail.
-      { posts: [{ media_url: "/api/public/media/posts/p1/live.jpg" }] },
-      ["posts"],
+      [
+        { path: "posts/p1/forever.jpg" }, // permanent feed media
+        { path: "posts/p1/video.mp4" }, // permanent feed media (video)
+        { path: "media/p1/legacy.jpg" }, // permanent (pre-split) feed media
+        { path: "avatars/w1/old.png" }, // replaceable → reclaimable
+      ],
+      {}, // no references anywhere
+      [],
+    );
+
+    // Only the avatar is eligible; posts/ and media/ are structurally exempt.
+    expect(removed.flat()).toEqual(["avatars/w1/old.png"]);
+    expect(removed.flat()).not.toContain("posts/p1/forever.jpg");
+    expect(removed.flat()).not.toContain("posts/p1/video.mp4");
+    expect(removed.flat()).not.toContain("media/p1/legacy.jpg");
+    expect(result.deleted).toBe(1);
+  });
+
+  it("reclaims NOTHING when the only tracked objects are permanent feed media", async () => {
+    const { result, removed } = await loadGc(
+      [{ path: "posts/p1/a.jpg" }, { path: "media/p1/b.mp4" }],
+      {},
+      [],
+    );
+    expect(removed).toEqual([]);
+    expect(result.deleted).toBe(0);
+    expect(result.errors).toBe(0);
+  });
+});
+
+describe("media GC fails closed on an incomplete reference scan", () => {
+  it("reclaims NOTHING when a reclaimable column read errors, protecting live media", async () => {
+    const { result, removed } = await loadGc(
+      [{ path: "messages/p1/live.jpg" }],
+      // messages DOES reference it, but the read is forced to fail.
+      { messages: [{ media_url: "/api/public/media/messages/p1/live.jpg" }] },
+      ["messages"],
     );
 
     expect(removed).toEqual([]); // never even called provider.delete
@@ -94,14 +129,14 @@ describe("media GC fails closed on an incomplete reference scan", () => {
     expect(result.errors).toBe(1);
   });
 
-  it("deletes only a genuinely unreferenced object when every scan succeeds", async () => {
+  it("deletes only a genuinely unreferenced reclaimable object when scans succeed", async () => {
     const { result, removed } = await loadGc(
-      [{ path: "posts/p1/live.jpg" }, { path: "posts/p1/orphan.jpg" }],
-      { posts: [{ media_url: "/api/public/media/posts/p1/live.jpg" }] },
+      [{ path: "messages/p1/live.jpg" }, { path: "messages/p1/orphan.jpg" }],
+      { messages: [{ media_url: "/api/public/media/messages/p1/live.jpg" }] },
       [],
     );
 
-    expect(removed.flat()).toEqual(["posts/p1/orphan.jpg"]);
+    expect(removed.flat()).toEqual(["messages/p1/orphan.jpg"]);
     expect(result.deleted).toBe(1);
     expect(result.errors).toBe(0);
   });
@@ -109,29 +144,29 @@ describe("media GC fails closed on an incomplete reference scan", () => {
 
 describe("media GC pages its reference scan", () => {
   it("reads beyond the first 1000 rows so older references stay protected", async () => {
-    // 1000 referenced objects on page one, 3 more on page two, plus one orphan.
+    // 1000 referenced stories on page one, 3 more on page two, plus one orphan.
     const page1 = Array.from({ length: 1000 }, (_, i) => ({
-      media_url: `/api/public/media/posts/p1/a${i}.jpg`,
+      media_url: `/api/public/media/stories/p1/a${i}.jpg`,
     }));
     const page2 = Array.from({ length: 3 }, (_, i) => ({
-      media_url: `/api/public/media/posts/p1/b${i}.jpg`,
+      media_url: `/api/public/media/stories/p1/b${i}.jpg`,
     }));
     const objects = [
       ...page1.map((r) => ({ path: keyFromUrl(r.media_url)! })),
       ...page2.map((r) => ({ path: keyFromUrl(r.media_url)! })),
-      { path: "posts/p1/orphan.jpg" },
+      { path: "stories/p1/orphan.jpg" },
     ];
 
     const { result, removed, rangeCalls } = await loadGc(
       objects,
-      { posts: [...page1, ...page2] },
+      { stories: [...page1, ...page2] },
       [],
     );
 
-    // The second page was actually requested (range offset 1000) — without
-    // paging those 3 live objects would have been reclaimed.
-    expect(rangeCalls.some(([t, from]) => t === "posts" && from === 1000)).toBe(true);
-    expect(removed.flat()).toEqual(["posts/p1/orphan.jpg"]);
+    // The second page was actually requested (offset 1000) — without paging
+    // those 3 live stories would have been reclaimed.
+    expect(rangeCalls.some(([t, from]) => t === "stories" && from === 1000)).toBe(true);
+    expect(removed.flat()).toEqual(["stories/p1/orphan.jpg"]);
     expect(result.deleted).toBe(1);
   });
 });
