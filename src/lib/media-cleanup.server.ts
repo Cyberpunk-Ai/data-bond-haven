@@ -79,33 +79,73 @@ const REFERENCING_COLUMNS: Array<{ table: string; column: string }> = [
   { table: "messages", column: "media_url" },
   { table: "profiles", column: "avatar_url" },
   { table: "spaces", column: "recording_url" },
+  { table: "workspaces", column: "avatar_url" },
 ];
 
+/** Rows per read while paging a column. Bounds one request, not the table. */
+const GC_PAGE = 1000;
+
+interface ReferenceScan {
+  /** Storage keys extracted from every live reference (matched against media_objects.path). */
+  keys: Set<string>;
+  /** The exact strings a media column holds, as a belt-and-braces second match. */
+  raws: Set<string>;
+  /** False if any scan errored — an incomplete picture must never drive a delete. */
+  complete: boolean;
+}
+
 /**
- * Collect every media URL still referenced by a live row. Returns a Set for
- * O(1) membership testing by {@link runMediaGarbageCollection}.
+ * Collect every media reference still held by a live row.
+ *
+ * Each column is PAGED: a single unpaged read is capped by PostgREST's
+ * max-rows, so once a table outgrew that cap the extra rows were invisible and
+ * their still-live media looked orphaned and got reclaimed — media that used to
+ * render silently disappearing as the app grew. Paging removes that whole class
+ * of loss.
+ *
+ * On ANY scan error the result is marked incomplete and the caller reclaims
+ * nothing. Previously a transient read failure on, say, `posts.media_url` was
+ * logged and `continue`d, so every post's attachment was treated as unreferenced
+ * and deleted — a single network blip could wipe the feed's media. Fail-closed
+ * instead: never delete on an unsure picture of what is in use.
  */
-async function collectReferencedUrls(db: any): Promise<Set<string>> {
-  const referenced = new Set<string>();
+async function collectReferences(db: any): Promise<ReferenceScan> {
+  const keys = new Set<string>();
+  const raws = new Set<string>();
+  let complete = true;
   for (const { table, column } of REFERENCING_COLUMNS) {
-    try {
-      // A large deployment would page this; the app's tables are small enough to
-      // read the non-null URLs in one pass per column.
-      const { data, error } = await db.from(table).select(column).not(column, "is", null);
-      if (error) {
-        console.error(`GC reference scan failed on ${table}.${column}:`, error);
-        continue;
+    for (let from = 0; ; from += GC_PAGE) {
+      try {
+        const { data, error } = await db
+          .from(table)
+          .select(column)
+          .not(column, "is", null)
+          .order("id", { ascending: true })
+          .range(from, from + GC_PAGE - 1);
+        if (error) {
+          console.error(`GC reference scan failed on ${table}.${column} @${from}:`, error);
+          complete = false;
+          break;
+        }
+        const rows = (data ?? []) as Array<Record<string, unknown>>;
+        for (const row of rows) {
+          for (const url of splitMediaRefs(row[column])) {
+            raws.add(url);
+            const key = mediaKeyFromUrl(url);
+            if (key) keys.add(key);
+          }
+        }
+        if (rows.length < GC_PAGE) break; // reached the last page
+      } catch (err) {
+        // A table/column missing in a not-yet-migrated environment, or a thrown
+        // read, must not be mistaken for "nothing here references media".
+        console.error(`GC reference scan threw on ${table}.${column} @${from}:`, err);
+        complete = false;
+        break;
       }
-      for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-        for (const url of splitMediaRefs(row[column])) referenced.add(url);
-      }
-    } catch (err) {
-      // A table/column missing in a not-yet-migrated environment must not abort
-      // the whole sweep.
-      console.error(`GC reference scan threw on ${table}.${column}:`, err);
     }
   }
-  return referenced;
+  return { keys, raws, complete };
 }
 
 export interface MediaGcResult {
@@ -136,8 +176,17 @@ export async function runMediaGarbageCollection(graceSeconds = 3600): Promise<Me
   const rows = (objects ?? []) as Array<{ path: string }>;
   if (rows.length === 0) return { scanned: 0, deleted: 0, errors: 0 };
 
-  const referenced = await collectReferencedUrls(db);
-  const orphans = rows.map((r) => r.path).filter((path) => !referenced.has(mediaUrlForPath(path)));
+  const refs = await collectReferences(db);
+  if (!refs.complete) {
+    // Fail closed: if we could not read the full picture of what is in use, we
+    // are not allowed to delete — reclaiming a live attachment is far worse
+    // than leaving a true orphan on the store for one more night.
+    console.error("GC: reference scan incomplete — skipping reclaim this run");
+    return { scanned: rows.length, deleted: 0, errors: 1 };
+  }
+  const orphans = rows
+    .map((r) => r.path)
+    .filter((path) => !refs.keys.has(path) && !refs.raws.has(mediaUrlForPath(path)));
 
   let deleted = 0;
   let errors = 0;
