@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
 import { setLoggedOut, useAuth, consumeRestrictedReason } from "@/lib/auth-state";
+import { setSignedInHint } from "@/lib/auth-hint";
 import { appConfig } from "@/lib/config";
 import { usePlatform } from "@/lib/platform-state";
 import { friendlyError } from "@/lib/error-messages";
@@ -176,7 +177,10 @@ function AuthPage() {
 
         if (data.session) {
           toast.success("Account created — welcome to Spaces1!");
-          void navigate({ to: "/" });
+          // Session is live: drop the routing hint now and go straight into the
+          // app. Sending new members to `/` first only bounced them back here.
+          setSignedInHint();
+          void navigate({ to: "/feed", replace: true });
           return;
         }
 
@@ -197,7 +201,10 @@ function AuthPage() {
 
       if (data.session) {
         toast.success("Signed in");
-        void navigate({ to: "/" });
+        // Land signed-in members on the app directly; `/` would only redirect
+        // here anyway, and painting the landing was the flash we removed.
+        setSignedInHint();
+        void navigate({ to: "/feed", replace: true });
       }
     } catch (err) {
       toast.error(err instanceof Error ? friendlyAuthError(err.message) : "Authentication failed");
@@ -278,7 +285,9 @@ function AuthPage() {
       toast.success("Password updated — welcome back!");
       setRecovering(false);
       setNewPassword("");
-      void navigate({ to: "/" });
+      // Recovery implies a live session; take them into the app, not the landing.
+      setSignedInHint();
+      void navigate({ to: "/feed", replace: true });
     } catch (err) {
       toast.error(
         err instanceof Error ? friendlyAuthError(err.message) : "Could not update password",

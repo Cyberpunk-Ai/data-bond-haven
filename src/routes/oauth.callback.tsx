@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { supabase } from "@/integrations/supabase/client";
+import { setSignedInHint } from "@/lib/auth-hint";
 
 export const Route = createFileRoute("/oauth/callback")({
   head: () => ({
@@ -50,6 +51,10 @@ function OAuthCallback() {
     const finish = (to: "/feed" | "/auth") => {
       if (done) return;
       done = true;
+      // A confirmed session is worth remembering before we navigate: the hint
+      // makes the *next* cold open redirect server-side instead of waiting on
+      // the profile fetch in auth-state to settle it.
+      if (to === "/feed") setSignedInHint();
       navigate({ to, replace: true });
     };
 

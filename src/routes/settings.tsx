@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { useAutoDismiss } from "@/hooks/use-auto-dismiss";
 import { NOINDEX_META, ORG_NAME, brandedTitle } from "@/lib/seo";
 import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
@@ -206,6 +207,7 @@ function SettingsPage() {
     if (validSection(section)) setActive(section);
   }, [section]);
   const [saved, setSaved] = useState(false);
+  useAutoDismiss(saved, () => setSaved(false), 1800);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -340,7 +342,6 @@ function SettingsPage() {
       updateUserSession(updatedData);
       setSaved(true);
       toast.success("Profile settings saved successfully");
-      setTimeout(() => setSaved(false), 1800);
     } catch (err) {
       console.error("Failed to save profile settings:", err);
       const message = err instanceof Error ? err.message : undefined;

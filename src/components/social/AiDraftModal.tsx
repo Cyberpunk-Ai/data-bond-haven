@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAutoDismiss } from "@/hooks/use-auto-dismiss";
 import { createPortal } from "react-dom";
 import { Sparkles, X, Loader2, Wand2, Copy, Check, Lock, Zap } from "lucide-react";
 import { generateAIDraft } from "@/lib/api-client";
@@ -66,6 +67,7 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
   const [result, setResult] = useState<{ content: string; suggestedTags: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  useAutoDismiss(copied, () => setCopied(false), 2000);
 
   if (!isOpen) return null;
   if (typeof document === "undefined") return null;
@@ -126,7 +128,6 @@ export function AiDraftModal({ isOpen, onClose, onSelectDraft, currentDraft }: A
     if (!result) return;
     navigator.clipboard.writeText(result.content);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   }
 
   return createPortal(

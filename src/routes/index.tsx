@@ -1,5 +1,5 @@
 import { SiteFooter } from "@/components/site/StaticPage";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, redirect } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Sparkles,
@@ -31,6 +31,8 @@ import {
 import { Avatar as UserAvatar } from "@/components/social/Avatar";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/lib/auth-state";
+import { clearSignedInHint, peekSignedInHint } from "@/lib/auth-hint";
+import { readSignedInHint } from "@/lib/auth-hint.functions";
 import {
   canonicalLink,
   ogUrlMeta,
@@ -41,6 +43,23 @@ import {
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
+  // A signed-in visitor belongs in the app, never on the marketing page. The
+  // real Supabase session lives in localStorage and is invisible to the server,
+  // so we can't check it here — but the routing hint cookie is sent with the
+  // request, so we can redirect *before* a single byte of landing HTML is sent.
+  // This is what removes the flash on an ordinary page open. The hint is only a
+  // nudge: `/feed` still verifies the actual session, so a stale cookie just
+  // lands the user on `/auth` instead of the marketing page.
+  loader: async () => {
+    // During SSR the loader runs on the server, where a server function reads
+    // the request cookie in-process. On a client-side navigation there is no
+    // request to read, so consult the cookie directly instead of spending an
+    // RPC — the value is the same and only nudges routing.
+    const signedIn = typeof window !== "undefined" ? peekSignedInHint() : await readSignedInHint();
+    if (signedIn) {
+      throw redirect({ to: "/feed", replace: true });
+    }
+  },
   head: () => ({
     meta: [
       { title: "Spaces1 — Where Your World Comes to Life" },
@@ -52,8 +71,7 @@ export const Route = createFileRoute("/")({
       { property: "og:title", content: "Spaces1 — Where Your World Comes to Life" },
       {
         property: "og:description",
-        content:
-          "Discover, explore, build and share on Spaces1 — where your world comes to life.",
+        content: "Discover, explore, build and share on Spaces1 — where your world comes to life.",
       },
       // Self-referencing canonical: the marketing root is a real URL with no
       // params to collapse, so declaring it stops `?utm_…`/`?ref=…` variants of
@@ -1121,18 +1139,24 @@ function Footer() {
 function Index() {
   const { isLoggedIn, loading } = useAuth();
   const navigate = useNavigate();
-  // The server can never know if the visitor is signed in, so SSR always
-  // streams the marketing page. Gating the render on `loading` here threw the
-  // whole tree away on the client (hydration mismatch → zero benefit from SSR
-  // plus a visible flash). Instead the page renders immediately and signed-in
-  // people get a spinner only once the redirect actually starts.
-  const [redirecting, setRedirecting] = useState(false);
+  // The server can never know if the visitor is signed in, so a genuine
+  // first load streams the marketing page and only bounces afterwards — that
+  // bounce is the flash. Seeding from the routing hint means a device we know
+  // is signed in paints the neutral loader instead of the marketing tree, and
+  // the loader above has already redirected real page opens before this runs.
+  const [redirecting, setRedirecting] = useState(() => peekSignedInHint());
 
-  // Signed-in people belong in the app, not on the marketing page.
+  // Signed-in people belong in the app, not on the marketing page. Once the
+  // real session resolves it is the source of truth: confirm the bounce, or
+  // drop a stale hint and reveal the landing page.
   useEffect(() => {
-    if (!loading && isLoggedIn) {
+    if (loading) return;
+    if (isLoggedIn) {
       setRedirecting(true);
       void navigate({ to: "/feed", replace: true });
+    } else {
+      clearSignedInHint();
+      setRedirecting(false);
     }
   }, [loading, isLoggedIn, navigate]);
 

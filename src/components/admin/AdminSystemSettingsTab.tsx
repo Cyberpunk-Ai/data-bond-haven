@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useAutoDismiss } from "@/hooks/use-auto-dismiss";
 import {
   Sliders,
   Shield,
@@ -66,6 +67,7 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
   const [relocateReports, setRelocateReports] = useState<string[]>([]);
   const [relocateExhausted, setRelocateExhausted] = useState(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  useAutoDismiss(Boolean(toastMessage), () => setToastMessage(null), 3500);
 
   const handleCheckStorage = async () => {
     try {
@@ -144,7 +146,6 @@ export function AdminSystemSettingsTab({ activeRole, currentUserId }: AdminSyste
   const showToast = (msg: string) => {
     setToastMessage(msg);
     toast.success(msg);
-    setTimeout(() => setToastMessage(null), 3500);
   };
 
   const handleSave = async () => {

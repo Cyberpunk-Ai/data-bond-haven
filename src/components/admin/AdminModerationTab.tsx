@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useAutoDismiss } from "@/hooks/use-auto-dismiss";
 import {
   AlertTriangle,
   ShieldCheck,
@@ -39,6 +40,7 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
   const [selectedStatus, setSelectedStatus] = useState<string>("pending");
   const [selectedType, setSelectedType] = useState<string>("all");
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  useAutoDismiss(Boolean(actionNotice), () => setActionNotice(null), 3500);
   // Click-to-view: the live reported object opened beside the queue card.
   const [viewing, setViewing] = useState<ModerationReport | null>(null);
 
@@ -87,7 +89,6 @@ export function AdminModerationTab({ activeRole, currentUserId }: AdminModeratio
   const showToast = (msg: string) => {
     setActionNotice(msg);
     toast.success(msg);
-    setTimeout(() => setActionNotice(null), 3500);
   };
 
   const handleUpdateReport = async (

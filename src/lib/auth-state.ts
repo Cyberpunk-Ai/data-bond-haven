@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { supabase } from "@/integrations/supabase/client";
+import { clearSignedInHint, setSignedInHint } from "@/lib/auth-hint";
 import { appConfig } from "@/lib/config";
 import { ensureMyProfile } from "@/lib/profile.functions";
 import {
@@ -93,11 +94,15 @@ async function loadSessionProfile() {
           void supabase.auth.signOut().catch((err) => {
             console.warn("sign-out after ban failed:", err);
           });
+          clearSignedInHint();
           setCurrentUser(null);
           return;
         }
 
         setCurrentUser(profile);
+        // Real, verified session: leave the routing hint so the next page load
+        // opens the app directly instead of flashing the landing page.
+        setSignedInHint();
         return;
       }
     }
@@ -105,7 +110,9 @@ async function loadSessionProfile() {
     console.warn("Supabase auth session check notice:", err);
   }
 
-  // No verified session: sign the visitor out locally too.
+  // No verified session: sign the visitor out locally too, and drop the hint
+  // so a stale cookie never keeps bouncing them into the gated app.
+  clearSignedInHint();
   setCurrentUser(null);
 }
 
@@ -128,6 +135,7 @@ export function setLoggedOut() {
     // next session check, so log rather than trap.
     console.warn("sign-out request failed:", err);
   });
+  clearSignedInHint();
   setCurrentUser(null);
 }
 

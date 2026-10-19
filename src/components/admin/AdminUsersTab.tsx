@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useAutoDismiss } from "@/hooks/use-auto-dismiss";
 import { Search, Award, CheckCircle2, RefreshCw } from "lucide-react";
 import { Avatar } from "@/components/social/Avatar";
 import { getAdminUsers, updateUserAdmin } from "@/lib/api-client";
@@ -31,6 +32,7 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
   const [selectedVerifiedFilter, setSelectedVerifiedFilter] = useState<string>("all");
   const [editingUser, setEditingUser] = useState<Profile | null>(null);
   const [actionSuccessMessage, setActionSuccessMessage] = useState<string | null>(null);
+  useAutoDismiss(Boolean(actionSuccessMessage), () => setActionSuccessMessage(null), 3500);
 
   const currentFilters = () => ({
     query: searchQuery || undefined,
@@ -160,7 +162,6 @@ export function AdminUsersTab({ activeRole, currentUserId }: AdminUsersTabProps)
   const showNotice = (msg: string) => {
     setActionSuccessMessage(msg);
     toast.success(msg);
-    setTimeout(() => setActionSuccessMessage(null), 3500);
   };
 
   const canManageRoles = ["superadmin", "admin"].includes(activeRole);

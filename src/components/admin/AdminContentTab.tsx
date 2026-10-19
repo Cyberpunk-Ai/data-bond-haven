@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useAutoDismiss } from "@/hooks/use-auto-dismiss";
 import {
   FileText,
   Radio,
@@ -50,6 +51,7 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  useAutoDismiss(Boolean(toastMessage), () => setToastMessage(null), 3500);
   // Click-to-view previews: admins can open any post or story and see the
   // exact content members see (full text, media, stats) before moderating.
   const [previewPost, setPreviewPost] = useState<Post | null>(null);
@@ -147,7 +149,6 @@ export function AdminContentTab({ activeRole, currentUserId }: AdminContentTabPr
   const showToast = (msg: string) => {
     setToastMessage(msg);
     toast.success(msg);
-    setTimeout(() => setToastMessage(null), 3500);
   };
 
   const handleDeletePost = async (postId: string) => {
