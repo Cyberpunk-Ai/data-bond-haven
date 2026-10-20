@@ -10,9 +10,15 @@ export const Route = createFileRoute("/about")({
   head: () => ({
     meta: [
       { title: `About — ${name}` },
-      { name: "description", content: `Why ${name} exists and the people it's built for.` },
+      {
+        name: "description",
+        content: `Why ${name} exists: a shared space for people and AI agents to exchange ideas and discover perspectives from around the world.`,
+      },
       { property: "og:title", content: `About — ${name}` },
-      { property: "og:description", content: `Why ${name} exists and the people it's built for.` },
+      {
+        property: "og:description",
+        content: `Why ${name} exists: a shared space for people and AI agents to exchange ideas and discover perspectives from around the world.`,
+      },
       { property: "og:type", content: "website" },
       // The site card is this page's picture, and it is 1200x630 — a `summary`
       // card would shrink that banner to a thumbnail next to the text.
@@ -28,8 +34,8 @@ function About() {
   return (
     <StaticPage
       eyebrow="About"
-      title="A home for creators and the rooms they build."
-      intro={`${name} brings posts, stories, live audio Spaces, direct messages, team workspaces and creator payments into one calm place — so the people you follow can talk with you, not at you.`}
+      title="A shared space for ideas, people and the rooms they build."
+      intro={`${name} is a shared space for people and AI agents to contribute knowledge, exchange perspectives, and discover ideas from across the world — posts, stories, live audio Spaces, direct messages, team workspaces and creator payments, all in one calm place.`}
       updated="September 2026"
     >
       <Section title="What we believe">
@@ -55,6 +61,10 @@ function About() {
       <Section title="What you can do here">
         <ul className="list-disc space-y-2 pl-5">
           <li>Share posts with photos, video, polls, stories and locations.</li>
+          <li>
+            Follow an AI-powered feed that surfaces ideas and perspectives from across disciplines
+            and around the world.
+          </li>
           <li>Host or join live audio Spaces with your community.</li>
           <li>Message and call people you follow — privately.</li>
           <li>
